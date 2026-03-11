@@ -39,7 +39,17 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const activeProjectId =
+    projects.find((project) =>
+      project.sessions.some((session) => session.config.id === activeSessionId),
+    )?.config.id ?? null
+  const visibleCollapsedProjectIds = collapsedProjectIds.filter(
+    (projectId) =>
+      projectId !== activeProjectId &&
+      projects.some((project) => project.config.id === projectId),
+  )
 
   useEffect(() => {
     if (!contextMenu) {
@@ -75,6 +85,14 @@ export function SessionSidebar({
     await onRename(id, draftTitle)
     setEditingId(null)
     setDraftTitle('')
+  }
+
+  const toggleProject = (projectId: string) => {
+    setCollapsedProjectIds((current) =>
+      current.includes(projectId)
+        ? current.filter((id) => id !== projectId)
+        : [...current, projectId],
+    )
   }
 
   const openContextMenu = (
@@ -124,105 +142,123 @@ export function SessionSidebar({
           const projectActive = project.sessions.some(
             (session) => session.config.id === activeSessionId,
           )
+          const projectCollapsed = visibleCollapsedProjectIds.includes(project.config.id)
+          const projectSessionsId = `project-sessions-${project.config.id}`
 
           return (
             <section
               key={project.config.id}
-              className={`project-group${projectActive ? ' is-active' : ''}`}
+              className={`project-group${projectActive ? ' is-active' : ''}${projectCollapsed ? ' is-collapsed' : ''}`}
             >
-              <div className="project-group__header">
+              <button
+                type="button"
+                className="project-group__header"
+                aria-expanded={!projectCollapsed}
+                aria-controls={projectSessionsId}
+                onClick={() => toggleProject(project.config.id)}
+              >
                 <div className="project-group__content">
                   <div className="project-group__title">{project.config.title}</div>
                   <div className="project-group__path">{project.config.rootPath}</div>
                 </div>
-                <span className="project-group__count" aria-label={`${project.sessions.length} sessions`}>
-                  {project.sessions.length}
-                </span>
-              </div>
+                <div className="project-group__summary">
+                  <span
+                    className="project-group__count"
+                    aria-label={`${project.sessions.length} sessions`}
+                  >
+                    {project.sessions.length}
+                  </span>
+                  <span className="project-group__toggle" aria-hidden="true">
+                    {projectCollapsed ? '▸' : '▾'}
+                  </span>
+                </div>
+              </button>
 
-              <div className="project-group__sessions">
-                {project.sessions.map((session) => {
-                  const active = session.config.id === activeSessionId
-                  const editing = session.config.id === editingId
+              {!projectCollapsed ? (
+                <div className="project-group__sessions" id={projectSessionsId}>
+                  {project.sessions.map((session) => {
+                    const active = session.config.id === activeSessionId
+                    const editing = session.config.id === editingId
 
-                  return (
-                    <div
-                      key={session.config.id}
-                      role="button"
-                      tabIndex={0}
-                      className={`session-item is-nested${active ? ' is-active' : ''}${editing ? ' is-editing' : ''}`}
-                      onClick={() => {
-                        void onSelect(session.config.id)
-                      }}
-                      onContextMenu={(event) => openContextMenu(event, session)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
+                    return (
+                      <div
+                        key={session.config.id}
+                        role="button"
+                        tabIndex={0}
+                        className={`session-item is-nested${active ? ' is-active' : ''}${editing ? ' is-editing' : ''}`}
+                        onClick={() => {
                           void onSelect(session.config.id)
-                        }
-                      }}
-                    >
-                      {editing ? (
-                        <form
-                          className="rename-form session-item__rename"
-                          onSubmit={(event) => {
+                        }}
+                        onContextMenu={(event) => openContextMenu(event, session)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault()
-                            void commitRename(session.config.id)
-                          }}
-                        >
-                          <input
-                            type="text"
-                            value={draftTitle}
-                            autoFocus
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={(event) => setDraftTitle(event.target.value)}
-                          />
-                          <div className="rename-form__actions">
-                            <button
-                              type="submit"
-                              className="ghost-button"
+                            void onSelect(session.config.id)
+                          }
+                        }}
+                      >
+                        {editing ? (
+                          <form
+                            className="rename-form session-item__rename"
+                            onSubmit={(event) => {
+                              event.preventDefault()
+                              void commitRename(session.config.id)
+                            }}
+                          >
+                            <input
+                              type="text"
+                              value={draftTitle}
+                              autoFocus
                               onClick={(event) => event.stopPropagation()}
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              className="ghost-button"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                setEditingId(null)
-                                setDraftTitle('')
-                              }}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </form>
-                      ) : (
-                        <>
-                          <span
-                            className={`status-dot is-${session.runtime.status}`}
-                            aria-hidden="true"
-                          />
-                          <div className="session-item__content">
-                            <div className="session-item__title">
-                              {session.config.title}
+                              onChange={(event) => setDraftTitle(event.target.value)}
+                            />
+                            <div className="rename-form__actions">
+                              <button
+                                type="submit"
+                                className="ghost-button"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  setEditingId(null)
+                                  setDraftTitle('')
+                                }}
+                              >
+                                Cancel
+                              </button>
                             </div>
-                            <div className="session-item__meta">
-                              <div className="session-item__command">
-                                {summarizeCommand(session.config.startupCommand)}
+                          </form>
+                        ) : (
+                          <>
+                            <span
+                              className={`status-dot is-${session.runtime.status}`}
+                              aria-hidden="true"
+                            />
+                            <div className="session-item__content">
+                              <div className="session-item__title">
+                                {session.config.title}
                               </div>
-                              <span className={`session-item__status is-${session.runtime.status}`}>
-                                {statusLabels[session.runtime.status]}
-                              </span>
+                              <div className="session-item__meta">
+                                <div className="session-item__command">
+                                  {summarizeCommand(session.config.startupCommand)}
+                                </div>
+                                <span className={`session-item__status is-${session.runtime.status}`}>
+                                  {statusLabels[session.runtime.status]}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
             </section>
           )
         })}
