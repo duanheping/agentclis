@@ -6,7 +6,8 @@ interface SessionSidebarProps {
   projects: ProjectSnapshot[]
   activeSessionId: string | null
   showProjectPaths: boolean
-  onCreate: () => void
+  onCreateSession: () => void
+  onCreateProject: () => void
   onCreateForProject: (projectId: string) => void
   onSelect: (id: string) => Promise<void>
   onRename: (id: string, title: string) => Promise<void>
@@ -37,7 +38,8 @@ export function SessionSidebar({
   projects,
   activeSessionId,
   showProjectPaths,
-  onCreate,
+  onCreateSession,
+  onCreateProject,
   onCreateForProject,
   onSelect,
   onRename,
@@ -169,20 +171,30 @@ export function SessionSidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar__header">
-        <div>
-          <p className="eyebrow">Project List</p>
-          <h1>Projects</h1>
-          <p className="sidebar__subtitle">
-            Projects first, with each session nested underneath.
-          </p>
+        <div className="sidebar__actions">
+          <button
+            type="button"
+            className="sidebar__quick-action"
+            onClick={onCreateSession}
+          >
+            <span
+              className="sidebar__quick-action-icon sidebar__quick-action-icon--session"
+              aria-hidden="true"
+            />
+            New session
+          </button>
+          <button
+            type="button"
+            className="sidebar__quick-action"
+            onClick={onCreateProject}
+          >
+            <span
+              className="sidebar__quick-action-icon sidebar__quick-action-icon--project"
+              aria-hidden="true"
+            />
+            New project
+          </button>
         </div>
-        <button
-          type="button"
-          className="primary-button sidebar__new-button"
-          onClick={onCreate}
-        >
-          + New
-        </button>
       </div>
 
       <div className="session-list">

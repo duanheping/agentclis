@@ -13,6 +13,7 @@ import type {
 import { useSessionsStore } from './store/useSessionsStore'
 
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
+type CreateDialogIntent = 'session' | 'project'
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -60,6 +61,8 @@ function App() {
   const updateRuntime = useSessionsStore((state) => state.updateRuntime)
 
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [createDialogIntent, setCreateDialogIntent] =
+    useState<CreateDialogIntent>('session')
   const [dialogProjectId, setDialogProjectId] = useState<string | null>(null)
   const [showProjectPaths, setShowProjectPaths] = useState<boolean>(() =>
     readShowProjectPathsPreference(),
@@ -202,12 +205,20 @@ function App() {
   }
 
   const openCreateSessionDialog = (projectId: string | null = null) => {
+    setCreateDialogIntent('session')
     setDialogProjectId(projectId)
+    setDialogOpen(true)
+  }
+
+  const openCreateProjectDialog = () => {
+    setCreateDialogIntent('project')
+    setDialogProjectId(null)
     setDialogOpen(true)
   }
 
   const closeCreateSessionDialog = () => {
     setDialogOpen(false)
+    setCreateDialogIntent('session')
     setDialogProjectId(null)
   }
 
@@ -236,7 +247,8 @@ function App() {
         projects={projects}
         activeSessionId={activeSessionId}
         showProjectPaths={showProjectPaths}
-        onCreate={() => openCreateSessionDialog()}
+        onCreateSession={() => openCreateSessionDialog()}
+        onCreateProject={openCreateProjectDialog}
         onCreateForProject={(projectId) => openCreateSessionDialog(projectId)}
         onSelect={handleActivateSession}
         onRename={handleRenameSession}
@@ -268,6 +280,7 @@ function App() {
 
       <CreateSessionDialog
         open={dialogOpen}
+        initialIntent={createDialogIntent}
         projects={projects}
         activeProjectId={
           dialogProjectId ??

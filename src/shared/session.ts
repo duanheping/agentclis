@@ -1,7 +1,7 @@
 export const SESSION_STATUSES = ['starting', 'running', 'exited', 'error'] as const
 
 export type SessionStatus = (typeof SESSION_STATUSES)[number]
-export const MANAGED_CLI_PROVIDERS = ['codex'] as const
+export const MANAGED_CLI_PROVIDERS = ['codex', 'copilot'] as const
 
 export type ManagedCliProvider = (typeof MANAGED_CLI_PROVIDERS)[number]
 

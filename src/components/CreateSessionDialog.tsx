@@ -4,6 +4,7 @@ import type { CreateSessionInput, ProjectSnapshot } from '../shared/session'
 
 interface CreateSessionDialogProps {
   open: boolean
+  initialIntent: 'session' | 'project'
   projects: ProjectSnapshot[]
   activeProjectId: string | null
   onClose: () => void
@@ -32,7 +33,19 @@ function shouldSyncCwd(cwd: string, projectRootPath: string): boolean {
 function buildInitialFormState(
   projects: ProjectSnapshot[],
   activeProjectId: string | null,
+  initialIntent: 'session' | 'project',
 ): CreateSessionFormState {
+  if (initialIntent === 'project') {
+    return {
+      projectSelection: NEW_PROJECT_VALUE,
+      projectTitle: '',
+      projectRootPath: '',
+      title: '',
+      startupCommand: '',
+      cwd: '',
+    }
+  }
+
   const activeProject =
     projects.find((project) => project.config.id === activeProjectId) ??
     projects[0] ??
@@ -50,6 +63,7 @@ function buildInitialFormState(
 
 export function CreateSessionDialog({
   open,
+  initialIntent,
   projects,
   activeProjectId,
   onClose,
@@ -57,7 +71,7 @@ export function CreateSessionDialog({
 }: CreateSessionDialogProps) {
   const projectSelectRef = useRef<HTMLDivElement | null>(null)
   const [formState, setFormState] = useState<CreateSessionFormState>(() =>
-    buildInitialFormState(projects, activeProjectId),
+    buildInitialFormState(projects, activeProjectId, initialIntent),
   )
   const [submitting, setSubmitting] = useState(false)
   const [pickingProjectRoot, setPickingProjectRoot] = useState(false)
@@ -68,16 +82,30 @@ export function CreateSessionDialog({
   const creatingNewProject = formState.projectSelection === NEW_PROJECT_VALUE
   const selectedProject =
     projects.find((project) => project.config.id === formState.projectSelection) ?? null
+  const dialogEyebrow = creatingNewProject ? 'New Project' : 'New Session'
+  const dialogTitle = creatingNewProject
+    ? 'Create project and first session'
+    : 'Create Agent CLI Session'
+  const sessionTitleLabel = creatingNewProject
+    ? 'First session title (optional)'
+    : 'Session title (optional)'
+  const startupCommandLabel = creatingNewProject
+    ? 'First session startup command'
+    : 'Startup command'
+  const sessionCwdLabel = creatingNewProject
+    ? 'First session working directory (optional)'
+    : 'Session working directory (optional)'
+  const submitLabel = creatingNewProject ? 'Create project' : 'Create session'
 
   useEffect(() => {
     if (!open) {
       return
     }
 
-    setFormState(buildInitialFormState(projects, activeProjectId))
+    setFormState(buildInitialFormState(projects, activeProjectId, initialIntent))
     setProjectMenuOpen(false)
     setErrorMessage(null)
-  }, [activeProjectId, open, projects])
+  }, [activeProjectId, initialIntent, open, projects])
 
   useEffect(() => {
     if (!open) {
@@ -253,8 +281,8 @@ export function CreateSessionDialog({
       >
         <div className="dialog-card__header">
           <div>
-            <p className="eyebrow">New Session</p>
-            <h2 id="create-session-title">Create Agent CLI Session</h2>
+            <p className="eyebrow">{dialogEyebrow}</p>
+            <h2 id="create-session-title">{dialogTitle}</h2>
           </div>
           <button
             type="button"
@@ -394,7 +422,7 @@ export function CreateSessionDialog({
           ) : null}
 
           <label className="field">
-            <span>Session title (optional)</span>
+            <span>{sessionTitleLabel}</span>
             <input
               type="text"
               value={formState.title}
@@ -404,7 +432,7 @@ export function CreateSessionDialog({
           </label>
 
           <label className="field">
-            <span>Startup command</span>
+            <span>{startupCommandLabel}</span>
             <input
               type="text"
               autoFocus
@@ -415,7 +443,7 @@ export function CreateSessionDialog({
           </label>
 
           <label className="field">
-            <span>Session working directory (optional)</span>
+            <span>{sessionCwdLabel}</span>
             <div className="path-picker">
               <button
                 type="button"
@@ -479,7 +507,7 @@ export function CreateSessionDialog({
               className="primary-button dialog-actions__submit"
               disabled={submitting}
             >
-              {submitting ? 'Creating…' : 'Create session'}
+              {submitting ? 'Creating…' : submitLabel}
             </button>
           </div>
         </form>
