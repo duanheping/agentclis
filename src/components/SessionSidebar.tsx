@@ -1,11 +1,6 @@
 import { type MouseEvent, useEffect, useState } from 'react'
 
-import {
-  summarizeCommand,
-  type ProjectSnapshot,
-  type SessionSnapshot,
-  type SessionStatus,
-} from '../shared/session'
+import { type ProjectSnapshot, type SessionSnapshot } from '../shared/session'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
@@ -20,13 +15,6 @@ interface ContextMenuState {
   session: SessionSnapshot
   x: number
   y: number
-}
-
-const statusLabels: Record<SessionStatus, string> = {
-  starting: 'Starting',
-  running: 'Running',
-  exited: 'Exited',
-  error: 'Error',
 }
 
 export function SessionSidebar({
@@ -234,25 +222,9 @@ export function SessionSidebar({
                             </div>
                           </form>
                         ) : (
-                          <>
-                            <span
-                              className={`status-dot is-${session.runtime.status}`}
-                              aria-hidden="true"
-                            />
-                            <div className="session-item__content">
-                              <div className="session-item__title">
-                                {session.config.title}
-                              </div>
-                              <div className="session-item__meta">
-                                <div className="session-item__command">
-                                  {summarizeCommand(session.config.startupCommand)}
-                                </div>
-                                <span className={`session-item__status is-${session.runtime.status}`}>
-                                  {statusLabels[session.runtime.status]}
-                                </span>
-                              </div>
-                            </div>
-                          </>
+                          <div className="session-item__title">
+                            {session.config.title}
+                          </div>
                         )}
                       </div>
                     )

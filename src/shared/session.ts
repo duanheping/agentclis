@@ -1,6 +1,15 @@
 export const SESSION_STATUSES = ['starting', 'running', 'exited', 'error'] as const
 
 export type SessionStatus = (typeof SESSION_STATUSES)[number]
+export const MANAGED_CLI_PROVIDERS = ['codex'] as const
+
+export type ManagedCliProvider = (typeof MANAGED_CLI_PROVIDERS)[number]
+
+export interface ManagedCliSessionRef {
+  provider: ManagedCliProvider
+  sessionId: string
+  detectedAt: string
+}
 
 export interface ProjectConfig {
   id: string
@@ -15,6 +24,7 @@ export interface SessionConfig {
   projectId: string
   title: string
   startupCommand: string
+  externalSession?: ManagedCliSessionRef
   cwd: string
   shell: string
   createdAt: string
