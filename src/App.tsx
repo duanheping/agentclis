@@ -9,16 +9,10 @@ import type {
   CreateSessionInput,
   ProjectSnapshot,
   SessionSnapshot,
-  SessionStatus,
 } from './shared/session'
 import { useSessionsStore } from './store/useSessionsStore'
 
-const statusLabels: Record<SessionStatus, string> = {
-  starting: 'Starting',
-  running: 'Running',
-  exited: 'Exited',
-  error: 'Error',
-}
+const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -32,6 +26,30 @@ function flattenSessions(projects: ProjectSnapshot[]): SessionSnapshot[] {
   return projects.flatMap((project) => project.sessions)
 }
 
+function findActiveProject(
+  projects: ProjectSnapshot[],
+  activeSessionId: string | null,
+): ProjectSnapshot | null {
+  return (
+    projects.find((project) =>
+      project.sessions.some((session) => session.config.id === activeSessionId),
+    ) ?? null
+  )
+}
+
+function readShowProjectPathsPreference(): boolean {
+  if (typeof window === 'undefined') {
+    return true
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(SHOW_PROJECT_PATHS_KEY)
+    return storedValue === null ? true : storedValue === 'true'
+  } catch {
+    return true
+  }
+}
+
 function App() {
   const agentCli = window.agentCli
   const projects = useSessionsStore((state) => state.projects)
@@ -42,6 +60,9 @@ function App() {
   const updateRuntime = useSessionsStore((state) => state.updateRuntime)
 
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [showProjectPaths, setShowProjectPaths] = useState<boolean>(() =>
+    readShowProjectPathsPreference(),
+  )
   const [errorMessage, setErrorMessage] = useState<string | null>(() =>
     agentCli
       ? null
@@ -49,12 +70,9 @@ function App() {
   )
 
   const sessions = flattenSessions(projects)
+  const activeProject = findActiveProject(projects, activeSessionId)
   const activeSession =
     sessions.find((session) => session.config.id === activeSessionId) ?? null
-  const activeProject =
-    projects.find((project) =>
-      project.sessions.some((session) => session.config.id === activeSessionId),
-    ) ?? null
 
   useEffect(() => {
     if (!agentCli) {
@@ -91,6 +109,17 @@ function App() {
       unsubscribeRuntime()
     }
   }, [agentCli, setInitialData, updateRuntime])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SHOW_PROJECT_PATHS_KEY,
+        String(showProjectPaths),
+      )
+    } catch {
+      // Ignore preference persistence failures and keep the in-memory state.
+    }
+  }, [showProjectPaths])
 
   const refreshWorkspace = async () => {
     if (!agentCli) {
@@ -168,86 +197,41 @@ function App() {
     }
   }
 
-  const handleRestartSession = async (id: string) => {
-    if (!agentCli) {
-      setErrorMessage('Agent bridge is unavailable.')
-      return
-    }
-
-    try {
-      setErrorMessage(null)
-      terminalRegistry.clear(id)
-      await agentCli.restartSession(id)
-      await refreshWorkspace()
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error))
-    }
-  }
-
   return (
     <div className="app-shell">
       <div className="app-shell__background" aria-hidden="true" />
 
+      <header className="titlebar">
+        <div className="titlebar__brand">
+          <span className="titlebar__name">Agent CLIs</span>
+          <span className="titlebar__separator" aria-hidden="true">
+            /
+          </span>
+          <span className="titlebar__section">
+            {activeProject?.config.title ?? 'Workspace'}
+          </span>
+        </div>
+        <div className="titlebar__status">
+          <span className="titlebar__pill">
+            {activeSession ? activeSession.config.title : 'No active session'}
+          </span>
+        </div>
+      </header>
+
       <SessionSidebar
         projects={projects}
         activeSessionId={activeSessionId}
+        showProjectPaths={showProjectPaths}
         onCreate={() => setDialogOpen(true)}
         onSelect={handleActivateSession}
         onRename={handleRenameSession}
         onClose={handleCloseSession}
+        onToggleProjectPaths={() =>
+          setShowProjectPaths((current) => !current)
+        }
       />
 
       <main className="workspace-shell">
-        <header className="workspace-shell__header">
-          {activeSession ? (
-            <>
-              <div className="workspace-shell__meta is-compact">
-                <p className="eyebrow">Project</p>
-                <h2 className="workspace-shell__title">
-                  {activeProject?.config.title ?? activeSession.config.title}
-                </h2>
-                <p className="workspace-shell__path">
-                  {activeProject?.config.rootPath ?? activeSession.config.cwd}
-                </p>
-                <p className="workspace-shell__caption">
-                  Session: {activeSession.config.title}
-                </p>
-              </div>
-
-              <div className="workspace-shell__actions">
-                <span className={`status-pill is-${activeSession.runtime.status}`}>
-                  {statusLabels[activeSession.runtime.status]}
-                </span>
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => {
-                    void handleRestartSession(activeSession.config.id)
-                  }}
-                >
-                  Restart
-                </button>
-                <button
-                  type="button"
-                  className="ghost-button danger-button"
-                  onClick={() => {
-                    void handleCloseSession(activeSession.config.id)
-                  }}
-                >
-                  Close
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="workspace-shell__meta is-compact">
-              <h2 className="workspace-shell__title">No active session</h2>
-              <p className="workspace-shell__path">
-                Select a project session from the left list.
-              </p>
-            </div>
-          )}
-        </header>
-
         {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
         <section className="workspace-shell__body">
@@ -270,7 +254,15 @@ function App() {
       <CreateSessionDialog
         open={dialogOpen}
         projects={projects}
-        activeProjectId={activeProject?.config.id ?? projects[0]?.config.id ?? null}
+        activeProjectId={
+          projects.find((project) =>
+            project.sessions.some(
+              (session) => session.config.id === activeSessionId,
+            ),
+          )?.config.id ??
+          projects[0]?.config.id ??
+          null
+        }
         onClose={() => setDialogOpen(false)}
         onSubmit={handleCreateSession}
       />

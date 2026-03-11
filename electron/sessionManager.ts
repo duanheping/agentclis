@@ -1,5 +1,7 @@
+import { open, readdir, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
+import path from 'node:path'
 
 import Store from 'electron-store'
 
@@ -20,13 +22,32 @@ import {
   type SessionRuntimeEvent,
   type SessionSnapshot,
 } from '../src/shared/session'
+import {
+  buildCodexResumeCommand,
+  extractCodexSessionMeta,
+  supportsCodexSessionResume,
+} from './codexCli'
 import { buildShellArgs, resolveShellCommand } from './windowsShell'
 
 type IPty = import('node-pty').IPty
 
+interface DetectedCodexSession {
+  sessionId: string
+  timestamp: string
+  cwd: string
+  startedAt: number
+}
+
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
   projectId?: string
 }
+
+const CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions')
+const CODEX_SESSION_FILE_PREFIX_BYTES = 4096
+const CODEX_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
+const CODEX_SESSION_DISCOVERY_INTERVAL_MS = 750
+const CODEX_SESSION_DISCOVERY_ATTEMPTS = 24
+const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
 
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
@@ -57,6 +78,8 @@ export class SessionManager {
   private readonly configs = new Map<string, SessionConfig>()
   private readonly runtimes = new Map<string, SessionRuntime>()
   private readonly terminals = new Map<string, IPty>()
+  private readonly claimedExternalSessions = new Map<string, string>()
+  private readonly pendingCodexDetections = new Map<string, NodeJS.Timeout>()
   private readonly suppressedExit = new Set<string>()
   private readonly events: SessionManagerEvents
 
@@ -78,6 +101,7 @@ export class SessionManager {
       const hydratedConfig = this.hydrateSessionConfig(config)
       this.configs.set(hydratedConfig.id, hydratedConfig)
       this.runtimes.set(hydratedConfig.id, buildRuntime(hydratedConfig.id))
+      this.claimExternalSession(hydratedConfig)
 
       if (config.projectId !== hydratedConfig.projectId) {
         shouldPersist = true
@@ -186,9 +210,12 @@ export class SessionManager {
       throw new Error(`Unknown session: ${id}`)
     }
 
-    const closingProjectId = this.requireConfig(id).projectId
+    const closingConfig = this.requireConfig(id)
+    const closingProjectId = closingConfig.projectId
 
     this.stopSession(id, true)
+    this.cancelCodexSessionDetection(id)
+    this.releaseExternalSession(closingConfig)
     this.configs.delete(id)
     this.runtimes.delete(id)
 
@@ -225,6 +252,10 @@ export class SessionManager {
   }
 
   dispose(): void {
+    for (const sessionId of Array.from(this.pendingCodexDetections.keys())) {
+      this.cancelCodexSessionDetection(sessionId)
+    }
+
     for (const id of Array.from(this.terminals.keys())) {
       this.stopSession(id, true)
     }
@@ -232,6 +263,7 @@ export class SessionManager {
 
   private async startSession(config: SessionConfig): Promise<void> {
     this.stopSession(config.id, true)
+    this.cancelCodexSessionDetection(config.id)
     this.setRuntime(config.id, {
       status: 'starting',
       pid: undefined,
@@ -239,13 +271,17 @@ export class SessionManager {
     })
 
     try {
-      const shell = resolveShellCommand(config.shell)
-      if (shell !== config.shell) {
+      const currentConfig = this.requireConfig(config.id)
+      const shell = resolveShellCommand(currentConfig.shell)
+      let normalizedConfig = currentConfig
+
+      if (shell !== currentConfig.shell) {
         this.configs.set(config.id, {
-          ...config,
+          ...currentConfig,
           shell,
           updatedAt: new Date().toISOString(),
         })
+        normalizedConfig = this.requireConfig(config.id)
         this.persist()
       }
 
@@ -253,7 +289,7 @@ export class SessionManager {
         name: 'xterm-color',
         cols: 120,
         rows: 36,
-        cwd: config.cwd,
+        cwd: normalizedConfig.cwd,
         useConpty: true,
         env: {
           ...process.env,
@@ -270,32 +306,43 @@ export class SessionManager {
 
       terminal.onData((chunk) => {
         this.events.onData({
-          sessionId: config.id,
+          sessionId: normalizedConfig.id,
           chunk,
         })
       })
 
       terminal.onExit(({ exitCode }) => {
-        this.terminals.delete(config.id)
+        this.terminals.delete(normalizedConfig.id)
+        this.cancelCodexSessionDetection(normalizedConfig.id)
 
-        if (this.suppressedExit.delete(config.id)) {
+        if (this.suppressedExit.delete(normalizedConfig.id)) {
           return
         }
 
         const status = exitCode === 0 ? 'exited' : 'error'
-        this.setRuntime(config.id, {
+        this.setRuntime(normalizedConfig.id, {
           status,
           pid: undefined,
           exitCode,
         })
         this.events.onExit({
-          sessionId: config.id,
+          sessionId: normalizedConfig.id,
           exitCode,
         })
       })
 
+      const launchCommand = this.resolveStartupCommand(normalizedConfig)
+      const shouldDetectCodexSession =
+        !normalizedConfig.externalSession &&
+        supportsCodexSessionResume(normalizedConfig.startupCommand)
+      const detectionStartedAt = Date.now()
+
       setTimeout(() => {
-        terminal.write(`${config.startupCommand}\r`)
+        terminal.write(`${launchCommand}\r`)
+
+        if (shouldDetectCodexSession) {
+          void this.pollForCodexSessionRef(normalizedConfig.id, detectionStartedAt)
+        }
       }, 60)
     } catch (error) {
       this.setRuntime(config.id, {
@@ -330,6 +377,244 @@ export class SessionManager {
       terminal.kill()
     } catch {
       this.suppressedExit.delete(id)
+    }
+  }
+
+  private resolveStartupCommand(config: SessionConfig): string {
+    if (config.externalSession?.provider !== 'codex') {
+      return config.startupCommand
+    }
+
+    return (
+      buildCodexResumeCommand(
+        config.startupCommand,
+        config.externalSession.sessionId,
+      ) ?? config.startupCommand
+    )
+  }
+
+  private cancelCodexSessionDetection(sessionId: string): void {
+    const timer = this.pendingCodexDetections.get(sessionId)
+    if (!timer) {
+      return
+    }
+
+    clearTimeout(timer)
+    this.pendingCodexDetections.delete(sessionId)
+  }
+
+  private async pollForCodexSessionRef(
+    sessionId: string,
+    startedAt: number,
+    attempt = 0,
+  ): Promise<void> {
+    this.pendingCodexDetections.delete(sessionId)
+
+    const config = this.configs.get(sessionId)
+    if (!config || config.externalSession || !this.terminals.has(sessionId)) {
+      return
+    }
+
+    const detectedSession = await this.findMatchingCodexSession(config, startedAt)
+    if (detectedSession) {
+      this.attachExternalSession(config, detectedSession)
+      return
+    }
+
+    if (attempt + 1 >= CODEX_SESSION_DISCOVERY_ATTEMPTS) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      void this.pollForCodexSessionRef(sessionId, startedAt, attempt + 1)
+    }, CODEX_SESSION_DISCOVERY_INTERVAL_MS)
+    this.pendingCodexDetections.set(sessionId, timer)
+  }
+
+  private async findMatchingCodexSession(
+    config: SessionConfig,
+    startedAt: number,
+  ): Promise<DetectedCodexSession | null> {
+    const candidates = await this.listRecentCodexSessions(
+      startedAt - CODEX_SESSION_DISCOVERY_LOOKBACK_MS,
+    )
+    const normalizedCwd = this.normalizePath(config.cwd)
+
+    const match = candidates
+      .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
+      .filter((candidate) => {
+        const claimedBy = this.claimedExternalSessions.get(candidate.sessionId)
+        return !claimedBy || claimedBy === config.id
+      })
+      .sort((left, right) => {
+        const leftDistance = Math.abs(left.startedAt - startedAt)
+        const rightDistance = Math.abs(right.startedAt - startedAt)
+
+        return leftDistance - rightDistance || right.startedAt - left.startedAt
+      })[0]
+
+    return match ?? null
+  }
+
+  private async listRecentCodexSessions(
+    sinceMs: number,
+  ): Promise<DetectedCodexSession[]> {
+    const candidateFiles = await this.listRecentCodexSessionFiles(sinceMs)
+    const sessions: DetectedCodexSession[] = []
+
+    for (const filePath of candidateFiles) {
+      const sessionMeta = await this.readCodexSessionMeta(filePath)
+      if (sessionMeta) {
+        sessions.push(sessionMeta)
+      }
+    }
+
+    return sessions
+  }
+
+  private async listRecentCodexSessionFiles(sinceMs: number): Promise<string[]> {
+    const dayDirectories = this.getCodexSessionDayDirectories(sinceMs)
+    const candidates: Array<{
+      filePath: string
+      modifiedAt: number
+    }> = []
+
+    for (const dayDirectory of dayDirectories) {
+      let entries
+      try {
+        entries = await readdir(dayDirectory, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+          continue
+        }
+
+        const filePath = path.join(dayDirectory, entry.name)
+        let details
+        try {
+          details = await stat(filePath)
+        } catch {
+          continue
+        }
+
+        if (details.mtimeMs < sinceMs) {
+          continue
+        }
+
+        candidates.push({
+          filePath,
+          modifiedAt: details.mtimeMs,
+        })
+      }
+    }
+
+    return candidates
+      .sort((left, right) => right.modifiedAt - left.modifiedAt)
+      .slice(0, CODEX_SESSION_DISCOVERY_FILE_LIMIT)
+      .map((candidate) => candidate.filePath)
+  }
+
+  private getCodexSessionDayDirectories(sinceMs: number): string[] {
+    const days = [new Date(sinceMs), new Date()]
+
+    return Array.from(
+      new Set(
+        days.map((value) =>
+          path.join(
+            CODEX_SESSIONS_ROOT,
+            `${value.getFullYear()}`,
+            `${value.getMonth() + 1}`.padStart(2, '0'),
+            `${value.getDate()}`.padStart(2, '0'),
+          ),
+        ),
+      ),
+    )
+  }
+
+  private async readCodexSessionMeta(
+    filePath: string,
+  ): Promise<DetectedCodexSession | null> {
+    let handle
+
+    try {
+      handle = await open(filePath, 'r')
+      const buffer = Buffer.alloc(CODEX_SESSION_FILE_PREFIX_BYTES)
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+      const prefix = buffer.toString('utf8', 0, bytesRead)
+      const meta = extractCodexSessionMeta(prefix)
+      if (!meta) {
+        return null
+      }
+
+      const startedAt = Date.parse(meta.timestamp)
+      if (Number.isNaN(startedAt)) {
+        return null
+      }
+
+      return {
+        sessionId: meta.sessionId,
+        timestamp: meta.timestamp,
+        cwd: meta.cwd,
+        startedAt,
+      }
+    } catch {
+      return null
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
+  }
+
+  private attachExternalSession(
+    config: SessionConfig,
+    detectedSession: DetectedCodexSession,
+  ): void {
+    const latestConfig = this.configs.get(config.id)
+    if (!latestConfig) {
+      return
+    }
+
+    if (
+      latestConfig.externalSession?.provider === 'codex' &&
+      latestConfig.externalSession.sessionId === detectedSession.sessionId
+    ) {
+      return
+    }
+
+    this.releaseExternalSession(latestConfig)
+    const nextConfig: SessionConfig = {
+      ...latestConfig,
+      externalSession: {
+        provider: 'codex',
+        sessionId: detectedSession.sessionId,
+        detectedAt: new Date().toISOString(),
+      },
+      updatedAt: latestConfig.updatedAt,
+    }
+
+    this.claimExternalSession(nextConfig)
+    this.configs.set(nextConfig.id, nextConfig)
+    this.persist()
+  }
+
+  private claimExternalSession(config: SessionConfig): void {
+    if (!config.externalSession) {
+      return
+    }
+
+    this.claimedExternalSessions.set(config.externalSession.sessionId, config.id)
+  }
+
+  private releaseExternalSession(config: SessionConfig): void {
+    if (!config.externalSession) {
+      return
+    }
+
+    const claimedBy = this.claimedExternalSessions.get(config.externalSession.sessionId)
+    if (claimedBy === config.id) {
+      this.claimedExternalSessions.delete(config.externalSession.sessionId)
     }
   }
 

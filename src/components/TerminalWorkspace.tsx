@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 
 import { terminalRegistry } from '../lib/terminalRegistry'
+import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
@@ -89,6 +90,7 @@ function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(containerRef.current!)
+    const detachPasteHandler = attachPlainTextPasteHandler(terminal)
 
     const fitTerminal = () => {
       fitAddon.fit()
@@ -122,6 +124,7 @@ function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
     requestAnimationFrame(fitTerminal)
 
     return () => {
+      detachPasteHandler()
       resizeObserver.disconnect()
       disposable.dispose()
       terminalRegistry.unregister(sessionId)
