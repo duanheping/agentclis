@@ -94,8 +94,11 @@ function App() {
 
     void (async () => {
       try {
-        const payload = await agentCli.restoreSessions()
+        const payload = await agentCli.listSessions()
         setInitialData(payload)
+        void agentCli.restoreSessions().catch((error) => {
+          setErrorMessage(getErrorMessage(error))
+        })
       } catch (error) {
         setErrorMessage(getErrorMessage(error))
         setInitialData({

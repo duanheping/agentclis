@@ -139,8 +139,8 @@ export class SessionManager {
   async restoreSessions(): Promise<ListSessionsResponse> {
     if (!this.restored) {
       this.restored = true
-      for (const config of this.getOrderedConfigs()) {
-        await this.startSession(config)
+      if (this.activeSessionId) {
+        void this.ensureSessionStarted(this.activeSessionId)
       }
     }
 
@@ -189,12 +189,13 @@ export class SessionManager {
     return this.snapshotFor(id)
   }
 
-  activateSession(id: string): void {
+  async activateSession(id: string): Promise<void> {
     const config = this.requireConfig(id)
     this.activeSessionId = id
     this.touchProject(config.projectId)
     this.touchRuntime(id)
     this.persist()
+    await this.ensureSessionStarted(id)
   }
 
   async restartSession(id: string): Promise<SessionSnapshot> {
@@ -360,6 +361,18 @@ export class SessionManager {
         exitCode: -1,
       })
     }
+  }
+
+  private async ensureSessionStarted(id: string): Promise<void> {
+    if (this.terminals.has(id)) {
+      return
+    }
+
+    if (this.runtimes.get(id)?.status === 'starting') {
+      return
+    }
+
+    await this.startSession(this.requireConfig(id))
   }
 
   private stopSession(id: string, suppressExit: boolean): void {

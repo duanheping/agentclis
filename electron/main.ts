@@ -15,6 +15,7 @@ import { SessionManager } from './sessionManager'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 let mainWindow: BrowserWindow | null = null
 let securityHeadersRegistered = false
@@ -114,7 +115,6 @@ async function createMainWindow(): Promise<void> {
 
   if (process.env.VITE_DEV_SERVER_URL) {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     await mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
@@ -167,25 +167,45 @@ function registerIpcHandlers(): void {
   })
 }
 
-app.whenReady().then(async () => {
-  app.setName('Agent CLIs')
-  registerSecurityHeaders()
-  registerIpcHandlers()
-  await createMainWindow()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', async () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
 
-  app.on('activate', async () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow.show()
+      mainWindow.focus()
+      return
+    }
+
+    if (app.isReady()) {
       await createMainWindow()
     }
   })
-})
 
-app.on('before-quit', () => {
-  sessionManager.dispose()
-})
+  app.whenReady().then(async () => {
+    app.setName('Agent CLIs')
+    registerSecurityHeaders()
+    registerIpcHandlers()
+    await createMainWindow()
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
+    app.on('activate', async () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        await createMainWindow()
+      }
+    })
+  })
+
+  app.on('before-quit', () => {
+    sessionManager.dispose()
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit()
+    }
+  })
+}
