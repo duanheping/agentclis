@@ -90,6 +90,8 @@ describe('attachPlainTextPasteHandler', () => {
       element,
       textarea,
       paste,
+      hasSelection: () => false,
+      getSelection: () => '',
     })
 
     const pasteEvent = new Event('paste', {
@@ -122,6 +124,8 @@ describe('attachPlainTextPasteHandler', () => {
       element,
       textarea,
       paste,
+      hasSelection: () => false,
+      getSelection: () => '',
     })
 
     const pasteEvent = new Event('paste', {
@@ -139,6 +143,85 @@ describe('attachPlainTextPasteHandler', () => {
 
     expect(paste).not.toHaveBeenCalled()
     expect(pasteEvent.defaultPrevented).toBe(true)
+
+    detach()
+  })
+
+  it('copies the selected terminal text on Ctrl+C without sending input', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    })
+
+    const paste = vi.fn()
+    const detach = attachPlainTextPasteHandler({
+      element,
+      textarea,
+      paste,
+      hasSelection: () => true,
+      getSelection: () => 'copied line',
+    })
+
+    const keydownEvent = new KeyboardEvent('keydown', {
+      key: 'c',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+
+    textarea.dispatchEvent(keydownEvent)
+    await Promise.resolve()
+
+    expect(writeText).toHaveBeenCalledWith('copied line')
+    expect(paste).not.toHaveBeenCalled()
+    expect(keydownEvent.defaultPrevented).toBe(true)
+
+    detach()
+  })
+
+  it('pastes clipboard text on Ctrl+V', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const readText = vi.fn().mockResolvedValue('clipboard text')
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText,
+      },
+    })
+
+    const paste = vi.fn()
+    const detach = attachPlainTextPasteHandler({
+      element,
+      textarea,
+      paste,
+      hasSelection: () => false,
+      getSelection: () => '',
+    })
+
+    const keydownEvent = new KeyboardEvent('keydown', {
+      key: 'v',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+
+    textarea.dispatchEvent(keydownEvent)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(readText).toHaveBeenCalledTimes(1)
+    expect(paste).toHaveBeenCalledWith('clipboard text')
+    expect(keydownEvent.defaultPrevented).toBe(true)
 
     detach()
   })

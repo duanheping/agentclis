@@ -12,6 +12,54 @@ interface ClipboardDataLike {
 }
 
 type TerminalPasteBinding = Pick<Terminal, 'element' | 'textarea' | 'paste'>
+type TerminalClipboardBinding = TerminalPasteBinding &
+  Pick<Terminal, 'getSelection' | 'hasSelection'>
+
+function matchesKey(
+  event: KeyboardEvent,
+  expected: string,
+): boolean {
+  return event.key.toLowerCase() === expected.toLowerCase()
+}
+
+function isPasteShortcut(event: KeyboardEvent): boolean {
+  if (event.shiftKey && matchesKey(event, 'Insert')) {
+    return true
+  }
+
+  const hasPrimaryModifier = event.ctrlKey || event.metaKey
+  return hasPrimaryModifier && matchesKey(event, 'v')
+}
+
+function isCopyShortcut(event: KeyboardEvent): boolean {
+  if (event.ctrlKey && matchesKey(event, 'Insert')) {
+    return true
+  }
+
+  const hasPrimaryModifier = event.ctrlKey || event.metaKey
+  return hasPrimaryModifier && !event.shiftKey && matchesKey(event, 'c')
+}
+
+async function readClipboardText(): Promise<string | null> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
+    return null
+  }
+
+  try {
+    const text = await navigator.clipboard.readText()
+    return text || null
+  } catch {
+    return null
+  }
+}
+
+function writeClipboardText(text: string): void {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+    return
+  }
+
+  void navigator.clipboard.writeText(text).catch(() => {})
+}
 
 function htmlToText(html: string): string {
   const container = document.createElement('div')
@@ -67,7 +115,7 @@ export function hasBinaryClipboardPayload(
 }
 
 export function attachPlainTextPasteHandler(
-  terminal: TerminalPasteBinding,
+  terminal: TerminalClipboardBinding,
 ): () => void {
   const targets = [terminal.element, terminal.textarea].filter(
     (target): target is HTMLElement => target instanceof HTMLElement,
@@ -94,13 +142,44 @@ export function attachPlainTextPasteHandler(
     }
   }
 
+  const handleKeyDown = (event: Event) => {
+    const keyboardEvent = event as KeyboardEvent
+
+    if (isCopyShortcut(keyboardEvent) && terminal.hasSelection()) {
+      const selectedText = terminal.getSelection()
+      if (!selectedText) {
+        return
+      }
+
+      keyboardEvent.preventDefault()
+      keyboardEvent.stopPropagation()
+      writeClipboardText(selectedText)
+      return
+    }
+
+    if (!isPasteShortcut(keyboardEvent)) {
+      return
+    }
+
+    keyboardEvent.preventDefault()
+    keyboardEvent.stopPropagation()
+
+    void readClipboardText().then((text) => {
+      if (text !== null) {
+        terminal.paste(text)
+      }
+    })
+  }
+
   for (const target of targets) {
     target.addEventListener('paste', handlePaste, { capture: true })
+    target.addEventListener('keydown', handleKeyDown, { capture: true })
   }
 
   return () => {
     for (const target of targets) {
       target.removeEventListener('paste', handlePaste, { capture: true })
+      target.removeEventListener('keydown', handleKeyDown, { capture: true })
     }
   }
 }
