@@ -1,0 +1,155 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { app, BrowserWindow, ipcMain, session } from 'electron'
+
+import { IPC_CHANNELS } from '../src/shared/ipc'
+import { SessionManager } from './sessionManager'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+let mainWindow: BrowserWindow | null = null
+let securityHeadersRegistered = false
+
+const sessionManager = new SessionManager({
+  onData: (event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.sessionData, event)
+  },
+  onRuntime: (event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.sessionRuntime, event)
+  },
+  onExit: (event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.sessionExit, event)
+  },
+})
+
+function getPreloadPath(): string {
+  return path.join(__dirname, 'preload.mjs')
+}
+
+function buildContentSecurityPolicy(): string {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    return [
+      "default-src 'self'",
+      // Vite React injects an inline preamble in development.
+      "script-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:*",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
+      "object-src 'none'",
+      "base-uri 'self'",
+    ].join('; ')
+  }
+
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; ')
+}
+
+function registerSecurityHeaders(): void {
+  if (securityHeadersRegistered) {
+    return
+  }
+
+  securityHeadersRegistered = true
+  const csp = buildContentSecurityPolicy()
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType !== 'mainFrame') {
+      callback({ responseHeaders: details.responseHeaders })
+      return
+    }
+
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp],
+      },
+    })
+  })
+}
+
+async function createMainWindow(): Promise<void> {
+  mainWindow = new BrowserWindow({
+    width: 1480,
+    height: 960,
+    minWidth: 1180,
+    minHeight: 760,
+    backgroundColor: '#08111f',
+    title: 'Agent CLIs',
+    webPreferences: {
+      preload: getPreloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
+  } else {
+    await mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+  }
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+}
+
+function registerIpcHandlers(): void {
+  ipcMain.handle(IPC_CHANNELS.restoreSessions, () => sessionManager.restoreSessions())
+  ipcMain.handle(IPC_CHANNELS.listSessions, () => sessionManager.listSessions())
+  ipcMain.handle(IPC_CHANNELS.createSession, (_event, input) =>
+    sessionManager.createSession(input),
+  )
+  ipcMain.handle(IPC_CHANNELS.renameSession, (_event, id, title) =>
+    sessionManager.renameSession(id, title),
+  )
+  ipcMain.handle(IPC_CHANNELS.activateSession, (_event, id) =>
+    sessionManager.activateSession(id),
+  )
+  ipcMain.handle(IPC_CHANNELS.restartSession, (_event, id) =>
+    sessionManager.restartSession(id),
+  )
+  ipcMain.handle(IPC_CHANNELS.closeSession, (_event, id) =>
+    sessionManager.closeSession(id),
+  )
+  ipcMain.handle(IPC_CHANNELS.writeToSession, (_event, id, data) =>
+    sessionManager.writeToSession(id, data),
+  )
+  ipcMain.handle(IPC_CHANNELS.resizeSession, (_event, id, cols, rows) =>
+    sessionManager.resizeSession(id, cols, rows),
+  )
+}
+
+app.whenReady().then(async () => {
+  app.setName('Agent CLIs')
+  registerSecurityHeaders()
+  registerIpcHandlers()
+  await createMainWindow()
+
+  app.on('activate', async () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      await createMainWindow()
+    }
+  })
+})
+
+app.on('before-quit', () => {
+  sessionManager.dispose()
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})

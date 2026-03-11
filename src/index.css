@@ -1,0 +1,55 @@
+:root {
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #eff6ff;
+  background: #03070f;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-width: 320px;
+  background: #03070f;
+}
+
+body {
+  overflow: hidden;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:focus,
+button:focus-visible {
+  outline: 2px solid rgba(122, 224, 214, 0.78);
+  outline-offset: 2px;
+}
+
+input {
+  outline: none;
+}
+
+* {
+  box-sizing: border-box;
+}
