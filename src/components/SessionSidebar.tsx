@@ -1,14 +1,16 @@
-import { type MouseEvent, useEffect, useState } from 'react'
+import { type MouseEvent, useEffect, useRef, useState } from 'react'
 
 import { type ProjectSnapshot, type SessionSnapshot } from '../shared/session'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
   activeSessionId: string | null
+  showProjectPaths: boolean
   onCreate: () => void
   onSelect: (id: string) => Promise<void>
   onRename: (id: string, title: string) => Promise<void>
   onClose: (id: string) => Promise<void>
+  onToggleProjectPaths: () => void
 }
 
 interface ContextMenuState {
@@ -20,15 +22,19 @@ interface ContextMenuState {
 export function SessionSidebar({
   projects,
   activeSessionId,
+  showProjectPaths,
   onCreate,
   onSelect,
   onRename,
   onClose,
+  onToggleProjectPaths,
 }: SessionSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsRef = useRef<HTMLDivElement | null>(null)
   const activeProjectId =
     projects.find((project) =>
       project.sessions.some((session) => session.config.id === activeSessionId),
@@ -63,6 +69,36 @@ export function SessionSidebar({
       window.removeEventListener('keydown', onWindowKeyDown)
     }
   }, [contextMenu])
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return
+    }
+
+    const closeSettings = () => setSettingsOpen(false)
+    const onPointerDown = (event: PointerEvent) => {
+      if (!settingsRef.current?.contains(event.target as Node)) {
+        setSettingsOpen(false)
+      }
+    }
+    const onWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSettingsOpen(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('blur', closeSettings)
+    window.addEventListener('resize', closeSettings)
+    window.addEventListener('keydown', onWindowKeyDown)
+
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('blur', closeSettings)
+      window.removeEventListener('resize', closeSettings)
+      window.removeEventListener('keydown', onWindowKeyDown)
+    }
+  }, [settingsOpen])
 
   const beginEditing = (session: SessionSnapshot) => {
     setEditingId(session.config.id)
@@ -104,7 +140,7 @@ export function SessionSidebar({
       <div className="sidebar__header">
         <div>
           <p className="eyebrow">Project List</p>
-          <h1>Agent CLIs</h1>
+          <h1>Projects</h1>
           <p className="sidebar__subtitle">
             Projects first, with each session nested underneath.
           </p>
@@ -147,7 +183,9 @@ export function SessionSidebar({
               >
                 <div className="project-group__content">
                   <div className="project-group__title">{project.config.title}</div>
-                  <div className="project-group__path">{project.config.rootPath}</div>
+                  {showProjectPaths ? (
+                    <div className="project-group__path">{project.config.rootPath}</div>
+                  ) : null}
                 </div>
                 <div className="project-group__summary">
                   <span
@@ -234,6 +272,37 @@ export function SessionSidebar({
             </section>
           )
         })}
+      </div>
+
+      <div className="sidebar__footer">
+        <div className="sidebar-settings" ref={settingsRef}>
+          <button
+            type="button"
+            className="sidebar-settings__button"
+            aria-expanded={settingsOpen}
+            aria-haspopup="dialog"
+            onClick={() => setSettingsOpen((current) => !current)}
+          >
+            <span className="sidebar-settings__icon" aria-hidden="true">
+              ⚙
+            </span>
+            <span className="sidebar-settings__label">Settings</span>
+          </button>
+
+          {settingsOpen ? (
+            <div className="sidebar-settings__panel" role="dialog" aria-label="Settings">
+              <p className="sidebar-settings__eyebrow">Interface</p>
+              <label className="sidebar-settings__toggle">
+                <input
+                  type="checkbox"
+                  checked={showProjectPaths}
+                  onChange={onToggleProjectPaths}
+                />
+                <span>Show project paths in the sidebar</span>
+              </label>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {contextMenu ? (

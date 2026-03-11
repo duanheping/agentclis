@@ -86,19 +86,31 @@ function registerSecurityHeaders(): void {
 }
 
 async function createMainWindow(): Promise<void> {
+  const useCustomTitleBar = process.platform === 'win32'
+
   mainWindow = new BrowserWindow({
     width: 1480,
     height: 960,
     minWidth: 1180,
     minHeight: 760,
-    backgroundColor: '#08111f',
+    backgroundColor: '#03070f',
     title: 'Agent CLIs',
+    autoHideMenuBar: true,
+    titleBarStyle: useCustomTitleBar ? 'hidden' : 'default',
+    titleBarOverlay: useCustomTitleBar
+      ? {
+          color: '#07111f',
+          symbolColor: '#d7e2f1',
+          height: 46,
+        }
+      : false,
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
     },
   })
+  mainWindow.removeMenu()
 
   if (process.env.VITE_DEV_SERVER_URL) {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)

@@ -1,7 +1,9 @@
 .app-shell {
+  --titlebar-height: 48px;
   position: relative;
   display: grid;
   grid-template-columns: 288px minmax(0, 1fr);
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
   gap: 0;
   min-height: 100vh;
   padding: 0;
@@ -26,7 +28,68 @@
   z-index: 1;
 }
 
+.titlebar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 0 152px 0 18px;
+  border-bottom: 1px solid rgba(142, 171, 211, 0.08);
+  background:
+    linear-gradient(180deg, rgba(7, 17, 31, 0.98), rgba(5, 13, 24, 0.92));
+  backdrop-filter: blur(16px);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar__brand,
+.titlebar__status,
+.titlebar__pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.titlebar__name {
+  color: #eff6ff;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.titlebar__separator,
+.titlebar__section {
+  color: #8ea7c7;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.titlebar__status {
+  justify-content: flex-end;
+  max-width: 40%;
+}
+
+.titlebar__pill {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(122, 224, 214, 0.18);
+  border-radius: 999px;
+  padding: 0.38rem 0.75rem;
+  background: rgba(8, 18, 33, 0.84);
+  color: #dbe7f6;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar {
+  grid-column: 1;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -39,6 +102,8 @@
 }
 
 .workspace-shell {
+  grid-column: 2;
+  grid-row: 2;
   border: 0;
   background: rgba(8, 17, 31, 0.78);
   backdrop-filter: blur(16px);
@@ -302,7 +367,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-radius: 30px;
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -666,6 +731,94 @@
   margin-top: 6px;
 }
 
+.sidebar__footer {
+  position: relative;
+  padding: 12px 10px 14px;
+  border-top: 1px solid rgba(142, 171, 211, 0.06);
+  background: rgba(5, 13, 24, 0.72);
+}
+
+.sidebar-settings {
+  position: relative;
+}
+
+.sidebar-settings__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid rgba(142, 171, 211, 0.16);
+  border-radius: 16px;
+  padding: 0.82rem 0.9rem;
+  background: rgba(9, 17, 31, 0.88);
+  color: #d7e2f1;
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar-settings__button:hover {
+  transform: none;
+  border-color: rgba(122, 224, 214, 0.24);
+  background: rgba(11, 21, 38, 0.96);
+}
+
+.sidebar-settings__icon {
+  display: inline-flex;
+  width: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  color: #7ae0d6;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.sidebar-settings__label {
+  font-size: 0.88rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.sidebar-settings__panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 10;
+  display: grid;
+  gap: 12px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid rgba(142, 171, 211, 0.14);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(11, 20, 36, 0.98), rgba(8, 14, 26, 0.98));
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
+}
+
+.sidebar-settings__eyebrow {
+  margin: 0;
+  color: #7ae0d6;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.sidebar-settings__toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #dbe7f6;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.sidebar-settings__toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #7ae0d6;
+}
+
 .dialog-actions__cancel {
   min-width: 108px;
   min-height: 48px;
@@ -711,11 +864,27 @@
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: var(--titlebar-height) auto minmax(0, 1fr);
     padding: 0;
   }
 
+  .titlebar {
+    padding-right: 112px;
+  }
+
+  .titlebar__status {
+    display: none;
+  }
+
   .sidebar {
+    grid-column: 1;
+    grid-row: 2;
     max-height: 42vh;
+  }
+
+  .workspace-shell {
+    grid-column: 1;
+    grid-row: 3;
   }
 
   .dialog-card {
