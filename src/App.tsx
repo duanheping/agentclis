@@ -60,6 +60,7 @@ function App() {
   const updateRuntime = useSessionsStore((state) => state.updateRuntime)
 
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [dialogProjectId, setDialogProjectId] = useState<string | null>(null)
   const [showProjectPaths, setShowProjectPaths] = useState<boolean>(() =>
     readShowProjectPathsPreference(),
   )
@@ -197,6 +198,16 @@ function App() {
     }
   }
 
+  const openCreateSessionDialog = (projectId: string | null = null) => {
+    setDialogProjectId(projectId)
+    setDialogOpen(true)
+  }
+
+  const closeCreateSessionDialog = () => {
+    setDialogOpen(false)
+    setDialogProjectId(null)
+  }
+
   return (
     <div className="app-shell">
       <div className="app-shell__background" aria-hidden="true" />
@@ -222,7 +233,8 @@ function App() {
         projects={projects}
         activeSessionId={activeSessionId}
         showProjectPaths={showProjectPaths}
-        onCreate={() => setDialogOpen(true)}
+        onCreate={() => openCreateSessionDialog()}
+        onCreateForProject={(projectId) => openCreateSessionDialog(projectId)}
         onSelect={handleActivateSession}
         onRename={handleRenameSession}
         onClose={handleCloseSession}
@@ -255,15 +267,12 @@ function App() {
         open={dialogOpen}
         projects={projects}
         activeProjectId={
-          projects.find((project) =>
-            project.sessions.some(
-              (session) => session.config.id === activeSessionId,
-            ),
-          )?.config.id ??
+          dialogProjectId ??
+          activeProject?.config.id ??
           projects[0]?.config.id ??
           null
         }
-        onClose={() => setDialogOpen(false)}
+        onClose={closeCreateSessionDialog}
         onSubmit={handleCreateSession}
       />
     </div>

@@ -7,14 +7,28 @@ interface SessionSidebarProps {
   activeSessionId: string | null
   showProjectPaths: boolean
   onCreate: () => void
+  onCreateForProject: (projectId: string) => void
   onSelect: (id: string) => Promise<void>
   onRename: (id: string, title: string) => Promise<void>
   onClose: (id: string) => Promise<void>
   onToggleProjectPaths: () => void
 }
 
-interface ContextMenuState {
-  session: SessionSnapshot
+type ContextMenuState =
+  | {
+      kind: 'project'
+      project: ProjectSnapshot
+      x: number
+      y: number
+    }
+  | {
+      kind: 'session'
+      session: SessionSnapshot
+      x: number
+      y: number
+    }
+
+interface ContextMenuPosition {
   x: number
   y: number
 }
@@ -24,6 +38,7 @@ export function SessionSidebar({
   activeSessionId,
   showProjectPaths,
   onCreate,
+  onCreateForProject,
   onSelect,
   onRename,
   onClose,
@@ -35,14 +50,8 @@ export function SessionSidebar({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement | null>(null)
-  const activeProjectId =
-    projects.find((project) =>
-      project.sessions.some((session) => session.config.id === activeSessionId),
-    )?.config.id ?? null
   const visibleCollapsedProjectIds = collapsedProjectIds.filter(
-    (projectId) =>
-      projectId !== activeProjectId &&
-      projects.some((project) => project.config.id === projectId),
+    (projectId) => projects.some((project) => project.config.id === projectId),
   )
 
   useEffect(() => {
@@ -119,19 +128,41 @@ export function SessionSidebar({
     )
   }
 
-  const openContextMenu = (
+  const getContextMenuPosition = (
+    event: MouseEvent<HTMLElement>,
+    menuHeight: number,
+  ): ContextMenuPosition => {
+    const menuWidth = 180
+
+    return {
+      x: Math.min(event.clientX, window.innerWidth - menuWidth),
+      y: Math.min(event.clientY, window.innerHeight - menuHeight),
+    }
+  }
+
+  const openSessionContextMenu = (
     event: MouseEvent<HTMLElement>,
     session: SessionSnapshot,
   ) => {
     event.preventDefault()
 
-    const menuWidth = 180
-    const menuHeight = 104
+    setContextMenu({
+      kind: 'session',
+      session,
+      ...getContextMenuPosition(event, 104),
+    })
+  }
+
+  const openProjectContextMenu = (
+    event: MouseEvent<HTMLElement>,
+    project: ProjectSnapshot,
+  ) => {
+    event.preventDefault()
 
     setContextMenu({
-      session,
-      x: Math.min(event.clientX, window.innerWidth - menuWidth),
-      y: Math.min(event.clientY, window.innerHeight - menuHeight),
+      kind: 'project',
+      project,
+      ...getContextMenuPosition(event, 60),
     })
   }
 
@@ -180,6 +211,7 @@ export function SessionSidebar({
                 aria-expanded={!projectCollapsed}
                 aria-controls={projectSessionsId}
                 onClick={() => toggleProject(project.config.id)}
+                onContextMenu={(event) => openProjectContextMenu(event, project)}
               >
                 <div className="project-group__content">
                   <div className="project-group__title">{project.config.title}</div>
@@ -215,7 +247,7 @@ export function SessionSidebar({
                         onClick={() => {
                           void onSelect(session.config.id)
                         }}
-                        onContextMenu={(event) => openContextMenu(event, session)}
+                        onContextMenu={(event) => openSessionContextMenu(event, session)}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault()
@@ -311,26 +343,41 @@ export function SessionSidebar({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
-          <button
-            type="button"
-            className="context-menu__item"
-            onClick={() => {
-              beginEditing(contextMenu.session)
-              setContextMenu(null)
-            }}
-          >
-            Rename session
-          </button>
-          <button
-            type="button"
-            className="context-menu__item is-danger"
-            onClick={() => {
-              void onClose(contextMenu.session.config.id)
-              setContextMenu(null)
-            }}
-          >
-            Close session
-          </button>
+          {contextMenu.kind === 'project' ? (
+            <button
+              type="button"
+              className="context-menu__item"
+              onClick={() => {
+                onCreateForProject(contextMenu.project.config.id)
+                setContextMenu(null)
+              }}
+            >
+              New session
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="context-menu__item"
+                onClick={() => {
+                  beginEditing(contextMenu.session)
+                  setContextMenu(null)
+                }}
+              >
+                Rename session
+              </button>
+              <button
+                type="button"
+                className="context-menu__item is-danger"
+                onClick={() => {
+                  void onClose(contextMenu.session.config.id)
+                  setContextMenu(null)
+                }}
+              >
+                Close session
+              </button>
+            </>
+          )}
         </div>
       ) : null}
     </aside>

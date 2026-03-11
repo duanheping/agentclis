@@ -21,6 +21,14 @@ interface CreateSessionFormState {
 
 const NEW_PROJECT_VALUE = '__new_project__'
 
+function normalizePath(value: string): string {
+  return value.trim().replace(/[\\/]+$/, '').toLowerCase()
+}
+
+function shouldSyncCwd(cwd: string, projectRootPath: string): boolean {
+  return !normalizePath(cwd) || normalizePath(cwd) === normalizePath(projectRootPath)
+}
+
 function buildInitialFormState(
   projects: ProjectSnapshot[],
   activeProjectId: string | null,
@@ -36,7 +44,7 @@ function buildInitialFormState(
     projectRootPath: activeProject?.config.rootPath ?? '',
     title: '',
     startupCommand: '',
-    cwd: '',
+    cwd: activeProject?.config.rootPath ?? '',
   }
 }
 
@@ -123,7 +131,10 @@ export function CreateSessionDialog({
     setFormState((current) => ({
       ...current,
       projectSelection: value,
-      projectRootPath: selectedProject?.config.rootPath ?? current.projectRootPath,
+      projectRootPath: selectedProject?.config.rootPath ?? '',
+      cwd: shouldSyncCwd(current.cwd, current.projectRootPath)
+        ? (selectedProject?.config.rootPath ?? '')
+        : current.cwd,
     }))
     setProjectMenuOpen(false)
   }
@@ -146,7 +157,13 @@ export function CreateSessionDialog({
         return
       }
 
-      updateField('projectRootPath', selectedPath)
+      setFormState((current) => ({
+        ...current,
+        projectRootPath: selectedPath,
+        cwd: shouldSyncCwd(current.cwd, current.projectRootPath)
+          ? selectedPath
+          : current.cwd,
+      }))
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to open folder picker.',
