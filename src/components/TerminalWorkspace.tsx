@@ -3,23 +3,37 @@ import { useEffect, useRef } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 
-import { terminalRegistry } from '../lib/terminalRegistry'
+import {
+  buildWindowsCommandPromptTerminalId,
+  terminalRegistry,
+} from '../lib/terminalRegistry'
 import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
   sessions: SessionSnapshot[]
   activeSessionId: string | null
+  windowsCommandPromptSessionIds: string[]
 }
 
-interface SessionTerminalProps {
+interface SessionTerminalStackProps {
   sessionId: string
   active: boolean
+  showWindowsCommandPrompt: boolean
+}
+
+interface TerminalSurfaceProps {
+  terminalId: string
+  active: boolean
+  autoFocus?: boolean
+  onInput: (data: string) => void
+  onResize: (cols: number, rows: number) => void | Promise<void>
 }
 
 export function TerminalWorkspace({
   sessions,
   activeSessionId,
+  windowsCommandPromptSessionIds,
 }: TerminalWorkspaceProps) {
   if (sessions.length === 0) {
     return (
@@ -36,25 +50,86 @@ export function TerminalWorkspace({
   return (
     <div className="terminal-workspace">
       {sessions.map((session) => (
-        <SessionTerminal
+        <SessionTerminalStack
           key={session.config.id}
           sessionId={session.config.id}
           active={session.config.id === activeSessionId}
+          showWindowsCommandPrompt={windowsCommandPromptSessionIds.includes(
+            session.config.id,
+          )}
         />
       ))}
     </div>
   )
 }
 
-function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
+function SessionTerminalStack({
+  sessionId,
+  active,
+  showWindowsCommandPrompt,
+}: SessionTerminalStackProps) {
+  return (
+    <div
+      className={`terminal-stack${active ? ' is-active' : ''}${showWindowsCommandPrompt ? ' is-split' : ''}`}
+    >
+      <div className={`terminal-pane${showWindowsCommandPrompt ? ' has-header' : ''}`}>
+        {showWindowsCommandPrompt ? (
+          <div className="terminal-pane__header">Agent CLI</div>
+        ) : null}
+        <TerminalSurface
+          terminalId={sessionId}
+          active={active}
+          autoFocus
+          onInput={(data) => {
+            void window.agentCli.writeToSession(sessionId, data)
+          }}
+          onResize={(cols, rows) => {
+            void window.agentCli.resizeSession(sessionId, cols, rows)
+          }}
+        />
+      </div>
+
+      {showWindowsCommandPrompt ? (
+        <div className="terminal-pane terminal-pane--windows-cmd has-header">
+          <div className="terminal-pane__header">Windows cmd</div>
+          <TerminalSurface
+            terminalId={buildWindowsCommandPromptTerminalId(sessionId)}
+            active={active}
+            onInput={(data) => {
+              void window.agentCli.writeToWindowsCommandPrompt(sessionId, data)
+            }}
+            onResize={(cols, rows) => {
+              void window.agentCli.resizeWindowsCommandPrompt(sessionId, cols, rows)
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function TerminalSurface({
+  terminalId,
+  active,
+  autoFocus = false,
+  onInput,
+  onResize,
+}: TerminalSurfaceProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const activeRef = useRef(active)
+  const onInputRef = useRef(onInput)
+  const onResizeRef = useRef(onResize)
 
   useEffect(() => {
     activeRef.current = active
   }, [active])
+
+  useEffect(() => {
+    onInputRef.current = onInput
+    onResizeRef.current = onResize
+  }, [onInput, onResize])
 
   useEffect(() => {
     const terminal = new Terminal({
@@ -94,10 +169,10 @@ function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
 
     const fitTerminal = () => {
       fitAddon.fit()
-      void window.agentCli.resizeSession(sessionId, terminal.cols, terminal.rows)
+      void onResizeRef.current(terminal.cols, terminal.rows)
     }
 
-    terminalRegistry.register(sessionId, {
+    terminalRegistry.register(terminalId, {
       write: (chunk) => terminal.write(chunk),
       clear: () => terminal.clear(),
       fit: fitTerminal,
@@ -115,7 +190,7 @@ function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
     resizeObserver.observe(containerRef.current!)
 
     const disposable = terminal.onData((data) => {
-      void window.agentCli.writeToSession(sessionId, data)
+      onInputRef.current(data)
     })
 
     terminalRef.current = terminal
@@ -127,12 +202,12 @@ function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
       detachPasteHandler()
       resizeObserver.disconnect()
       disposable.dispose()
-      terminalRegistry.unregister(sessionId)
+      terminalRegistry.unregister(terminalId)
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [sessionId])
+  }, [terminalId])
 
   useEffect(() => {
     if (!active || !terminalRef.current || !fitAddonRef.current) {
@@ -140,15 +215,13 @@ function SessionTerminal({ sessionId, active }: SessionTerminalProps) {
     }
 
     requestAnimationFrame(() => {
-      terminalRegistry.fit(sessionId)
-      terminalRegistry.focus(sessionId)
-    })
-  }, [active, sessionId])
+      terminalRegistry.fit(terminalId)
 
-  return (
-    <div
-      ref={containerRef}
-      className={`terminal-surface${active ? ' is-active' : ''}`}
-    />
-  )
+      if (autoFocus) {
+        terminalRegistry.focus(terminalId)
+      }
+    })
+  }, [active, autoFocus, terminalId])
+
+  return <div ref={containerRef} className="terminal-surface" />
 }

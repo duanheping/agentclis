@@ -12,6 +12,8 @@ interface SessionSidebarProps {
   onSelect: (id: string) => Promise<void>
   onRename: (id: string, title: string) => Promise<void>
   onClose: (id: string) => Promise<void>
+  windowsCommandPromptSessionIds: string[]
+  onToggleWindowsCommandPrompt: (id: string) => Promise<void>
   onToggleProjectPaths: () => void
 }
 
@@ -44,6 +46,8 @@ export function SessionSidebar({
   onSelect,
   onRename,
   onClose,
+  windowsCommandPromptSessionIds,
+  onToggleWindowsCommandPrompt,
   onToggleProjectPaths,
 }: SessionSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -52,9 +56,34 @@ export function SessionSidebar({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement | null>(null)
-  const visibleCollapsedProjectIds = collapsedProjectIds.filter(
-    (projectId) => projects.some((project) => project.config.id === projectId),
+  const visibleCollapsedProjectIds = collapsedProjectIds.filter((projectId) =>
+    projects.some((project) => project.config.id === projectId),
   )
+  const activeProjectId =
+    projects.find((project) =>
+      project.sessions.some((session) => session.config.id === activeSessionId),
+    )?.config.id ?? null
+
+  useEffect(() => {
+    setCollapsedProjectIds((current) => {
+      const next = new Set(
+        current.filter((projectId) =>
+          projects.some((project) => project.config.id === projectId),
+        ),
+      )
+
+      for (const project of projects) {
+        if (project.config.id === activeProjectId) {
+          next.delete(project.config.id)
+          continue
+        }
+
+        next.add(project.config.id)
+      }
+
+      return Array.from(next)
+    })
+  }, [activeProjectId, projects])
 
   useEffect(() => {
     if (!contextMenu) {
@@ -134,7 +163,7 @@ export function SessionSidebar({
     event: MouseEvent<HTMLElement>,
     menuHeight: number,
   ): ContextMenuPosition => {
-    const menuWidth = 180
+    const menuWidth = 256
 
     return {
       x: Math.min(event.clientX, window.innerWidth - menuWidth),
@@ -151,7 +180,7 @@ export function SessionSidebar({
     setContextMenu({
       kind: 'session',
       session,
-      ...getContextMenuPosition(event, 104),
+      ...getContextMenuPosition(event, 156),
     })
   }
 
@@ -169,185 +198,187 @@ export function SessionSidebar({
   }
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar__header">
-        <div className="sidebar__actions">
-          <button
-            type="button"
-            className="sidebar__quick-action"
-            onClick={onCreateSession}
-          >
-            <span
-              className="sidebar__quick-action-icon sidebar__quick-action-icon--session"
-              aria-hidden="true"
-            />
-            New session
-          </button>
-          <button
-            type="button"
-            className="sidebar__quick-action"
-            onClick={onCreateProject}
-          >
-            <span
-              className="sidebar__quick-action-icon sidebar__quick-action-icon--project"
-              aria-hidden="true"
-            />
-            New project
-          </button>
-        </div>
-      </div>
-
-      <div className="session-list">
-        {projects.length === 0 ? (
-          <div className="sidebar__empty">
-            <p>No projects yet.</p>
-            <span>Create a session and it will appear under its project.</span>
-          </div>
-        ) : null}
-
-        {projects.map((project) => {
-          const projectActive = project.sessions.some(
-            (session) => session.config.id === activeSessionId,
-          )
-          const projectCollapsed = visibleCollapsedProjectIds.includes(project.config.id)
-          const projectSessionsId = `project-sessions-${project.config.id}`
-
-          return (
-            <section
-              key={project.config.id}
-              className={`project-group${projectActive ? ' is-active' : ''}${projectCollapsed ? ' is-collapsed' : ''}`}
+    <>
+      <aside className="sidebar">
+        <div className="sidebar__header">
+          <div className="sidebar__actions">
+            <button
+              type="button"
+              className="sidebar__quick-action"
+              onClick={onCreateSession}
             >
-              <button
-                type="button"
-                className="project-group__header"
-                aria-expanded={!projectCollapsed}
-                aria-controls={projectSessionsId}
-                onClick={() => toggleProject(project.config.id)}
-                onContextMenu={(event) => openProjectContextMenu(event, project)}
-              >
-                <div className="project-group__content">
-                  <div className="project-group__title">{project.config.title}</div>
-                  {showProjectPaths ? (
-                    <div className="project-group__path">{project.config.rootPath}</div>
-                  ) : null}
-                </div>
-                <div className="project-group__summary">
-                  <span
-                    className="project-group__count"
-                    aria-label={`${project.sessions.length} sessions`}
-                  >
-                    {project.sessions.length}
-                  </span>
-                  <span className="project-group__toggle" aria-hidden="true">
-                    {projectCollapsed ? '▸' : '▾'}
-                  </span>
-                </div>
-              </button>
+              <span
+                className="sidebar__quick-action-icon sidebar__quick-action-icon--session"
+                aria-hidden="true"
+              />
+              New session
+            </button>
+            <button
+              type="button"
+              className="sidebar__quick-action"
+              onClick={onCreateProject}
+            >
+              <span
+                className="sidebar__quick-action-icon sidebar__quick-action-icon--project"
+                aria-hidden="true"
+              />
+              New project
+            </button>
+          </div>
+        </div>
 
-              {!projectCollapsed ? (
-                <div className="project-group__sessions" id={projectSessionsId}>
-                  {project.sessions.map((session) => {
-                    const active = session.config.id === activeSessionId
-                    const editing = session.config.id === editingId
-
-                    return (
-                      <div
-                        key={session.config.id}
-                        role="button"
-                        tabIndex={0}
-                        className={`session-item is-nested${active ? ' is-active' : ''}${editing ? ' is-editing' : ''}`}
-                        onClick={() => {
-                          void onSelect(session.config.id)
-                        }}
-                        onContextMenu={(event) => openSessionContextMenu(event, session)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
-                            void onSelect(session.config.id)
-                          }
-                        }}
-                      >
-                        {editing ? (
-                          <form
-                            className="rename-form session-item__rename"
-                            onSubmit={(event) => {
-                              event.preventDefault()
-                              void commitRename(session.config.id)
-                            }}
-                          >
-                            <input
-                              type="text"
-                              value={draftTitle}
-                              autoFocus
-                              onClick={(event) => event.stopPropagation()}
-                              onChange={(event) => setDraftTitle(event.target.value)}
-                            />
-                            <div className="rename-form__actions">
-                              <button
-                                type="submit"
-                                className="ghost-button"
-                                onClick={(event) => event.stopPropagation()}
-                              >
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost-button"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  setEditingId(null)
-                                  setDraftTitle('')
-                                }}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </form>
-                        ) : (
-                          <div className="session-item__title">
-                            {session.config.title}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : null}
-            </section>
-          )
-        })}
-      </div>
-
-      <div className="sidebar__footer">
-        <div className="sidebar-settings" ref={settingsRef}>
-          <button
-            type="button"
-            className="sidebar-settings__button"
-            aria-expanded={settingsOpen}
-            aria-haspopup="dialog"
-            onClick={() => setSettingsOpen((current) => !current)}
-          >
-            <span className="sidebar-settings__icon" aria-hidden="true">
-              ⚙
-            </span>
-            <span className="sidebar-settings__label">Settings</span>
-          </button>
-
-          {settingsOpen ? (
-            <div className="sidebar-settings__panel" role="dialog" aria-label="Settings">
-              <p className="sidebar-settings__eyebrow">Interface</p>
-              <label className="sidebar-settings__toggle">
-                <input
-                  type="checkbox"
-                  checked={showProjectPaths}
-                  onChange={onToggleProjectPaths}
-                />
-                <span>Show project paths in the sidebar</span>
-              </label>
+        <div className="session-list">
+          {projects.length === 0 ? (
+            <div className="sidebar__empty">
+              <p>No projects yet.</p>
+              <span>Create a session and it will appear under its project.</span>
             </div>
           ) : null}
+
+          {projects.map((project) => {
+            const projectActive = project.config.id === activeProjectId
+            const projectCollapsed = visibleCollapsedProjectIds.includes(
+              project.config.id,
+            )
+            const projectSessionsId = `project-sessions-${project.config.id}`
+
+            return (
+              <section
+                key={project.config.id}
+                className={`project-group${projectActive ? ' is-active' : ''}${projectCollapsed ? ' is-collapsed' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="project-group__header"
+                  aria-expanded={!projectCollapsed}
+                  aria-controls={projectSessionsId}
+                  onClick={() => toggleProject(project.config.id)}
+                  onContextMenu={(event) => openProjectContextMenu(event, project)}
+                >
+                  <div className="project-group__content">
+                    <div className="project-group__title">{project.config.title}</div>
+                    {showProjectPaths ? (
+                      <div className="project-group__path">{project.config.rootPath}</div>
+                    ) : null}
+                  </div>
+                  <div className="project-group__summary">
+                    <span
+                      className="project-group__count"
+                      aria-label={`${project.sessions.length} sessions`}
+                    >
+                      {project.sessions.length}
+                    </span>
+                    <span className="project-group__toggle" aria-hidden="true">
+                      {projectCollapsed ? '▸' : '▾'}
+                    </span>
+                  </div>
+                </button>
+
+                {!projectCollapsed ? (
+                  <div className="project-group__sessions" id={projectSessionsId}>
+                    {project.sessions.map((session) => {
+                      const active = session.config.id === activeSessionId
+                      const editing = session.config.id === editingId
+
+                      return (
+                        <div
+                          key={session.config.id}
+                          role="button"
+                          tabIndex={0}
+                          className={`session-item is-nested${active ? ' is-active' : ''}${editing ? ' is-editing' : ''}`}
+                          onClick={() => {
+                            void onSelect(session.config.id)
+                          }}
+                          onContextMenu={(event) => openSessionContextMenu(event, session)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              void onSelect(session.config.id)
+                            }
+                          }}
+                        >
+                          {editing ? (
+                            <form
+                              className="rename-form session-item__rename"
+                              onSubmit={(event) => {
+                                event.preventDefault()
+                                void commitRename(session.config.id)
+                              }}
+                            >
+                              <input
+                                type="text"
+                                value={draftTitle}
+                                autoFocus
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={(event) => setDraftTitle(event.target.value)}
+                              />
+                              <div className="rename-form__actions">
+                                <button
+                                  type="submit"
+                                  className="ghost-button"
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ghost-button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setEditingId(null)
+                                    setDraftTitle('')
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="session-item__title">
+                              {session.config.title}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </section>
+            )
+          })}
         </div>
-      </div>
+
+        <div className="sidebar__footer">
+          <div className="sidebar-settings" ref={settingsRef}>
+            <button
+              type="button"
+              className="sidebar-settings__button"
+              aria-expanded={settingsOpen}
+              aria-haspopup="dialog"
+              onClick={() => setSettingsOpen((current) => !current)}
+            >
+              <span className="sidebar-settings__icon" aria-hidden="true">
+                ⚙
+              </span>
+              <span className="sidebar-settings__label">Settings</span>
+            </button>
+
+            {settingsOpen ? (
+              <div className="sidebar-settings__panel" role="dialog" aria-label="Settings">
+                <p className="sidebar-settings__eyebrow">Interface</p>
+                <label className="sidebar-settings__toggle">
+                  <input
+                    type="checkbox"
+                    checked={showProjectPaths}
+                    onChange={onToggleProjectPaths}
+                  />
+                  <span>Show project paths in the sidebar</span>
+                </label>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </aside>
 
       {contextMenu ? (
         <div
@@ -372,6 +403,18 @@ export function SessionSidebar({
                 type="button"
                 className="context-menu__item"
                 onClick={() => {
+                  void onToggleWindowsCommandPrompt(contextMenu.session.config.id)
+                  setContextMenu(null)
+                }}
+              >
+                {windowsCommandPromptSessionIds.includes(contextMenu.session.config.id)
+                  ? 'Hide CMD'
+                  : 'Show CMD'}
+              </button>
+              <button
+                type="button"
+                className="context-menu__item"
+                onClick={() => {
                   beginEditing(contextMenu.session)
                   setContextMenu(null)
                 }}
@@ -392,6 +435,6 @@ export function SessionSidebar({
           )}
         </div>
       ) : null}
-    </aside>
+    </>
   )
 }

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
+const FALLBACK_COMMAND_PROMPT = 'cmd.exe'
 const FALLBACK_SHELL = 'powershell.exe'
 
 export function parseWhereOutput(output: string): string | null {
@@ -53,6 +54,24 @@ export function resolveShellCommand(preferredShell?: string): string {
     'WindowsPowerShell',
     'v1.0',
     FALLBACK_SHELL,
+  )
+}
+
+export function resolveCommandPromptCommand(): string {
+  const resolvedCommandPrompt = resolveExecutable(FALLBACK_COMMAND_PROMPT)
+  if (resolvedCommandPrompt) {
+    return resolvedCommandPrompt
+  }
+
+  const comSpec = process.env.ComSpec?.trim()
+  if (comSpec && existsSync(comSpec)) {
+    return comSpec
+  }
+
+  return path.join(
+    process.env.WINDIR ?? 'C:\\Windows',
+    'System32',
+    FALLBACK_COMMAND_PROMPT,
   )
 }
 

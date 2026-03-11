@@ -12,6 +12,7 @@ import {
 
 import { IPC_CHANNELS } from '../src/shared/ipc'
 import { SessionManager } from './sessionManager'
+import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -29,6 +30,15 @@ const sessionManager = new SessionManager({
   },
   onExit: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionExit, event)
+  },
+})
+
+const windowsCommandPromptManager = new WindowsCommandPromptManager({
+  onData: (event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.windowsCommandPromptData, event)
+  },
+  onExit: (event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.windowsCommandPromptExit, event)
   },
 })
 
@@ -139,9 +149,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.restartSession, (_event, id) =>
     sessionManager.restartSession(id),
   )
-  ipcMain.handle(IPC_CHANNELS.closeSession, (_event, id) =>
-    sessionManager.closeSession(id),
-  )
+  ipcMain.handle(IPC_CHANNELS.closeSession, (_event, id) => {
+    const result = sessionManager.closeSession(id)
+    windowsCommandPromptManager.close(id)
+    return result
+  })
   ipcMain.handle(IPC_CHANNELS.writeToSession, (_event, id, data) =>
     sessionManager.writeToSession(id, data),
   )
@@ -165,6 +177,27 @@ function registerIpcHandlers(): void {
 
     return result.filePaths[0] ?? null
   })
+  ipcMain.handle(IPC_CHANNELS.listWindowsCommandPrompts, () =>
+    windowsCommandPromptManager.listOpenSessionIds(),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.openWindowsCommandPrompt,
+    (_event, sessionId: string, cwd: string) =>
+      windowsCommandPromptManager.open(sessionId, cwd),
+  )
+  ipcMain.handle(IPC_CHANNELS.closeWindowsCommandPrompt, (_event, sessionId: string) =>
+    windowsCommandPromptManager.close(sessionId),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.writeToWindowsCommandPrompt,
+    (_event, sessionId: string, data: string) =>
+      windowsCommandPromptManager.write(sessionId, data),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.resizeWindowsCommandPrompt,
+    (_event, sessionId: string, cols: number, rows: number) =>
+      windowsCommandPromptManager.resize(sessionId, cols, rows),
+  )
 }
 
 if (!gotSingleInstanceLock) {
@@ -200,6 +233,7 @@ if (!gotSingleInstanceLock) {
   })
 
   app.on('before-quit', () => {
+    windowsCommandPromptManager.dispose()
     sessionManager.dispose()
   })
 

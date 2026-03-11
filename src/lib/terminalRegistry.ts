@@ -5,6 +5,10 @@ interface TerminalHandle {
   focus: () => void
 }
 
+export function buildWindowsCommandPromptTerminalId(sessionId: string): string {
+  return `${sessionId}:windows-cmd`
+}
+
 class TerminalRegistry {
   private readonly handles = new Map<string, TerminalHandle>()
   private readonly bufferedOutput = new Map<string, string[]>()

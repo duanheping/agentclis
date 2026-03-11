@@ -4,7 +4,10 @@ import './App.css'
 import { CreateSessionDialog } from './components/CreateSessionDialog'
 import { SessionSidebar } from './components/SessionSidebar'
 import { TerminalWorkspace } from './components/TerminalWorkspace'
-import { terminalRegistry } from './lib/terminalRegistry'
+import {
+  buildWindowsCommandPromptTerminalId,
+  terminalRegistry,
+} from './lib/terminalRegistry'
 import type {
   CreateSessionInput,
   ProjectSnapshot,
@@ -67,6 +70,8 @@ function App() {
   const [showProjectPaths, setShowProjectPaths] = useState<boolean>(() =>
     readShowProjectPathsPreference(),
   )
+  const [windowsCommandPromptSessionIds, setWindowsCommandPromptSessionIds] =
+    useState<string[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(() =>
     agentCli
       ? null
@@ -91,14 +96,35 @@ function App() {
       terminalRegistry.write(sessionId, chunk)
     })
 
+    const unsubscribeWindowsCommandPromptData = agentCli.onWindowsCommandPromptData(
+      ({ sessionId, chunk }) => {
+        terminalRegistry.write(
+          buildWindowsCommandPromptTerminalId(sessionId),
+          chunk,
+        )
+      },
+    )
+
     const unsubscribeRuntime = agentCli.onSessionRuntime(({ runtime }) => {
       updateRuntime(runtime)
     })
 
+    const unsubscribeWindowsCommandPromptExit = agentCli.onWindowsCommandPromptExit(
+      ({ sessionId }) => {
+        terminalRegistry.forget(buildWindowsCommandPromptTerminalId(sessionId))
+        setWindowsCommandPromptSessionIds((current) =>
+          current.filter((id) => id !== sessionId),
+        )
+      },
+    )
+
     void (async () => {
       try {
         const payload = await agentCli.listSessions()
+        const openWindowsCommandPrompts =
+          await agentCli.listWindowsCommandPrompts()
         setInitialData(payload)
+        setWindowsCommandPromptSessionIds(openWindowsCommandPrompts)
         void agentCli.restoreSessions().catch((error) => {
           setErrorMessage(getErrorMessage(error))
         })
@@ -108,12 +134,15 @@ function App() {
           projects: [],
           activeSessionId: null,
         })
+        setWindowsCommandPromptSessionIds([])
       }
     })()
 
     return () => {
       unsubscribeData()
+      unsubscribeWindowsCommandPromptData()
       unsubscribeRuntime()
+      unsubscribeWindowsCommandPromptExit()
     }
   }, [agentCli, setInitialData, updateRuntime])
 
@@ -198,7 +227,47 @@ function App() {
       setErrorMessage(null)
       await agentCli.closeSession(id)
       terminalRegistry.forget(id)
+      terminalRegistry.forget(buildWindowsCommandPromptTerminalId(id))
+      setWindowsCommandPromptSessionIds((current) =>
+        current.filter((sessionId) => sessionId !== id),
+      )
       await refreshWorkspace()
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleToggleWindowsCommandPrompt = async (id: string) => {
+    if (!agentCli) {
+      setErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    const session = sessions.find((entry) => entry.config.id === id)
+    if (!session) {
+      setErrorMessage('Session not found.')
+      return
+    }
+
+    const terminalId = buildWindowsCommandPromptTerminalId(id)
+    const currentlyOpen = windowsCommandPromptSessionIds.includes(id)
+
+    try {
+      setErrorMessage(null)
+
+      if (currentlyOpen) {
+        await agentCli.closeWindowsCommandPrompt(id)
+        terminalRegistry.forget(terminalId)
+        setWindowsCommandPromptSessionIds((current) =>
+          current.filter((sessionId) => sessionId !== id),
+        )
+        return
+      }
+
+      await agentCli.openWindowsCommandPrompt(id, session.config.cwd)
+      setWindowsCommandPromptSessionIds((current) =>
+        current.includes(id) ? current : [...current, id],
+      )
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     }
@@ -253,6 +322,8 @@ function App() {
         onSelect={handleActivateSession}
         onRename={handleRenameSession}
         onClose={handleCloseSession}
+        windowsCommandPromptSessionIds={windowsCommandPromptSessionIds}
+        onToggleWindowsCommandPrompt={handleToggleWindowsCommandPrompt}
         onToggleProjectPaths={() =>
           setShowProjectPaths((current) => !current)
         }
@@ -273,6 +344,7 @@ function App() {
             <TerminalWorkspace
               sessions={sessions}
               activeSessionId={activeSessionId}
+              windowsCommandPromptSessionIds={windowsCommandPromptSessionIds}
             />
           )}
         </section>

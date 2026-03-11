@@ -2,7 +2,11 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { parseWhereOutput, resolveShellCommand } from './windowsShell'
+import {
+  parseWhereOutput,
+  resolveCommandPromptCommand,
+  resolveShellCommand,
+} from './windowsShell'
 
 describe('windowsShell', () => {
   it('parses the first executable from where.exe output', () => {
@@ -13,5 +17,9 @@ describe('windowsShell', () => {
   it('falls back to powershell when the preferred command is missing', () => {
     expect(resolveShellCommand('this-command-does-not-exist.exe').toLowerCase())
       .toMatch(/(pwsh|powershell)\.exe$/)
+  })
+
+  it('resolves a Windows command prompt executable', () => {
+    expect(resolveCommandPromptCommand().toLowerCase()).toMatch(/cmd\.exe$/)
   })
 })

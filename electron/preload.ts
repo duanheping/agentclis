@@ -34,12 +34,31 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.resizeSession, id, cols, rows),
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
+  listWindowsCommandPrompts: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.listWindowsCommandPrompts),
+  openWindowsCommandPrompt: (sessionId, cwd) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openWindowsCommandPrompt, sessionId, cwd),
+  closeWindowsCommandPrompt: (sessionId) =>
+    ipcRenderer.invoke(IPC_CHANNELS.closeWindowsCommandPrompt, sessionId),
+  writeToWindowsCommandPrompt: (sessionId, data) =>
+    ipcRenderer.invoke(IPC_CHANNELS.writeToWindowsCommandPrompt, sessionId, data),
+  resizeWindowsCommandPrompt: (sessionId, cols, rows) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.resizeWindowsCommandPrompt,
+      sessionId,
+      cols,
+      rows,
+    ),
   onSessionData: (listener) =>
     createListener<SessionDataEvent>(IPC_CHANNELS.sessionData, listener),
   onSessionRuntime: (listener) =>
     createListener<SessionRuntimeEvent>(IPC_CHANNELS.sessionRuntime, listener),
   onSessionExit: (listener) =>
     createListener<SessionExitMeta>(IPC_CHANNELS.sessionExit, listener),
+  onWindowsCommandPromptData: (listener) =>
+    createListener<SessionDataEvent>(IPC_CHANNELS.windowsCommandPromptData, listener),
+  onWindowsCommandPromptExit: (listener) =>
+    createListener<SessionExitMeta>(IPC_CHANNELS.windowsCommandPromptExit, listener),
 }
 
 contextBridge.exposeInMainWorld('agentCli', api)
