@@ -9,6 +9,9 @@ import {
   terminalRegistry,
 } from './lib/terminalRegistry'
 import type {
+  SkillAiMergeAgent,
+  SkillAiMergeProposal,
+  SkillAiReviewAgent,
   SkillLibrarySettings,
   SkillSyncRoot,
   SkillTargetProvider,
@@ -112,6 +115,10 @@ function App() {
   const [skillsBusy, setSkillsBusy] = useState(false)
   const [skillsSyncing, setSkillsSyncing] = useState(false)
   const [skillsResolving, setSkillsResolving] = useState<string | null>(null)
+  const [skillsGeneratingMerge, setSkillsGeneratingMerge] = useState<string | null>(null)
+  const [skillsApplyingMerge, setSkillsApplyingMerge] = useState(false)
+  const [skillAiMergeProposal, setSkillAiMergeProposal] =
+    useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
 
   const sessions = flattenSessions(projects)
@@ -148,6 +155,7 @@ function App() {
     const nextSettings = await agentCli.updateSkillLibrarySettings(settings)
     setSkillLibrarySettings(nextSettings)
     setSkillSyncStatus(await agentCli.getSkillSyncStatus())
+    setSkillAiMergeProposal(null)
   }
 
   const mutateSkillSettings = async (
@@ -279,6 +287,20 @@ function App() {
       // Ignore preference persistence failures and keep the in-memory state.
     }
   }, [sidebarOpen])
+
+  useEffect(() => {
+    if (!skillAiMergeProposal || !skillSyncStatus) {
+      return
+    }
+
+    const stillConflicting = skillSyncStatus.conflicts.some(
+      (conflict) => conflict.skillName === skillAiMergeProposal.skillName,
+    )
+
+    if (!stillConflicting) {
+      setSkillAiMergeProposal(null)
+    }
+  }, [skillAiMergeProposal, skillSyncStatus])
 
   const handleCreateSession = async (input: CreateSessionInput) => {
     if (!agentCli) {
@@ -455,6 +477,22 @@ function App() {
     }))
   }
 
+  const handleSetPrimaryMergeAgent = async (agent: SkillAiMergeAgent) => {
+    await mutateSkillSettings((current) => ({
+      ...current,
+      primaryMergeAgent: agent,
+      reviewMergeAgent:
+        current.reviewMergeAgent === agent ? 'none' : current.reviewMergeAgent,
+    }))
+  }
+
+  const handleSetReviewMergeAgent = async (agent: SkillAiReviewAgent) => {
+    await mutateSkillSettings((current) => ({
+      ...current,
+      reviewMergeAgent: agent === current.primaryMergeAgent ? 'none' : agent,
+    }))
+  }
+
   const handlePickSkillTargetRoot = async (provider: SkillTargetProvider) => {
     if (!agentCli || !skillLibrarySettings) {
       setSkillsErrorMessage('Skill settings are unavailable.')
@@ -524,6 +562,7 @@ function App() {
     try {
       await agentCli.syncSkills()
       await refreshSkillState()
+      setSkillAiMergeProposal(null)
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
     } finally {
@@ -546,11 +585,55 @@ function App() {
     try {
       await agentCli.resolveSkillConflict(skillName, sourceRoot)
       await refreshSkillState()
+      setSkillAiMergeProposal(null)
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
     } finally {
       setSkillsResolving(null)
     }
+  }
+
+  const handleGenerateSkillAiMerge = async (skillName: string) => {
+    if (!agentCli) {
+      setSkillsErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setSkillsGeneratingMerge(skillName)
+    setSkillsErrorMessage(null)
+    setSkillAiMergeProposal(null)
+
+    try {
+      const proposal = await agentCli.generateSkillAiMerge(skillName)
+      setSkillAiMergeProposal(proposal)
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setSkillsGeneratingMerge(null)
+    }
+  }
+
+  const handleApplySkillAiMerge = async () => {
+    if (!agentCli || !skillAiMergeProposal) {
+      return
+    }
+
+    setSkillsApplyingMerge(true)
+    setSkillsErrorMessage(null)
+
+    try {
+      await agentCli.applySkillAiMerge(skillAiMergeProposal)
+      await refreshSkillState()
+      setSkillAiMergeProposal(null)
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setSkillsApplyingMerge(false)
+    }
+  }
+
+  const handleDismissSkillAiMerge = () => {
+    setSkillAiMergeProposal(null)
   }
 
   const openCreateSessionDialog = (
@@ -631,16 +714,24 @@ function App() {
           skillsBusy={skillsBusy}
           skillsSyncing={skillsSyncing}
           skillsResolving={skillsResolving}
+          skillsGeneratingMerge={skillsGeneratingMerge}
+          skillsApplyingMerge={skillsApplyingMerge}
+          skillAiMergeProposal={skillAiMergeProposal}
           skillsErrorMessage={skillsErrorMessage}
           onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
           onClearSkillLibraryRoot={handleClearSkillLibraryRoot}
           onOpenSkillLibraryRoot={handleOpenSkillLibraryRoot}
           onToggleSkillAutoSync={handleToggleSkillAutoSync}
+          onSetPrimaryMergeAgent={handleSetPrimaryMergeAgent}
+          onSetReviewMergeAgent={handleSetReviewMergeAgent}
           onPickSkillTargetRoot={handlePickSkillTargetRoot}
           onClearSkillTargetRoot={handleClearSkillTargetRoot}
           onOpenSkillTargetRoot={handleOpenSkillTargetRoot}
           onSyncSkills={handleSyncSkills}
           onResolveSkillConflict={handleResolveSkillConflict}
+          onGenerateSkillAiMerge={handleGenerateSkillAiMerge}
+          onApplySkillAiMerge={handleApplySkillAiMerge}
+          onDismissSkillAiMerge={handleDismissSkillAiMerge}
         />
       ) : null}
 

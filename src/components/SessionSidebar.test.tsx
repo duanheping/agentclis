@@ -5,7 +5,11 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SessionSidebar } from './SessionSidebar'
-import type { SkillLibrarySettings, SkillSyncStatus } from '../shared/skills'
+import type {
+  SkillAiMergeProposal,
+  SkillLibrarySettings,
+  SkillSyncStatus,
+} from '../shared/skills'
 import type { ProjectSnapshot } from '../shared/session'
 
 function buildProject(): ProjectSnapshot {
@@ -52,6 +56,8 @@ function buildSkillLibrarySettings(): SkillLibrarySettings {
       },
     },
     autoSyncOnAppStart: false,
+    primaryMergeAgent: 'codex',
+    reviewMergeAgent: 'claude',
   }
 }
 
@@ -103,6 +109,36 @@ function buildSkillSyncStatus(): SkillSyncStatus {
   }
 }
 
+function buildSkillAiMergeProposal(): SkillAiMergeProposal {
+  return {
+    skillName: 'document-topic-search',
+    mergeAgent: 'codex',
+    generatedAt: '2026-03-12T18:05:00.000Z',
+    summary: 'Merged the clearer instructions and kept the useful helper notes.',
+    rationale: 'Used the Codex SKILL.md structure and kept the extra notes file.',
+    warnings: ['Double-check the notes wording before applying.'],
+    sourceRoots: ['codex', 'claude'],
+    files: [
+      {
+        path: 'SKILL.md',
+        content: '# merged skill\n',
+      },
+      {
+        path: 'notes.txt',
+        content: 'merged notes\n',
+      },
+    ],
+    review: {
+      reviewer: 'claude',
+      reviewedAt: '2026-03-12T18:06:00.000Z',
+      status: 'approved-with-warnings',
+      summary: 'The merge keeps the best instructions.',
+      rationale: 'No important content appears to be missing.',
+      warnings: ['The notes file still has one awkward sentence.'],
+    },
+  }
+}
+
 function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>>) {
   return render(
     <SessionSidebar
@@ -125,16 +161,24 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       skillsBusy={false}
       skillsSyncing={false}
       skillsResolving={null}
+      skillsGeneratingMerge={null}
+      skillsApplyingMerge={false}
+      skillAiMergeProposal={null}
       skillsErrorMessage={null}
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onClearSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onOpenSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onToggleSkillAutoSync={vi.fn().mockResolvedValue(undefined)}
+      onSetPrimaryMergeAgent={vi.fn().mockResolvedValue(undefined)}
+      onSetReviewMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onPickSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
       onClearSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
       onOpenSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
       onSyncSkills={vi.fn().mockResolvedValue(undefined)}
       onResolveSkillConflict={vi.fn().mockResolvedValue(undefined)}
+      onGenerateSkillAiMerge={vi.fn().mockResolvedValue(undefined)}
+      onApplySkillAiMerge={vi.fn().mockResolvedValue(undefined)}
+      onDismissSkillAiMerge={vi.fn()}
       {...overrides}
     />,
   )
@@ -181,5 +225,33 @@ describe('SessionSidebar', () => {
       'document-topic-search',
       'codex',
     )
+  })
+
+  it('shows an AI merge preview and forwards apply/dismiss actions', async () => {
+    const user = userEvent.setup()
+    const onGenerateSkillAiMerge = vi.fn().mockResolvedValue(undefined)
+    const onApplySkillAiMerge = vi.fn().mockResolvedValue(undefined)
+    const onDismissSkillAiMerge = vi.fn()
+
+    renderSidebar({
+      skillAiMergeProposal: buildSkillAiMergeProposal(),
+      onGenerateSkillAiMerge,
+      onApplySkillAiMerge,
+      onDismissSkillAiMerge,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.getByText('AI Merge Preview')).toBeInTheDocument()
+    expect(screen.getByText(/Merged the clearer instructions/i)).toBeInTheDocument()
+    expect(screen.getByText('Approved with warnings by Claude')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'AI Merge' }))
+    await user.click(screen.getByRole('button', { name: 'Apply Merge' }))
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+    expect(onGenerateSkillAiMerge).toHaveBeenCalledWith('document-topic-search')
+    expect(onApplySkillAiMerge).toHaveBeenCalledTimes(1)
+    expect(onDismissSkillAiMerge).toHaveBeenCalledTimes(1)
   })
 })

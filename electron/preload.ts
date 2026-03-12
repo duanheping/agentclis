@@ -42,6 +42,10 @@ const api: AgentCliApi = {
   syncSkills: () => ipcRenderer.invoke(IPC_CHANNELS.syncSkills),
   resolveSkillConflict: (skillName, sourceRoot) =>
     ipcRenderer.invoke(IPC_CHANNELS.resolveSkillConflict, skillName, sourceRoot),
+  generateSkillAiMerge: (skillName) =>
+    ipcRenderer.invoke(IPC_CHANNELS.generateSkillAiMerge, skillName),
+  applySkillAiMerge: (proposal) =>
+    ipcRenderer.invoke(IPC_CHANNELS.applySkillAiMerge, proposal),
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),
