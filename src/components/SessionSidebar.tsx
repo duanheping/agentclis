@@ -1,9 +1,12 @@
 import { type MouseEvent, useEffect, useRef, useState } from 'react'
 
 import {
+  SKILL_SYNC_ROOTS,
   SKILL_TARGET_PROVIDERS,
+  type SkillConflict,
   type SkillLibrarySettings,
   type SkillSyncIssue,
+  type SkillSyncRoot,
   type SkillSyncStatus,
   type SkillTargetProvider,
 } from '../shared/skills'
@@ -28,6 +31,7 @@ interface SessionSidebarProps {
   skillsLoading: boolean
   skillsBusy: boolean
   skillsSyncing: boolean
+  skillsResolving: string | null
   skillsErrorMessage: string | null
   onPickSkillLibraryRoot: () => Promise<void>
   onClearSkillLibraryRoot: () => Promise<void>
@@ -37,6 +41,10 @@ interface SessionSidebarProps {
   onClearSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
   onOpenSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
   onSyncSkills: () => Promise<void>
+  onResolveSkillConflict: (
+    skillName: string,
+    sourceRoot: SkillSyncRoot,
+  ) => Promise<void>
 }
 
 type ContextMenuState =
@@ -73,6 +81,14 @@ function formatProviderLabel(provider: SkillTargetProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude'
 }
 
+function formatRootLabel(root: SkillSyncRoot): string {
+  if (root === 'library') {
+    return 'Library'
+  }
+
+  return root === 'codex' ? 'Codex' : 'Claude'
+}
+
 function formatTimestamp(value: string): string {
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) {
@@ -84,7 +100,7 @@ function formatTimestamp(value: string): string {
 
 function formatIssueLabel(issue: SkillSyncIssue): string {
   const prefixParts = [
-    issue.provider ? formatProviderLabel(issue.provider) : null,
+    issue.root ? formatRootLabel(issue.root) : null,
     issue.skillName ?? null,
   ].filter(Boolean)
 
@@ -95,16 +111,28 @@ function formatIssueLabel(issue: SkillSyncIssue): string {
   return `${prefixParts.join(' / ')}: ${issue.message}`
 }
 
-function summarizeExports(exports: string[]): string {
-  if (exports.length === 0) {
-    return 'No planned exports'
+function summarizeSkills(skills: string[]): string {
+  if (skills.length === 0) {
+    return 'No detected skills'
   }
 
-  if (exports.length <= 3) {
-    return exports.join(', ')
+  if (skills.length <= 3) {
+    return skills.join(', ')
   }
 
-  return `${exports.slice(0, 3).join(', ')} +${exports.length - 3} more`
+  return `${skills.slice(0, 3).join(', ')} +${skills.length - 3} more`
+}
+
+function summarizeDifferingFiles(conflict: SkillConflict): string {
+  if (conflict.differingFiles.length === 0) {
+    return 'Content differs between roots.'
+  }
+
+  if (conflict.differingFiles.length <= 3) {
+    return conflict.differingFiles.join(', ')
+  }
+
+  return `${conflict.differingFiles.slice(0, 3).join(', ')} +${conflict.differingFiles.length - 3} more`
 }
 
 export function SessionSidebar({
@@ -126,6 +154,7 @@ export function SessionSidebar({
   skillsLoading,
   skillsBusy,
   skillsSyncing,
+  skillsResolving,
   skillsErrorMessage,
   onPickSkillLibraryRoot,
   onClearSkillLibraryRoot,
@@ -135,6 +164,7 @@ export function SessionSidebar({
   onClearSkillTargetRoot,
   onOpenSkillTargetRoot,
   onSyncSkills,
+  onResolveSkillConflict,
 }: SessionSidebarProps) {
   const activeProjectId = findActiveProjectId(projects, activeSessionId)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -269,6 +299,18 @@ export function SessionSidebar({
       ...getContextMenuPosition(event, 60),
     })
   }
+
+  const libraryStatus = skillSyncStatus?.roots.find((entry) => entry.root === 'library')
+  const providerStatuses = Object.fromEntries(
+    SKILL_TARGET_PROVIDERS.map((provider) => [
+      provider,
+      skillSyncStatus?.roots.find((entry) => entry.root === provider) ?? null,
+    ]),
+  ) as Record<SkillTargetProvider, SkillSyncStatus['roots'][number] | null>
+  const lastSyncRootResults =
+    skillSyncStatus?.lastSyncResult && Array.isArray(skillSyncStatus.lastSyncResult.roots)
+      ? skillSyncStatus.lastSyncResult.roots
+      : []
 
   return (
     <>
@@ -497,8 +539,8 @@ export function SessionSidebar({
                             Library root
                           </span>
                           <span className="sidebar-settings__pill">
-                            {skillSyncStatus
-                              ? `${skillSyncStatus.discoveredSkills.length} shared`
+                            {libraryStatus
+                              ? `${libraryStatus.skillNames.length} skills`
                               : 'Not scanned'}
                           </span>
                         </div>
@@ -549,6 +591,11 @@ export function SessionSidebar({
                             Clear
                           </button>
                         </div>
+                        <p className="sidebar-settings__caption">
+                          {libraryStatus
+                            ? summarizeSkills(libraryStatus.skillNames)
+                            : 'Library status unavailable.'}
+                        </p>
                       </div>
 
                       <label className="sidebar-settings__toggle">
@@ -565,9 +612,7 @@ export function SessionSidebar({
 
                       <div className="sidebar-settings__provider-list">
                         {SKILL_TARGET_PROVIDERS.map((provider) => {
-                          const providerStatus = skillSyncStatus?.providers.find(
-                            (entry) => entry.provider === provider,
-                          )
+                          const providerStatus = providerStatuses[provider]
                           const targetRoot =
                             skillLibrarySettings.providers[provider].targetRoot
 
@@ -578,7 +623,7 @@ export function SessionSidebar({
                                   {formatProviderLabel(provider)} target root
                                 </span>
                                 <span className="sidebar-settings__pill">
-                                  {providerStatus?.plannedExports.length ?? 0} planned
+                                  {providerStatus?.skillNames.length ?? 0} skills
                                 </span>
                               </div>
                               <button
@@ -629,7 +674,7 @@ export function SessionSidebar({
                               </div>
                               <p className="sidebar-settings__caption">
                                 {providerStatus
-                                  ? summarizeExports(providerStatus.plannedExports)
+                                  ? summarizeSkills(providerStatus.skillNames)
                                   : 'Provider status unavailable.'}
                               </p>
                             </div>
@@ -647,7 +692,7 @@ export function SessionSidebar({
                               <ul className="sidebar-settings__issue-list">
                                 {skillSyncStatus.issues.map((issue, index) => (
                                   <li
-                                    key={`${issue.code}-${issue.provider ?? 'global'}-${issue.skillName ?? 'none'}-${index}`}
+                                    key={`${issue.code}-${issue.root ?? 'global'}-${issue.skillName ?? 'none'}-${index}`}
                                     className={`sidebar-settings__issue sidebar-settings__issue--${issue.severity}`}
                                   >
                                     {formatIssueLabel(issue)}
@@ -660,6 +705,67 @@ export function SessionSidebar({
                               No validation issues detected.
                             </p>
                           )}
+
+                          {skillSyncStatus.conflicts.length > 0 ? (
+                            <div className="sidebar-settings__issues">
+                              <div className="sidebar-settings__subheading">
+                                Conflicts
+                              </div>
+                              <div className="sidebar-settings__conflict-list">
+                                {skillSyncStatus.conflicts.map((conflict) => {
+                                  const availableRoots = new Set(
+                                    conflict.roots.map((entry) => entry.root),
+                                  )
+
+                                  return (
+                                    <div
+                                      key={conflict.skillName}
+                                      className="sidebar-settings__conflict"
+                                    >
+                                      <div className="sidebar-settings__conflict-header">
+                                        <span className="sidebar-settings__field-label">
+                                          {conflict.skillName}
+                                        </span>
+                                        <span className="sidebar-settings__pill">
+                                          {conflict.recommendedRoot
+                                            ? `Prefer ${formatRootLabel(conflict.recommendedRoot)}`
+                                            : 'Choose a source'}
+                                        </span>
+                                      </div>
+                                      <p className="sidebar-settings__caption">
+                                        {summarizeDifferingFiles(conflict)}
+                                      </p>
+                                      <div className="sidebar-settings__actions">
+                                        {SKILL_SYNC_ROOTS.map((root) => (
+                                          <button
+                                            key={`${conflict.skillName}-${root}`}
+                                            type="button"
+                                            className="ghost-button sidebar-settings__action"
+                                            disabled={
+                                              !availableRoots.has(root) ||
+                                              skillsSyncing ||
+                                              skillsBusy ||
+                                              skillsResolving !== null
+                                            }
+                                            onClick={() => {
+                                              void onResolveSkillConflict(
+                                                conflict.skillName,
+                                                root,
+                                              )
+                                            }}
+                                          >
+                                            {skillsResolving === conflict.skillName
+                                              ? 'Applying…'
+                                              : `Use ${formatRootLabel(root)}`}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
 
                           {skillSyncStatus.lastSyncResult ? (
                             <div className="sidebar-settings__last-sync">
@@ -678,16 +784,16 @@ export function SessionSidebar({
                                   )}
                                 </strong>
                               </div>
-                              {skillSyncStatus.lastSyncResult.providers.map((provider) => (
+                              {lastSyncRootResults.map((rootResult) => (
                                 <div
-                                  key={`last-sync-${provider.provider}`}
+                                  key={`last-sync-${rootResult.root}`}
                                   className="sidebar-settings__status-row"
                                 >
-                                  <span>{formatProviderLabel(provider.provider)}</span>
+                                  <span>{formatRootLabel(rootResult.root)}</span>
                                   <strong>
-                                    {provider.skipped
+                                    {rootResult.skipped
                                       ? 'Skipped'
-                                      : provider.changed
+                                      : rootResult.changed
                                         ? 'Updated'
                                         : 'No changes'}
                                   </strong>

@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import type {
@@ -27,24 +27,33 @@ function buildSkillSettings(): SkillLibrarySettings {
 
 function buildSkillStatus(): SkillSyncStatus {
   return {
-    discoveredSkills: [],
     issues: [
       {
         severity: 'error',
         code: 'missing-library-root',
         message: 'Library root is not configured.',
+        root: 'library',
       },
     ],
-    providers: [
+    conflicts: [],
+    roots: [
       {
-        provider: 'codex',
-        configured: true,
-        plannedExports: [],
+        root: 'library',
+        configured: false,
+        rootPath: '',
+        skillNames: [],
       },
       {
-        provider: 'claude',
+        root: 'codex',
         configured: true,
-        plannedExports: [],
+        rootPath: 'C:\\Users\\hduan10\\.codex\\skills',
+        skillNames: [],
+      },
+      {
+        root: 'claude',
+        configured: true,
+        rootPath: 'C:\\Users\\hduan10\\.claude\\skills',
+        skillNames: [],
       },
     ],
     lastSyncResult: null,
@@ -60,20 +69,65 @@ function createAgentCliMock() {
     completedAt: '2026-03-12T18:00:02.000Z',
     success: true,
     issues: [],
-    providers: [
+    conflicts: [],
+    synchronizedSkills: ['document-topic-search'],
+    roots: [
       {
-        provider: 'codex',
-        targetRoot: 'C:\\skills\\codex',
-        syncedExports: ['document-topic-search'],
-        removedExports: [],
+        root: 'library',
+        rootPath: 'C:\\repo\\agentclis-skills',
+        synchronizedSkills: ['document-topic-search'],
+        changedSkills: ['document-topic-search'],
         changed: true,
         skipped: false,
       },
       {
-        provider: 'claude',
-        targetRoot: 'C:\\skills\\claude',
-        syncedExports: ['pdf-topic-search'],
-        removedExports: [],
+        root: 'codex',
+        rootPath: 'C:\\skills\\codex',
+        synchronizedSkills: ['document-topic-search'],
+        changedSkills: ['document-topic-search'],
+        changed: true,
+        skipped: false,
+      },
+      {
+        root: 'claude',
+        rootPath: 'C:\\skills\\claude',
+        synchronizedSkills: ['document-topic-search'],
+        changedSkills: ['document-topic-search'],
+        changed: true,
+        skipped: false,
+      },
+    ],
+  }
+
+  const resolveResult: SkillSyncResult = {
+    startedAt: '2026-03-12T18:10:00.000Z',
+    completedAt: '2026-03-12T18:10:02.000Z',
+    success: true,
+    issues: [],
+    conflicts: [],
+    synchronizedSkills: ['document-topic-search'],
+    roots: [
+      {
+        root: 'library',
+        rootPath: 'C:\\repo\\agentclis-skills',
+        synchronizedSkills: ['document-topic-search'],
+        changedSkills: ['document-topic-search'],
+        changed: true,
+        skipped: false,
+      },
+      {
+        root: 'codex',
+        rootPath: 'C:\\skills\\codex',
+        synchronizedSkills: ['document-topic-search'],
+        changedSkills: ['document-topic-search'],
+        changed: true,
+        skipped: false,
+      },
+      {
+        root: 'claude',
+        rootPath: 'C:\\skills\\claude',
+        synchronizedSkills: ['document-topic-search'],
+        changedSkills: ['document-topic-search'],
         changed: true,
         skipped: false,
       },
@@ -103,9 +157,6 @@ function createAgentCliMock() {
     updateSkillLibrarySettings: vi.fn().mockImplementation(async (settings) => {
       currentSkillSettings = structuredClone(settings)
       currentSkillStatus = {
-        discoveredSkills: currentSkillSettings.libraryRoot
-          ? ['document-topic-search']
-          : [],
         issues: currentSkillSettings.libraryRoot
           ? []
           : [
@@ -113,21 +164,55 @@ function createAgentCliMock() {
                 severity: 'error',
                 code: 'missing-library-root',
                 message: 'Library root is not configured.',
+                root: 'library',
               },
             ],
-        providers: [
+        conflicts: currentSkillSettings.libraryRoot
+          ? [
+              {
+                skillName: 'document-topic-search',
+                recommendedRoot: 'codex',
+                differingFiles: ['SKILL.md'],
+                roots: [
+                  {
+                    root: 'codex',
+                    rootPath: currentSkillSettings.providers.codex.targetRoot,
+                    modifiedAt: '2026-03-12T18:00:00.000Z',
+                    fileCount: 1,
+                  },
+                  {
+                    root: 'claude',
+                    rootPath: currentSkillSettings.providers.claude.targetRoot,
+                    modifiedAt: '2026-03-12T17:59:00.000Z',
+                    fileCount: 1,
+                  },
+                ],
+              },
+            ]
+          : [],
+        roots: [
           {
-            provider: 'codex',
-            configured: Boolean(currentSkillSettings.providers.codex.targetRoot),
-            plannedExports: currentSkillSettings.libraryRoot
+            root: 'library',
+            configured: Boolean(currentSkillSettings.libraryRoot),
+            rootPath: currentSkillSettings.libraryRoot,
+            skillNames: currentSkillSettings.libraryRoot
               ? ['document-topic-search']
               : [],
           },
           {
-            provider: 'claude',
+            root: 'codex',
+            configured: Boolean(currentSkillSettings.providers.codex.targetRoot),
+            rootPath: currentSkillSettings.providers.codex.targetRoot,
+            skillNames: currentSkillSettings.libraryRoot
+              ? ['document-topic-search']
+              : [],
+          },
+          {
+            root: 'claude',
             configured: Boolean(currentSkillSettings.providers.claude.targetRoot),
-            plannedExports: currentSkillSettings.libraryRoot
-              ? ['pdf-topic-search']
+            rootPath: currentSkillSettings.providers.claude.targetRoot,
+            skillNames: currentSkillSettings.libraryRoot
+              ? ['document-topic-search']
               : [],
           },
         ],
@@ -142,10 +227,20 @@ function createAgentCliMock() {
     syncSkills: vi.fn().mockImplementation(async () => {
       currentSkillStatus = {
         ...currentSkillStatus,
+        conflicts: [],
         lastSyncResult: syncResult,
       }
 
       return syncResult
+    }),
+    resolveSkillConflict: vi.fn().mockImplementation(async () => {
+      currentSkillStatus = {
+        ...currentSkillStatus,
+        conflicts: [],
+        lastSyncResult: resolveResult,
+      }
+
+      return resolveResult
     }),
     pickDirectory: vi
       .fn()
@@ -172,6 +267,10 @@ function createAgentCliMock() {
 }
 
 describe('App skills settings', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     window.localStorage.clear()
     useSessionsStore.setState({
@@ -181,7 +280,7 @@ describe('App skills settings', () => {
     })
   })
 
-  it('loads validation state, lets the user choose roots, and shows the last sync result', async () => {
+  it('loads root settings, lets the user choose paths, and triggers sync', async () => {
     const user = userEvent.setup()
     const { agentCli } = createAgentCliMock()
 
@@ -190,10 +289,11 @@ describe('App skills settings', () => {
     render(<App />)
 
     await screen.findByText('Create a project or session to get started.')
-
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
-    expect(screen.getByText('Library root is not configured.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Library: Library root is not configured.'),
+    ).toBeInTheDocument()
 
     const chooseButtons = screen.getAllByRole('button', { name: 'Choose' })
     await user.click(chooseButtons[0]!)
@@ -204,10 +304,6 @@ describe('App skills settings', () => {
       expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
     })
 
-    expect(screen.getByText('C:\\skills\\codex')).toBeInTheDocument()
-    expect(screen.getByText('C:\\skills\\claude')).toBeInTheDocument()
-    expect(screen.queryByText('Library root is not configured.')).not.toBeInTheDocument()
-
     await user.click(screen.getByRole('button', { name: 'Sync now' }))
 
     await waitFor(() => {
@@ -217,5 +313,35 @@ describe('App skills settings', () => {
 
     expect(agentCli.updateSkillLibrarySettings).toHaveBeenCalled()
     expect(agentCli.syncSkills).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows skill conflicts and lets the user resolve one from the settings panel', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Create a project or session to get started.')
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+
+    const chooseButtons = screen.getAllByRole('button', { name: 'Choose' })
+    await user.click(chooseButtons[0]!)
+
+    await waitFor(() => {
+      expect(screen.getByText('Conflicts')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Use Codex' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Conflicts')).not.toBeInTheDocument()
+    })
+
+    expect(agentCli.resolveSkillConflict).toHaveBeenCalledWith(
+      'document-topic-search',
+      'codex',
+    )
   })
 })

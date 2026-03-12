@@ -57,18 +57,46 @@ function buildSkillLibrarySettings(): SkillLibrarySettings {
 
 function buildSkillSyncStatus(): SkillSyncStatus {
   return {
-    discoveredSkills: ['document-topic-search'],
     issues: [],
-    providers: [
+    conflicts: [
       {
-        provider: 'codex',
+        skillName: 'document-topic-search',
+        recommendedRoot: 'codex',
+        differingFiles: ['SKILL.md', 'notes.txt'],
+        roots: [
+          {
+            root: 'codex',
+            rootPath: 'C:\\Users\\hduan10\\.codex\\skills',
+            modifiedAt: '2026-03-12T12:00:00.000Z',
+            fileCount: 2,
+          },
+          {
+            root: 'claude',
+            rootPath: 'C:\\Users\\hduan10\\.claude\\skills',
+            modifiedAt: '2026-03-12T11:00:00.000Z',
+            fileCount: 2,
+          },
+        ],
+      },
+    ],
+    roots: [
+      {
+        root: 'library',
         configured: true,
-        plannedExports: ['document-topic-search'],
+        rootPath: 'C:\\skills\\library',
+        skillNames: ['document-topic-search'],
       },
       {
-        provider: 'claude',
+        root: 'codex',
         configured: true,
-        plannedExports: ['pdf-topic-search'],
+        rootPath: 'C:\\Users\\hduan10\\.codex\\skills',
+        skillNames: ['document-topic-search'],
+      },
+      {
+        root: 'claude',
+        configured: true,
+        rootPath: 'C:\\Users\\hduan10\\.claude\\skills',
+        skillNames: ['document-topic-search'],
       },
     ],
     lastSyncResult: null,
@@ -96,6 +124,7 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       skillsLoading={false}
       skillsBusy={false}
       skillsSyncing={false}
+      skillsResolving={null}
       skillsErrorMessage={null}
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onClearSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
@@ -105,6 +134,7 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       onClearSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
       onOpenSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
       onSyncSkills={vi.fn().mockResolvedValue(undefined)}
+      onResolveSkillConflict={vi.fn().mockResolvedValue(undefined)}
       {...overrides}
     />,
   )
@@ -131,22 +161,25 @@ describe('SessionSidebar', () => {
     expect(screen.queryByText("why you don't show session title")).not.toBeInTheDocument()
   })
 
-  it('shows skills settings and triggers a sync callback', async () => {
+  it('shows skill conflicts and forwards a chosen conflict source', async () => {
     const user = userEvent.setup()
-    const onSyncSkills = vi.fn().mockResolvedValue(undefined)
+    const onResolveSkillConflict = vi.fn().mockResolvedValue(undefined)
 
     renderSidebar({
-      onSyncSkills,
+      onResolveSkillConflict,
     })
 
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
-    expect(screen.getByText('Library root')).toBeInTheDocument()
-    expect(screen.getByText('document-topic-search')).toBeInTheDocument()
-    expect(screen.getByText('pdf-topic-search')).toBeInTheDocument()
+    expect(screen.getByText('Conflicts')).toBeInTheDocument()
+    expect(screen.getByText('Prefer Codex')).toBeInTheDocument()
+    expect(screen.getByText('SKILL.md, notes.txt')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Sync now' }))
+    await user.click(screen.getByRole('button', { name: 'Use Codex' }))
 
-    expect(onSyncSkills).toHaveBeenCalledTimes(1)
+    expect(onResolveSkillConflict).toHaveBeenCalledWith(
+      'document-topic-search',
+      'codex',
+    )
   })
 })

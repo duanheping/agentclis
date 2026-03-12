@@ -13,6 +13,7 @@ import type {
 import type {
   SkillLibrarySettings,
   SkillSyncResult,
+  SkillSyncRoot,
   SkillSyncStatus,
 } from './skills'
 
@@ -31,6 +32,7 @@ export const IPC_CHANNELS = {
   updateSkillLibrarySettings: 'skills:update-settings',
   getSkillSyncStatus: 'skills:get-status',
   syncSkills: 'skills:sync',
+  resolveSkillConflict: 'skills:resolve-conflict',
   pickDirectory: 'dialog:pick-directory',
   openPath: 'shell:open-path',
   listWindowsCommandPrompts: 'shell:list-windows-command-prompts',
@@ -63,6 +65,10 @@ export interface AgentCliApi {
   ): Promise<SkillLibrarySettings>
   getSkillSyncStatus(): Promise<SkillSyncStatus>
   syncSkills(): Promise<SkillSyncResult>
+  resolveSkillConflict(
+    skillName: string,
+    sourceRoot: SkillSyncRoot,
+  ): Promise<SkillSyncResult>
   pickDirectory(defaultPath?: string): Promise<string | null>
   openPath(targetPath: string): Promise<void>
   listWindowsCommandPrompts(): Promise<string[]>

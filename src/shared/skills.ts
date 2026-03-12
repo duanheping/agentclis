@@ -2,6 +2,10 @@ export const SKILL_TARGET_PROVIDERS = ['codex', 'claude'] as const
 
 export type SkillTargetProvider = (typeof SKILL_TARGET_PROVIDERS)[number]
 
+export const SKILL_SYNC_ROOTS = ['library', 'codex', 'claude'] as const
+
+export type SkillSyncRoot = (typeof SKILL_SYNC_ROOTS)[number]
+
 export interface SkillLibraryProviderSettings {
   targetRoot: string
 }
@@ -12,16 +16,6 @@ export interface SkillLibrarySettings {
   autoSyncOnAppStart: boolean
 }
 
-export interface SkillDefinitionProviderOverride {
-  exportName?: string
-  disabled?: boolean
-}
-
-export interface SkillDefinitionOverride {
-  allowOverlayOnly?: boolean
-  providers?: Partial<Record<SkillTargetProvider, SkillDefinitionProviderOverride>>
-}
-
 export type SkillSyncIssueSeverity = 'error' | 'warning'
 
 export interface SkillSyncIssue {
@@ -29,20 +23,35 @@ export interface SkillSyncIssue {
   code: string
   message: string
   skillName?: string
-  provider?: SkillTargetProvider
+  root?: SkillSyncRoot
 }
 
-export interface SkillSyncProviderStatus {
-  provider: SkillTargetProvider
+export interface SkillConflictRootVersion {
+  root: SkillSyncRoot
+  rootPath: string
+  modifiedAt: string
+  fileCount: number
+}
+
+export interface SkillConflict {
+  skillName: string
+  recommendedRoot: SkillSyncRoot | null
+  differingFiles: string[]
+  roots: SkillConflictRootVersion[]
+}
+
+export interface SkillSyncRootStatus {
+  root: SkillSyncRoot
   configured: boolean
-  plannedExports: string[]
+  rootPath: string
+  skillNames: string[]
 }
 
-export interface SkillSyncProviderResult {
-  provider: SkillTargetProvider
-  targetRoot: string
-  syncedExports: string[]
-  removedExports: string[]
+export interface SkillSyncRootResult {
+  root: SkillSyncRoot
+  rootPath: string
+  synchronizedSkills: string[]
+  changedSkills: string[]
   changed: boolean
   skipped: boolean
   message?: string
@@ -53,12 +62,14 @@ export interface SkillSyncResult {
   completedAt: string
   success: boolean
   issues: SkillSyncIssue[]
-  providers: SkillSyncProviderResult[]
+  conflicts: SkillConflict[]
+  synchronizedSkills: string[]
+  roots: SkillSyncRootResult[]
 }
 
 export interface SkillSyncStatus {
-  discoveredSkills: string[]
   issues: SkillSyncIssue[]
-  providers: SkillSyncProviderStatus[]
+  conflicts: SkillConflict[]
+  roots: SkillSyncRootStatus[]
   lastSyncResult: SkillSyncResult | null
 }
