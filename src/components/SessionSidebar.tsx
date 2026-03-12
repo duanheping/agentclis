@@ -37,6 +37,17 @@ interface ContextMenuPosition {
   y: number
 }
 
+function findActiveProjectId(
+  projects: ProjectSnapshot[],
+  activeSessionId: string | null,
+): string | null {
+  return (
+    projects.find((project) =>
+      project.sessions.some((session) => session.config.id === activeSessionId),
+    )?.config.id ?? null
+  )
+}
+
 export function SessionSidebar({
   projects,
   activeSessionId,
@@ -52,26 +63,15 @@ export function SessionSidebar({
   onToggleWindowsCommandPrompt,
   onToggleProjectPaths,
 }: SessionSidebarProps) {
+  const activeProjectId = findActiveProjectId(projects, activeSessionId)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
-  const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([])
+  const [projectVisibility, setProjectVisibility] = useState<
+    Record<string, boolean>
+  >({})
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement | null>(null)
-  const activeProjectId =
-    projects.find((project) =>
-      project.sessions.some((session) => session.config.id === activeSessionId),
-    )?.config.id ?? null
-  const visibleExpandedProjectIds = expandedProjectIds.filter((projectId) =>
-    projects.some((project) => project.config.id === projectId),
-  )
-  const visibleCollapsedProjectIds = projects
-    .map((project) => project.config.id)
-    .filter(
-      (projectId) =>
-        projectId !== activeProjectId &&
-        !visibleExpandedProjectIds.includes(projectId),
-    )
 
   useEffect(() => {
     if (!contextMenu) {
@@ -139,12 +139,24 @@ export function SessionSidebar({
     setDraftTitle('')
   }
 
+  const isProjectExpanded = (projectId: string) =>
+    projectVisibility[projectId] ?? projectId === activeProjectId
+
   const toggleProject = (projectId: string) => {
-    setExpandedProjectIds((current) =>
-      current.includes(projectId)
-        ? current.filter((id) => id !== projectId)
-        : [...current, projectId],
-    )
+    setProjectVisibility((current) => {
+      const currentlyExpanded = current[projectId] ?? projectId === activeProjectId
+      const nextExpanded = !currentlyExpanded
+      const defaultExpanded = projectId === activeProjectId
+      const nextState = { ...current }
+
+      if (nextExpanded === defaultExpanded) {
+        delete nextState[projectId]
+      } else {
+        nextState[projectId] = nextExpanded
+      }
+
+      return nextState
+    })
   }
 
   const getContextMenuPosition = (
@@ -237,9 +249,7 @@ export function SessionSidebar({
 
           {projects.map((project) => {
             const projectActive = project.config.id === activeProjectId
-            const projectCollapsed = visibleCollapsedProjectIds.includes(
-              project.config.id,
-            )
+            const projectCollapsed = !isProjectExpanded(project.config.id)
             const projectSessionsId = `project-sessions-${project.config.id}`
 
             return (
