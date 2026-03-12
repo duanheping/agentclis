@@ -179,6 +179,11 @@ function registerIpcHandlers(): void {
     skillLibraryManager.getStatus(),
   )
   ipcMain.handle(IPC_CHANNELS.syncSkills, () => skillLibraryManager.sync())
+  ipcMain.handle(
+    IPC_CHANNELS.resolveSkillConflict,
+    (_event, skillName: string, sourceRoot) =>
+      skillLibraryManager.resolveConflict(skillName, sourceRoot),
+  )
   ipcMain.handle(IPC_CHANNELS.pickDirectory, async (_event, defaultPath?: string) => {
     const options: OpenDialogOptions = {
       title: 'Select project folder',

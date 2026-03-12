@@ -1117,13 +1117,16 @@
 .sidebar-settings__group,
 .sidebar-settings__provider-list,
 .sidebar-settings__issues,
-.sidebar-settings__last-sync {
+.sidebar-settings__last-sync,
+.sidebar-settings__conflict-list,
+.sidebar-settings__conflict {
   display: grid;
   gap: 10px;
 }
 
 .sidebar-settings__section-header,
 .sidebar-settings__group-header,
+.sidebar-settings__conflict-header,
 .sidebar-settings__status-row {
   display: flex;
   align-items: center;
@@ -1285,6 +1288,13 @@
   background: rgba(67, 19, 29, 0.5);
   color: #ffb3bc;
   font-size: 0.8rem;
+}
+
+.sidebar-settings__conflict {
+  padding: 0.82rem 0.9rem;
+  border: 1px solid rgba(255, 210, 139, 0.16);
+  border-radius: 16px;
+  background: rgba(37, 28, 11, 0.32);
 }
 
 .dialog-actions__cancel {

@@ -10,6 +10,7 @@ import {
 } from './lib/terminalRegistry'
 import type {
   SkillLibrarySettings,
+  SkillSyncRoot,
   SkillTargetProvider,
   SkillSyncStatus,
 } from './shared/skills'
@@ -110,6 +111,7 @@ function App() {
   const [skillsLoading, setSkillsLoading] = useState(Boolean(agentCli))
   const [skillsBusy, setSkillsBusy] = useState(false)
   const [skillsSyncing, setSkillsSyncing] = useState(false)
+  const [skillsResolving, setSkillsResolving] = useState<string | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
 
   const sessions = flattenSessions(projects)
@@ -529,6 +531,28 @@ function App() {
     }
   }
 
+  const handleResolveSkillConflict = async (
+    skillName: string,
+    sourceRoot: SkillSyncRoot,
+  ) => {
+    if (!agentCli) {
+      setSkillsErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setSkillsResolving(skillName)
+    setSkillsErrorMessage(null)
+
+    try {
+      await agentCli.resolveSkillConflict(skillName, sourceRoot)
+      await refreshSkillState()
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setSkillsResolving(null)
+    }
+  }
+
   const openCreateSessionDialog = (
     projectId: string | null = null,
     mode: CreateDialogMode = 'default',
@@ -606,6 +630,7 @@ function App() {
           skillsLoading={skillsLoading}
           skillsBusy={skillsBusy}
           skillsSyncing={skillsSyncing}
+          skillsResolving={skillsResolving}
           skillsErrorMessage={skillsErrorMessage}
           onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
           onClearSkillLibraryRoot={handleClearSkillLibraryRoot}
@@ -615,6 +640,7 @@ function App() {
           onClearSkillTargetRoot={handleClearSkillTargetRoot}
           onOpenSkillTargetRoot={handleOpenSkillTargetRoot}
           onSyncSkills={handleSyncSkills}
+          onResolveSkillConflict={handleResolveSkillConflict}
         />
       ) : null}
 

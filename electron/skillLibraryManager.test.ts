@@ -1,6 +1,13 @@
 // @vitest-environment node
 
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -63,15 +70,15 @@ describe('SkillLibraryManager', () => {
     await rm(tempRoot, { recursive: true, force: true })
   })
 
-  async function createManagerWithLibrary(): Promise<{
+  async function createManager(): Promise<{
     manager: SkillLibraryManager
     libraryRoot: string
     codexRoot: string
     claudeRoot: string
   }> {
     const libraryRoot = path.join(tempRoot, 'library')
-    const codexRoot = path.join(tempRoot, 'codex-target')
-    const claudeRoot = path.join(tempRoot, 'claude-target')
+    const codexRoot = path.join(tempRoot, 'codex')
+    const claudeRoot = path.join(tempRoot, 'claude')
     const manager = new SkillLibraryManager()
 
     manager.updateSettings({
@@ -96,245 +103,198 @@ describe('SkillLibraryManager', () => {
     }
   }
 
-  it('discovers shared skills, ignores root files, and flags a missing SKILL.md', async () => {
-    const { manager, libraryRoot } = await createManagerWithLibrary()
+  it('auto-syncs a single valid skill version to the other roots', async () => {
+    const { manager, libraryRoot, codexRoot, claudeRoot } = await createManager()
 
     await writeFiles(libraryRoot, {
-      'common/document-topic-search/SKILL.md': '# skill',
-      'common/readme.txt': 'ignore me',
-      'common/missing-md/scripts/tool.py': 'print("hi")',
-    })
-
-    const status = await manager.getStatus()
-
-    expect(status.discoveredSkills).toEqual([
-      'document-topic-search',
-      'missing-md',
-    ])
-    expect(status.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'missing-skill-md',
-          skillName: 'missing-md',
-        }),
-      ]),
-    )
-  })
-
-  it('merges provider overlays by replacing matching files and adding new ones', async () => {
-    const { manager, libraryRoot, codexRoot } = await createManagerWithLibrary()
-
-    await writeFiles(libraryRoot, {
-      'common/document-topic-search/SKILL.md': 'base skill',
-      'common/document-topic-search/scripts/search.py': 'print("base")\n',
-      'overlays/codex/document-topic-search/scripts/search.py': 'print("codex")\n',
-      'overlays/codex/document-topic-search/references/notes.md': 'codex only\n',
-    })
-
-    await manager.sync()
-
-    expect(
-      await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(
-            path.join(
-              codexRoot,
-              'document-topic-search',
-              'scripts',
-              'search.py',
-            ),
-            'utf8',
-          ),
-      ),
-    ).toBe('print("codex")\n')
-    expect(
-      await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(
-            path.join(
-              codexRoot,
-              'document-topic-search',
-              'references',
-              'notes.md',
-            ),
-            'utf8',
-          ),
-      ),
-    ).toBe('codex only\n')
-  })
-
-  it('applies provider export name overrides and rejects duplicates', async () => {
-    const { manager, libraryRoot } = await createManagerWithLibrary()
-
-    await writeFiles(libraryRoot, {
-      'common/document-topic-search/SKILL.md': 'base skill',
-      'common/another-topic-search/SKILL.md': 'base skill',
-      'registry.json': JSON.stringify(
-        {
-          skills: {
-            'document-topic-search': {
-              providers: {
-                claude: {
-                  exportName: 'pdf-topic-search',
-                },
-              },
-            },
-            'another-topic-search': {
-              providers: {
-                claude: {
-                  exportName: 'pdf-topic-search',
-                },
-              },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-    })
-
-    const status = await manager.getStatus()
-    const claudeStatus = status.providers.find(
-      (entry) => entry.provider === 'claude',
-    )
-
-    expect(claudeStatus?.plannedExports).toContain('pdf-topic-search')
-    expect(status.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'duplicate-export-name',
-          provider: 'claude',
-        }),
-      ]),
-    )
-  })
-
-  it('removes previously managed exports without touching unmanaged or dot-prefixed folders', async () => {
-    const { manager, libraryRoot, codexRoot } = await createManagerWithLibrary()
-
-    await writeFiles(libraryRoot, {
-      'common/new-skill/SKILL.md': 'new skill',
+      'document-topic-search/SKILL.md': '# skill\n',
+      'document-topic-search/references/readme.md': 'shared\n',
     })
     await writeFiles(codexRoot, {
-      '.system/keep.txt': 'keep',
-      'manual-skill/keep.txt': 'keep',
-      'old-skill/SKILL.md': 'remove me',
-      '.agenclis-skill-sync.json': JSON.stringify(
-        {
-          version: 1,
-          managedExports: ['old-skill'],
-        },
-        null,
-        2,
-      ),
-    })
-
-    await manager.sync()
-
-    await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(path.join(codexRoot, '.system', 'keep.txt'), 'utf8'),
-      ),
-    ).resolves.toBe('keep')
-    await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(path.join(codexRoot, 'manual-skill', 'keep.txt'), 'utf8'),
-      ),
-    ).resolves.toBe('keep')
-    await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(path.join(codexRoot, 'new-skill', 'SKILL.md'), 'utf8'),
-      ),
-    ).resolves.toBe('new skill')
-    await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(path.join(codexRoot, 'old-skill', 'SKILL.md'), 'utf8'),
-      ),
-    ).rejects.toThrow()
-  })
-
-  it('reports a no-op sync when the manifest and exported files already match', async () => {
-    const { manager, libraryRoot } = await createManagerWithLibrary()
-
-    await writeFiles(libraryRoot, {
-      'common/document-topic-search/SKILL.md': 'base skill',
-    })
-
-    const firstResult = await manager.sync()
-    const secondResult = await manager.sync()
-
-    expect(firstResult.providers.every((provider) => provider.changed)).toBe(true)
-    expect(secondResult.providers.every((provider) => !provider.changed)).toBe(true)
-  })
-
-  it('syncs both providers with rename and provider-specific disable rules', async () => {
-    const { manager, libraryRoot, codexRoot, claudeRoot } =
-      await createManagerWithLibrary()
-
-    await writeFiles(libraryRoot, {
-      'common/document-topic-search/SKILL.md': 'shared doc skill',
-      'common/security-best-practices/SKILL.md': 'security skill',
-      'common/vectorcfgcli/SKILL.md': 'vector skill',
-      'registry.json': JSON.stringify(
-        {
-          skills: {
-            'document-topic-search': {
-              providers: {
-                claude: {
-                  exportName: 'pdf-topic-search',
-                },
-              },
-            },
-            'security-best-practices': {
-              providers: {
-                claude: {
-                  disabled: true,
-                },
-              },
-            },
-          },
-        },
-        null,
-        2,
-      ),
+      'document-topic-search/scripts/tool.py': 'print("broken")\n',
     })
 
     const result = await manager.sync()
+    const status = await manager.getStatus()
 
     expect(result.success).toBe(true)
+    expect(status.conflicts).toEqual([])
+    expect(status.issues).toEqual([])
     await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(
-            path.join(codexRoot, 'document-topic-search', 'SKILL.md'),
-            'utf8',
-          ),
+      readFile(
+        path.join(codexRoot, 'document-topic-search', 'SKILL.md'),
+        'utf8',
       ),
-    ).resolves.toBe('shared doc skill')
+    ).resolves.toBe('# skill\n')
     await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(path.join(claudeRoot, 'pdf-topic-search', 'SKILL.md'), 'utf8'),
+      readFile(
+        path.join(claudeRoot, 'document-topic-search', 'SKILL.md'),
+        'utf8',
       ),
-    ).resolves.toBe('shared doc skill')
+    ).resolves.toBe('# skill\n')
+  })
+
+  it('detects conflicting copies and recommends the newest one', async () => {
+    const { manager, codexRoot, claudeRoot } = await createManager()
+
+    await writeFiles(codexRoot, {
+      'document-topic-search/SKILL.md': '# codex\n',
+      'document-topic-search/notes.txt': 'codex\n',
+    })
+    await writeFiles(claudeRoot, {
+      'document-topic-search/SKILL.md': '# claude\n',
+      'document-topic-search/notes.txt': 'claude\n',
+    })
+
+    await utimes(
+      path.join(codexRoot, 'document-topic-search', 'SKILL.md'),
+      new Date('2026-03-12T10:00:00.000Z'),
+      new Date('2026-03-12T10:00:00.000Z'),
+    )
+    await utimes(
+      path.join(claudeRoot, 'document-topic-search', 'SKILL.md'),
+      new Date('2026-03-12T11:00:00.000Z'),
+      new Date('2026-03-12T11:00:00.000Z'),
+    )
+
+    const status = await manager.getStatus()
+
+    expect(status.conflicts).toEqual([
+      expect.objectContaining({
+        skillName: 'document-topic-search',
+        recommendedRoot: 'claude',
+      }),
+    ])
+    expect(status.conflicts[0]?.differingFiles).toEqual(
+      expect.arrayContaining(['SKILL.md', 'notes.txt']),
+    )
+  })
+
+  it('syncs clear winners while leaving true conflicts unresolved', async () => {
+    const { manager, libraryRoot, codexRoot, claudeRoot } = await createManager()
+
+    await writeFiles(libraryRoot, {
+      'vectorcfgcli/SKILL.md': '# vector\n',
+    })
+    await writeFiles(codexRoot, {
+      'document-topic-search/SKILL.md': '# codex\n',
+    })
+    await writeFiles(claudeRoot, {
+      'document-topic-search/SKILL.md': '# claude\n',
+    })
+
+    const result = await manager.sync()
+    const status = await manager.getStatus()
+
+    expect(result.success).toBe(false)
+    expect(result.conflicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          skillName: 'document-topic-search',
+        }),
+      ]),
+    )
     await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(
-            path.join(claudeRoot, 'security-best-practices', 'SKILL.md'),
-            'utf8',
-          ),
-      ),
-    ).rejects.toThrow()
+      readFile(path.join(codexRoot, 'vectorcfgcli', 'SKILL.md'), 'utf8'),
+    ).resolves.toBe('# vector\n')
     await expect(
-      vi.importActual<typeof import('node:fs/promises')>('node:fs/promises').then(
-        async ({ readFile }) =>
-          readFile(path.join(codexRoot, 'vectorcfgcli', 'SKILL.md'), 'utf8'),
-      ),
-    ).resolves.toBe('vector skill')
+      readFile(path.join(claudeRoot, 'vectorcfgcli', 'SKILL.md'), 'utf8'),
+    ).resolves.toBe('# vector\n')
+    expect(status.conflicts).toHaveLength(1)
+  })
+
+  it('resolves a chosen conflict root into all configured roots', async () => {
+    const { manager, libraryRoot, codexRoot, claudeRoot } = await createManager()
+
+    await writeFiles(libraryRoot, {
+      'document-topic-search/SKILL.md': '# library\n',
+    })
+    await writeFiles(codexRoot, {
+      'document-topic-search/SKILL.md': '# codex\n',
+    })
+    await writeFiles(claudeRoot, {
+      'document-topic-search/SKILL.md': '# claude\n',
+      'document-topic-search/notes.txt': 'preferred\n',
+    })
+
+    const result = await manager.resolveConflict(
+      'document-topic-search',
+      'claude',
+    )
+    const status = await manager.getStatus()
+
+    expect(result.success).toBe(true)
+    expect(result.synchronizedSkills).toEqual(['document-topic-search'])
+    expect(status.conflicts).toEqual([])
+    await expect(
+      readFile(path.join(libraryRoot, 'document-topic-search', 'SKILL.md'), 'utf8'),
+    ).resolves.toBe('# claude\n')
+    await expect(
+      readFile(path.join(codexRoot, 'document-topic-search', 'notes.txt'), 'utf8'),
+    ).resolves.toBe('preferred\n')
+  })
+
+  it('ignores dot-prefixed root folders when scanning skills', async () => {
+    const { manager, codexRoot } = await createManager()
+
+    await writeFiles(codexRoot, {
+      '.system/keep.txt': 'keep\n',
+      'document-topic-search/SKILL.md': '# codex\n',
+    })
+
+    const status = await manager.getStatus()
+    const codexStatus = status.roots.find((entry) => entry.root === 'codex')
+
+    expect(codexStatus?.skillNames).toEqual(['document-topic-search'])
+  })
+
+  it('drops legacy provider-based sync results from persisted state', async () => {
+    mocks.setPersistedState({
+      settings: {
+        libraryRoot: 'C:\\legacy\\skills',
+        providers: {
+          codex: {
+            targetRoot: 'C:\\legacy\\.codex\\skills',
+          },
+          claude: {
+            targetRoot: 'C:\\legacy\\.claude\\skills',
+          },
+        },
+        autoSyncOnAppStart: true,
+      },
+      lastSyncResult: {
+        startedAt: '2026-03-12T10:00:00.000Z',
+        completedAt: '2026-03-12T10:00:05.000Z',
+        success: true,
+        issues: [],
+        providers: [
+          {
+            provider: 'codex',
+            targetRoot: 'C:\\legacy\\.codex\\skills',
+            syncedExports: ['document-topic-search'],
+            removedExports: [],
+            changed: true,
+            skipped: false,
+          },
+        ],
+      },
+    })
+
+    const manager = new SkillLibraryManager()
+    const status = await manager.getStatus()
+
+    expect(manager.getSettings()).toEqual({
+      libraryRoot: 'C:\\legacy\\skills',
+      providers: {
+        codex: {
+          targetRoot: 'C:\\legacy\\.codex\\skills',
+        },
+        claude: {
+          targetRoot: 'C:\\legacy\\.claude\\skills',
+        },
+      },
+      autoSyncOnAppStart: true,
+    })
+    expect(status.lastSyncResult).toBeNull()
   })
 })

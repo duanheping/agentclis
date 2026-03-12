@@ -40,6 +40,8 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.updateSkillLibrarySettings, settings),
   getSkillSyncStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getSkillSyncStatus),
   syncSkills: () => ipcRenderer.invoke(IPC_CHANNELS.syncSkills),
+  resolveSkillConflict: (skillName, sourceRoot) =>
+    ipcRenderer.invoke(IPC_CHANNELS.resolveSkillConflict, skillName, sourceRoot),
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),
