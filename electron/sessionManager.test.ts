@@ -125,6 +125,7 @@ describe('SessionManager restore policy', () => {
   it('restores only the last active session at launch and starts others on demand', async () => {
     const manager = new SessionManager({
       onData: () => undefined,
+      onConfig: () => undefined,
       onRuntime: () => undefined,
       onExit: () => undefined,
     })
@@ -136,6 +137,13 @@ describe('SessionManager restore policy', () => {
 
     const restoredSnapshot = await manager.restoreSessions()
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'beta',
+    ])
     expect(restoredSnapshot.activeSessionId).toBe('session-b')
     expect(
       Object.fromEntries(
@@ -150,14 +158,21 @@ describe('SessionManager restore policy', () => {
     })
 
     vi.runOnlyPendingTimers()
-    expect(mocks.terminals[0].write).toHaveBeenCalledWith('beta\r')
+    expect(mocks.terminals[0].write).not.toHaveBeenCalled()
 
     await manager.activateSession('session-a')
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
+    expect(secondSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'alpha',
+    ])
     expect(manager.listSessions().activeSessionId).toBe('session-a')
 
     vi.runOnlyPendingTimers()
-    expect(mocks.terminals[1].write).toHaveBeenCalledWith('alpha\r')
+    expect(mocks.terminals[1].write).not.toHaveBeenCalled()
 
     await manager.activateSession('session-a')
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
@@ -178,6 +193,7 @@ describe('SessionManager project lifecycle', () => {
   it('creates a project without creating a session', () => {
     const manager = new SessionManager({
       onData: () => undefined,
+      onConfig: () => undefined,
       onRuntime: () => undefined,
       onExit: () => undefined,
     })
@@ -199,6 +215,7 @@ describe('SessionManager project lifecycle', () => {
   it('keeps the project after its last session is closed', async () => {
     const manager = new SessionManager({
       onData: () => undefined,
+      onConfig: () => undefined,
       onRuntime: () => undefined,
       onExit: () => undefined,
     })
@@ -227,5 +244,74 @@ describe('SessionManager project lifecycle', () => {
       ],
       activeSessionId: null,
     })
+  })
+
+  it('uses the first submitted prompt as the title for managed CLI sessions', async () => {
+    const onConfig = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+    })
+
+    expect(session.config.title).toBe('codex')
+    expect(session.config.pendingFirstPromptTitle).toBe(true)
+
+    manager.writeToSession(session.config.id, 'hello world')
+    manager.writeToSession(session.config.id, '\r')
+
+    const renamedSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )
+
+    expect(renamedSession?.config.title).toBe('hello world')
+    expect(renamedSession?.config.pendingFirstPromptTitle).toBe(false)
+    expect(onConfig).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      config: expect.objectContaining({
+        id: session.config.id,
+        title: 'hello world',
+        pendingFirstPromptTitle: false,
+      }),
+    })
+  })
+
+  it('does not override a manual title with the first prompt', async () => {
+    const onConfig = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      title: 'Manual title',
+      startupCommand: 'codex',
+    })
+
+    manager.writeToSession(session.config.id, 'hello world')
+    manager.writeToSession(session.config.id, '\r')
+
+    const unchangedSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )
+
+    expect(unchangedSession?.config.title).toBe('Manual title')
+    expect(unchangedSession?.config.pendingFirstPromptTitle).toBe(false)
+    expect(onConfig).not.toHaveBeenCalled()
   })
 })

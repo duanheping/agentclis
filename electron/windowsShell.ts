@@ -75,6 +75,36 @@ export function resolveCommandPromptCommand(): string {
   )
 }
 
-export function buildShellArgs(): string[] {
-  return ['-NoLogo']
+function getShellBasename(shellCommand: string): string {
+  return path.basename(shellCommand).toLowerCase()
+}
+
+export function supportsInlineShellCommand(shellCommand: string): boolean {
+  const basename = getShellBasename(shellCommand)
+  return (
+    basename === 'pwsh.exe' ||
+    basename === 'powershell.exe' ||
+    basename === 'cmd.exe'
+  )
+}
+
+export function buildShellArgs(
+  shellCommand: string,
+  startupCommand?: string,
+): string[] {
+  const basename = getShellBasename(shellCommand)
+
+  if (!startupCommand?.trim()) {
+    return basename === 'cmd.exe' ? [] : ['-NoLogo']
+  }
+
+  if (basename === 'pwsh.exe' || basename === 'powershell.exe') {
+    return ['-NoLogo', '-NoExit', '-Command', startupCommand]
+  }
+
+  if (basename === 'cmd.exe') {
+    return ['/Q', '/K', startupCommand]
+  }
+
+  return basename === 'cmd.exe' ? [] : ['-NoLogo']
 }

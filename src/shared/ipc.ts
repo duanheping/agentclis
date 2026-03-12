@@ -4,6 +4,7 @@ import type {
   ListSessionsResponse,
   ProjectSnapshot,
   SessionCloseResult,
+  SessionConfigEvent,
   SessionDataEvent,
   SessionExitMeta,
   SessionRuntimeEvent,
@@ -30,6 +31,7 @@ export const IPC_CHANNELS = {
   windowsCommandPromptData: 'shell:data-windows-command-prompt',
   windowsCommandPromptExit: 'shell:exit-windows-command-prompt',
   sessionData: 'session:data',
+  sessionConfig: 'session:config',
   sessionRuntime: 'session:runtime',
   sessionExit: 'session:exit',
 } as const
@@ -56,6 +58,7 @@ export interface AgentCliApi {
     rows: number,
   ): Promise<void>
   onSessionData(listener: (event: SessionDataEvent) => void): () => void
+  onSessionConfig(listener: (event: SessionConfigEvent) => void): () => void
   onSessionRuntime(listener: (event: SessionRuntimeEvent) => void): () => void
   onSessionExit(listener: (event: SessionExitMeta) => void): () => void
   onWindowsCommandPromptData(

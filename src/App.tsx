@@ -62,6 +62,7 @@ function App() {
   const hydrated = useSessionsStore((state) => state.hydrated)
   const setInitialData = useSessionsStore((state) => state.setInitialData)
   const setActiveSession = useSessionsStore((state) => state.setActiveSession)
+  const updateConfig = useSessionsStore((state) => state.updateConfig)
   const updateRuntime = useSessionsStore((state) => state.updateRuntime)
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -95,6 +96,10 @@ function App() {
 
     const unsubscribeData = agentCli.onSessionData(({ sessionId, chunk }) => {
       terminalRegistry.write(sessionId, chunk)
+    })
+
+    const unsubscribeConfig = agentCli.onSessionConfig(({ config }) => {
+      updateConfig(config)
     })
 
     const unsubscribeWindowsCommandPromptData = agentCli.onWindowsCommandPromptData(
@@ -141,11 +146,12 @@ function App() {
 
     return () => {
       unsubscribeData()
+      unsubscribeConfig()
       unsubscribeWindowsCommandPromptData()
       unsubscribeRuntime()
       unsubscribeWindowsCommandPromptExit()
     }
-  }, [agentCli, setInitialData, updateRuntime])
+  }, [agentCli, setInitialData, updateConfig, updateRuntime])
 
   useEffect(() => {
     try {

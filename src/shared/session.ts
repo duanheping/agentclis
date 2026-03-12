@@ -24,6 +24,7 @@ export interface SessionConfig {
   projectId: string
   title: string
   startupCommand: string
+  pendingFirstPromptTitle: boolean
   externalSession?: ManagedCliSessionRef
   cwd: string
   shell: string
@@ -89,6 +90,11 @@ export interface SessionExitMeta {
 export interface SessionDataEvent {
   sessionId: string
   chunk: string
+}
+
+export interface SessionConfigEvent {
+  sessionId: string
+  config: SessionConfig
 }
 
 export interface SessionRuntimeEvent {

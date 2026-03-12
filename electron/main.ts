@@ -25,6 +25,9 @@ const sessionManager = new SessionManager({
   onData: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionData, event)
   },
+  onConfig: (event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.sessionConfig, event)
+  },
   onRuntime: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionRuntime, event)
   },

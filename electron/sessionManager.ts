@@ -18,6 +18,7 @@ import {
   type ProjectSnapshot,
   type SessionCloseResult,
   type SessionConfig,
+  type SessionConfigEvent,
   type SessionDataEvent,
   type SessionExitMeta,
   type SessionRuntime,
@@ -34,7 +35,11 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
 } from './codexCli'
-import { buildShellArgs, resolveShellCommand } from './windowsShell'
+import {
+  buildShellArgs,
+  resolveShellCommand,
+  supportsInlineShellCommand,
+} from './windowsShell'
 
 type IPty = import('node-pty').IPty
 
@@ -48,6 +53,7 @@ interface DetectedExternalSession {
 
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
   projectId?: string
+  pendingFirstPromptTitle?: boolean
 }
 
 const CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions')
@@ -57,6 +63,7 @@ const CODEX_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
 const CODEX_SESSION_DISCOVERY_INTERVAL_MS = 750
 const CODEX_SESSION_DISCOVERY_ATTEMPTS = 24
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
+const FIRST_PROMPT_TITLE_LIMIT = 80
 
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
@@ -69,6 +76,7 @@ interface PersistedSessionState {
 
 interface SessionManagerEvents {
   onData: (event: SessionDataEvent) => void
+  onConfig: (event: SessionConfigEvent) => void
   onRuntime: (event: SessionRuntimeEvent) => void
   onExit: (event: SessionExitMeta) => void
 }
@@ -87,6 +95,7 @@ export class SessionManager {
   private readonly configs = new Map<string, SessionConfig>()
   private readonly runtimes = new Map<string, SessionRuntime>()
   private readonly terminals = new Map<string, IPty>()
+  private readonly pendingFirstPromptBuffers = new Map<string, string>()
   private readonly claimedExternalSessions = new Map<string, string>()
   private readonly pendingExternalSessionDetections = new Map<string, NodeJS.Timeout>()
   private readonly suppressedExit = new Set<string>()
@@ -186,6 +195,10 @@ export class SessionManager {
       projectId: project.id,
       title: deriveSessionTitle(input.title, input.startupCommand, cwd),
       startupCommand: input.startupCommand.trim(),
+      pendingFirstPromptTitle: this.shouldCaptureFirstPromptTitle(
+        input.startupCommand,
+        input.title,
+      ),
       cwd,
       shell,
       createdAt: now,
@@ -208,11 +221,16 @@ export class SessionManager {
     const nextConfig: SessionConfig = {
       ...config,
       title: nextTitle,
+      pendingFirstPromptTitle: config.pendingFirstPromptTitle && !title.trim(),
       updatedAt: new Date().toISOString(),
     }
 
     this.configs.set(id, nextConfig)
     this.persist()
+    this.events.onConfig({
+      sessionId: id,
+      config: nextConfig,
+    })
     return this.snapshotFor(id)
   }
 
@@ -242,6 +260,7 @@ export class SessionManager {
 
     this.stopSession(id, true)
     this.cancelExternalSessionDetection(id)
+    this.pendingFirstPromptBuffers.delete(id)
     this.releaseExternalSession(closingConfig)
     this.configs.delete(id)
     this.runtimes.delete(id)
@@ -261,6 +280,7 @@ export class SessionManager {
   }
 
   writeToSession(id: string, data: string): void {
+    this.capturePendingFirstPromptTitle(id, data)
     this.touchRuntime(id)
     this.terminals.get(id)?.write(data)
   }
@@ -289,6 +309,7 @@ export class SessionManager {
   private async startSession(config: SessionConfig): Promise<void> {
     this.stopSession(config.id, true)
     this.cancelExternalSessionDetection(config.id)
+    this.pendingFirstPromptBuffers.delete(config.id)
     this.setRuntime(config.id, {
       status: 'starting',
       pid: undefined,
@@ -310,7 +331,12 @@ export class SessionManager {
         this.persist()
       }
 
-      const terminal = nodePty.spawn(shell, buildShellArgs(), {
+      const launchCommand = this.resolveStartupCommand(normalizedConfig)
+      const launchesInline = supportsInlineShellCommand(shell)
+      const terminal = nodePty.spawn(
+        shell,
+        buildShellArgs(shell, launchesInline ? launchCommand : undefined),
+        {
         name: 'xterm-color',
         cols: 120,
         rows: 36,
@@ -320,7 +346,8 @@ export class SessionManager {
           ...process.env,
           TERM: 'xterm-256color',
         },
-      })
+        },
+      )
 
       this.terminals.set(config.id, terminal)
       this.setRuntime(config.id, {
@@ -356,7 +383,6 @@ export class SessionManager {
         })
       })
 
-      const launchCommand = this.resolveStartupCommand(normalizedConfig)
       const externalSessionProvider =
         !normalizedConfig.externalSession
           ? this.detectResumableProvider(normalizedConfig.startupCommand)
@@ -364,7 +390,9 @@ export class SessionManager {
       const detectionStartedAt = Date.now()
 
       setTimeout(() => {
-        terminal.write(`${launchCommand}\r`)
+        if (!launchesInline) {
+          terminal.write(`${launchCommand}\r`)
+        }
 
         if (externalSessionProvider) {
           void this.pollForExternalSessionRef(
@@ -811,14 +839,163 @@ export class SessionManager {
   private hydrateSessionConfig(config: StoredSessionConfig): SessionConfig {
     const cwd = resolveSessionCwd(config.cwd, os.homedir())
     const project = this.resolveProjectForHydration(config.projectId, cwd, config)
+    const title = deriveSessionTitle(config.title, config.startupCommand, cwd)
 
     return {
       ...config,
       projectId: project.id,
-      title: deriveSessionTitle(config.title, config.startupCommand, cwd),
+      title,
+      pendingFirstPromptTitle: this.inferPendingFirstPromptTitle(config, cwd, title),
       cwd,
       shell: resolveShellCommand(config.shell),
     }
+  }
+
+  private shouldCaptureFirstPromptTitle(
+    startupCommand: string,
+    title: string | undefined,
+  ): boolean {
+    if (title?.trim()) {
+      return false
+    }
+
+    return (
+      supportsCodexSessionResume(startupCommand) ||
+      supportsCopilotSessionResume(startupCommand)
+    )
+  }
+
+  private inferPendingFirstPromptTitle(
+    config: StoredSessionConfig,
+    cwd: string,
+    title: string,
+  ): boolean {
+    if (typeof config.pendingFirstPromptTitle === 'boolean') {
+      return config.pendingFirstPromptTitle
+    }
+
+    if (!this.shouldCaptureFirstPromptTitle(config.startupCommand, undefined)) {
+      return false
+    }
+
+    return title === deriveSessionTitle(undefined, config.startupCommand, cwd)
+  }
+
+  private capturePendingFirstPromptTitle(id: string, data: string): void {
+    const config = this.configs.get(id)
+    if (!config?.pendingFirstPromptTitle) {
+      return
+    }
+
+    let buffer = this.pendingFirstPromptBuffers.get(id) ?? ''
+
+    for (let index = 0; index < data.length; index += 1) {
+      const char = data[index]
+
+      if (char === '\u001b') {
+        index = this.skipEscapeSequence(data, index)
+        continue
+      }
+
+      if (char === '\r' || char === '\n') {
+        const promptTitle = this.normalizeFirstPromptTitle(buffer)
+        buffer = ''
+
+        if (promptTitle) {
+          this.pendingFirstPromptBuffers.delete(id)
+          this.applyFirstPromptTitle(id, promptTitle)
+          return
+        }
+
+        continue
+      }
+
+      if (char === '\u0003' || char === '\u0015') {
+        buffer = ''
+        continue
+      }
+
+      if (char === '\u0008' || char === '\u007f') {
+        buffer = buffer.slice(0, -1)
+        continue
+      }
+
+      if (char === '\t') {
+        buffer += ' '
+        continue
+      }
+
+      if (char >= ' ') {
+        buffer += char
+      }
+    }
+
+    if (buffer) {
+      this.pendingFirstPromptBuffers.set(id, buffer)
+      return
+    }
+
+    this.pendingFirstPromptBuffers.delete(id)
+  }
+
+  private skipEscapeSequence(data: string, startIndex: number): number {
+    let index = startIndex + 1
+    if (index >= data.length) {
+      return startIndex
+    }
+
+    if (data[index] === '[' || data[index] === 'O') {
+      index += 1
+      while (index < data.length) {
+        const char = data[index]
+        if (char >= '@' && char <= '~') {
+          return index
+        }
+
+        index += 1
+      }
+    }
+
+    return index
+  }
+
+  private normalizeFirstPromptTitle(value: string): string {
+    const normalized = value.trim().replace(/\s+/g, ' ')
+    if (normalized.length <= FIRST_PROMPT_TITLE_LIMIT) {
+      return normalized
+    }
+
+    const preview = normalized.slice(0, FIRST_PROMPT_TITLE_LIMIT - 3)
+    const breakPoint = preview.lastIndexOf(' ')
+
+    if (breakPoint > Math.floor(FIRST_PROMPT_TITLE_LIMIT / 2)) {
+      return `${preview.slice(0, breakPoint).trimEnd()}...`
+    }
+
+    return `${preview.trimEnd()}...`
+  }
+
+  private applyFirstPromptTitle(id: string, title: string): void {
+    const config = this.configs.get(id)
+    if (!config?.pendingFirstPromptTitle) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const nextConfig: SessionConfig = {
+      ...config,
+      title,
+      pendingFirstPromptTitle: false,
+      updatedAt: timestamp,
+    }
+
+    this.configs.set(id, nextConfig)
+    this.touchProject(config.projectId, timestamp)
+    this.persist()
+    this.events.onConfig({
+      sessionId: id,
+      config: nextConfig,
+    })
   }
 
   private resolveProjectForCreate(input: CreateSessionInput): ProjectConfig {

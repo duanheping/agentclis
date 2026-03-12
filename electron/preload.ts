@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 import { IPC_CHANNELS, type AgentCliApi } from '../src/shared/ipc'
 import type {
+  SessionConfigEvent,
   SessionDataEvent,
   SessionExitMeta,
   SessionRuntimeEvent,
@@ -52,6 +53,8 @@ const api: AgentCliApi = {
     ),
   onSessionData: (listener) =>
     createListener<SessionDataEvent>(IPC_CHANNELS.sessionData, listener),
+  onSessionConfig: (listener) =>
+    createListener<SessionConfigEvent>(IPC_CHANNELS.sessionConfig, listener),
   onSessionRuntime: (listener) =>
     createListener<SessionRuntimeEvent>(IPC_CHANNELS.sessionRuntime, listener),
   onSessionExit: (listener) =>
