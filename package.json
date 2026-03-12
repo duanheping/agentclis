@@ -1,5 +1,5 @@
 {
-  "name": "agenclis",
+  "name": "agentclis",
   "private": true,
   "version": "0.1.0",
   "description": "Windows desktop manager for multiple local agent CLI sessions.",
