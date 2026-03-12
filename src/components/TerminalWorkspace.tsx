@@ -37,15 +37,7 @@ export function TerminalWorkspace({
   windowsCommandPromptSessionIds,
 }: TerminalWorkspaceProps) {
   if (sessions.length === 0) {
-    return (
-      <div className="workspace-empty">
-        <div className="workspace-empty__card">
-          <p className="eyebrow">Workspace</p>
-          <h2>等待第一个会话</h2>
-          <p>创建一个 agent CLI 后，这里会显示它的实时终端输出。</p>
-        </div>
-      </div>
-    )
+    return <div className="terminal-workspace" />
   }
 
   return (

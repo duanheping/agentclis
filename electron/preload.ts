@@ -34,8 +34,15 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.writeToSession, id, data),
   resizeSession: (id, cols, rows) =>
     ipcRenderer.invoke(IPC_CHANNELS.resizeSession, id, cols, rows),
+  getSkillLibrarySettings: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getSkillLibrarySettings),
+  updateSkillLibrarySettings: (settings) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateSkillLibrarySettings, settings),
+  getSkillSyncStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getSkillSyncStatus),
+  syncSkills: () => ipcRenderer.invoke(IPC_CHANNELS.syncSkills),
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
+  openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),
   listWindowsCommandPrompts: () =>
     ipcRenderer.invoke(IPC_CHANNELS.listWindowsCommandPrompts),
   openWindowsCommandPrompt: (sessionId, cwd) =>

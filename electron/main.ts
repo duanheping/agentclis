@@ -7,10 +7,12 @@ import {
   dialog,
   ipcMain,
   session,
+  shell,
   type OpenDialogOptions,
 } from 'electron'
 
 import { IPC_CHANNELS } from '../src/shared/ipc'
+import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 
@@ -21,6 +23,7 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock()
 let mainWindow: BrowserWindow | null = null
 let securityHeadersRegistered = false
 
+const skillLibraryManager = new SkillLibraryManager()
 const sessionManager = new SessionManager({
   onData: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionData, event)
@@ -166,6 +169,16 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.resizeSession, (_event, id, cols, rows) =>
     sessionManager.resizeSession(id, cols, rows),
   )
+  ipcMain.handle(IPC_CHANNELS.getSkillLibrarySettings, () =>
+    skillLibraryManager.getSettings(),
+  )
+  ipcMain.handle(IPC_CHANNELS.updateSkillLibrarySettings, (_event, settings) =>
+    skillLibraryManager.updateSettings(settings),
+  )
+  ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
+    skillLibraryManager.getStatus(),
+  )
+  ipcMain.handle(IPC_CHANNELS.syncSkills, () => skillLibraryManager.sync())
   ipcMain.handle(IPC_CHANNELS.pickDirectory, async (_event, defaultPath?: string) => {
     const options: OpenDialogOptions = {
       title: 'Select project folder',
@@ -182,6 +195,17 @@ function registerIpcHandlers(): void {
     }
 
     return result.filePaths[0] ?? null
+  })
+  ipcMain.handle(IPC_CHANNELS.openPath, async (_event, targetPath: string) => {
+    const normalizedPath = targetPath.trim()
+    if (!normalizedPath) {
+      throw new Error('Path is required.')
+    }
+
+    const message = await shell.openPath(normalizedPath)
+    if (message) {
+      throw new Error(message)
+    }
   })
   ipcMain.handle(IPC_CHANNELS.listWindowsCommandPrompts, () =>
     windowsCommandPromptManager.listOpenSessionIds(),
@@ -229,6 +253,7 @@ if (!gotSingleInstanceLock) {
     app.setName('Agent CLIs')
     registerSecurityHeaders()
     registerIpcHandlers()
+    void skillLibraryManager.syncOnAppStart().catch(() => undefined)
     await createMainWindow()
 
     app.on('activate', async () => {

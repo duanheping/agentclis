@@ -1,5 +1,12 @@
 import { type MouseEvent, useEffect, useRef, useState } from 'react'
 
+import {
+  SKILL_TARGET_PROVIDERS,
+  type SkillLibrarySettings,
+  type SkillSyncIssue,
+  type SkillSyncStatus,
+  type SkillTargetProvider,
+} from '../shared/skills'
 import { type ProjectSnapshot, type SessionSnapshot } from '../shared/session'
 
 interface SessionSidebarProps {
@@ -16,6 +23,20 @@ interface SessionSidebarProps {
   windowsCommandPromptSessionIds: string[]
   onToggleWindowsCommandPrompt: (id: string) => Promise<void>
   onToggleProjectPaths: () => void
+  skillLibrarySettings: SkillLibrarySettings | null
+  skillSyncStatus: SkillSyncStatus | null
+  skillsLoading: boolean
+  skillsBusy: boolean
+  skillsSyncing: boolean
+  skillsErrorMessage: string | null
+  onPickSkillLibraryRoot: () => Promise<void>
+  onClearSkillLibraryRoot: () => Promise<void>
+  onOpenSkillLibraryRoot: () => Promise<void>
+  onToggleSkillAutoSync: () => Promise<void>
+  onPickSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
+  onClearSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
+  onOpenSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
+  onSyncSkills: () => Promise<void>
 }
 
 type ContextMenuState =
@@ -48,6 +69,44 @@ function findActiveProjectId(
   )
 }
 
+function formatProviderLabel(provider: SkillTargetProvider): string {
+  return provider === 'codex' ? 'Codex' : 'Claude'
+}
+
+function formatTimestamp(value: string): string {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+
+  return parsed.toLocaleString()
+}
+
+function formatIssueLabel(issue: SkillSyncIssue): string {
+  const prefixParts = [
+    issue.provider ? formatProviderLabel(issue.provider) : null,
+    issue.skillName ?? null,
+  ].filter(Boolean)
+
+  if (prefixParts.length === 0) {
+    return issue.message
+  }
+
+  return `${prefixParts.join(' / ')}: ${issue.message}`
+}
+
+function summarizeExports(exports: string[]): string {
+  if (exports.length === 0) {
+    return 'No planned exports'
+  }
+
+  if (exports.length <= 3) {
+    return exports.join(', ')
+  }
+
+  return `${exports.slice(0, 3).join(', ')} +${exports.length - 3} more`
+}
+
 export function SessionSidebar({
   projects,
   activeSessionId,
@@ -62,6 +121,20 @@ export function SessionSidebar({
   windowsCommandPromptSessionIds,
   onToggleWindowsCommandPrompt,
   onToggleProjectPaths,
+  skillLibrarySettings,
+  skillSyncStatus,
+  skillsLoading,
+  skillsBusy,
+  skillsSyncing,
+  skillsErrorMessage,
+  onPickSkillLibraryRoot,
+  onClearSkillLibraryRoot,
+  onOpenSkillLibraryRoot,
+  onToggleSkillAutoSync,
+  onPickSkillTargetRoot,
+  onClearSkillTargetRoot,
+  onOpenSkillTargetRoot,
+  onSyncSkills,
 }: SessionSidebarProps) {
   const activeProjectId = findActiveProjectId(projects, activeSessionId)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -379,15 +452,254 @@ export function SessionSidebar({
 
             {settingsOpen ? (
               <div className="sidebar-settings__panel" role="dialog" aria-label="Settings">
-                <p className="sidebar-settings__eyebrow">Interface</p>
-                <label className="sidebar-settings__toggle">
-                  <input
-                    type="checkbox"
-                    checked={showProjectPaths}
-                    onChange={onToggleProjectPaths}
-                  />
-                  <span>Show project paths in the sidebar</span>
-                </label>
+                <div className="sidebar-settings__section">
+                  <p className="sidebar-settings__eyebrow">Interface</p>
+                  <label className="sidebar-settings__toggle">
+                    <input
+                      type="checkbox"
+                      checked={showProjectPaths}
+                      onChange={onToggleProjectPaths}
+                    />
+                    <span>Show project paths in the sidebar</span>
+                  </label>
+                </div>
+
+                <div className="sidebar-settings__section">
+                  <div className="sidebar-settings__section-header">
+                    <p className="sidebar-settings__eyebrow">Skills</p>
+                    <button
+                      type="button"
+                      className="ghost-button sidebar-settings__sync-button"
+                      disabled={skillsLoading || skillsBusy || skillsSyncing}
+                      onClick={() => {
+                        void onSyncSkills()
+                      }}
+                    >
+                      {skillsSyncing ? 'Syncing…' : 'Sync now'}
+                    </button>
+                  </div>
+
+                  {skillsLoading ? (
+                    <p className="sidebar-settings__caption">
+                      Loading skill library settings…
+                    </p>
+                  ) : null}
+
+                  {skillsErrorMessage ? (
+                    <p className="sidebar-settings__error">{skillsErrorMessage}</p>
+                  ) : null}
+
+                  {skillLibrarySettings ? (
+                    <>
+                      <div className="sidebar-settings__group">
+                        <div className="sidebar-settings__group-header">
+                          <span className="sidebar-settings__field-label">
+                            Library root
+                          </span>
+                          <span className="sidebar-settings__pill">
+                            {skillSyncStatus
+                              ? `${skillSyncStatus.discoveredSkills.length} shared`
+                              : 'Not scanned'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="sidebar-settings__path-card"
+                          disabled={skillsBusy}
+                          onClick={() => {
+                            void onPickSkillLibraryRoot()
+                          }}
+                        >
+                          <span
+                            className={`sidebar-settings__path-text${skillLibrarySettings.libraryRoot ? '' : ' is-placeholder'}`}
+                          >
+                            {skillLibrarySettings.libraryRoot ||
+                              'Choose a canonical skill library root'}
+                          </span>
+                        </button>
+                        <div className="sidebar-settings__actions">
+                          <button
+                            type="button"
+                            className="ghost-button sidebar-settings__action"
+                            disabled={skillsBusy}
+                            onClick={() => {
+                              void onPickSkillLibraryRoot()
+                            }}
+                          >
+                            Choose
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button sidebar-settings__action"
+                            disabled={!skillLibrarySettings.libraryRoot}
+                            onClick={() => {
+                              void onOpenSkillLibraryRoot()
+                            }}
+                          >
+                            Open
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button sidebar-settings__action"
+                            disabled={!skillLibrarySettings.libraryRoot || skillsBusy}
+                            onClick={() => {
+                              void onClearSkillLibraryRoot()
+                            }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+
+                      <label className="sidebar-settings__toggle">
+                        <input
+                          type="checkbox"
+                          checked={skillLibrarySettings.autoSyncOnAppStart}
+                          disabled={skillsBusy}
+                          onChange={() => {
+                            void onToggleSkillAutoSync()
+                          }}
+                        />
+                        <span>Auto-sync on app start</span>
+                      </label>
+
+                      <div className="sidebar-settings__provider-list">
+                        {SKILL_TARGET_PROVIDERS.map((provider) => {
+                          const providerStatus = skillSyncStatus?.providers.find(
+                            (entry) => entry.provider === provider,
+                          )
+                          const targetRoot =
+                            skillLibrarySettings.providers[provider].targetRoot
+
+                          return (
+                            <div key={provider} className="sidebar-settings__group">
+                              <div className="sidebar-settings__group-header">
+                                <span className="sidebar-settings__field-label">
+                                  {formatProviderLabel(provider)} target root
+                                </span>
+                                <span className="sidebar-settings__pill">
+                                  {providerStatus?.plannedExports.length ?? 0} planned
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="sidebar-settings__path-card"
+                                disabled={skillsBusy}
+                                onClick={() => {
+                                  void onPickSkillTargetRoot(provider)
+                                }}
+                              >
+                                <span
+                                  className={`sidebar-settings__path-text${targetRoot ? '' : ' is-placeholder'}`}
+                                >
+                                  {targetRoot || `Choose the ${formatProviderLabel(provider)} skills folder`}
+                                </span>
+                              </button>
+                              <div className="sidebar-settings__actions">
+                                <button
+                                  type="button"
+                                  className="ghost-button sidebar-settings__action"
+                                  disabled={skillsBusy}
+                                  onClick={() => {
+                                    void onPickSkillTargetRoot(provider)
+                                  }}
+                                >
+                                  Choose
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ghost-button sidebar-settings__action"
+                                  disabled={!targetRoot}
+                                  onClick={() => {
+                                    void onOpenSkillTargetRoot(provider)
+                                  }}
+                                >
+                                  Open
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ghost-button sidebar-settings__action"
+                                  disabled={!targetRoot || skillsBusy}
+                                  onClick={() => {
+                                    void onClearSkillTargetRoot(provider)
+                                  }}
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                              <p className="sidebar-settings__caption">
+                                {providerStatus
+                                  ? summarizeExports(providerStatus.plannedExports)
+                                  : 'Provider status unavailable.'}
+                              </p>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      {skillSyncStatus ? (
+                        <>
+                          {skillSyncStatus.issues.length > 0 ? (
+                            <div className="sidebar-settings__issues">
+                              <div className="sidebar-settings__subheading">
+                                Validation
+                              </div>
+                              <ul className="sidebar-settings__issue-list">
+                                {skillSyncStatus.issues.map((issue, index) => (
+                                  <li
+                                    key={`${issue.code}-${issue.provider ?? 'global'}-${issue.skillName ?? 'none'}-${index}`}
+                                    className={`sidebar-settings__issue sidebar-settings__issue--${issue.severity}`}
+                                  >
+                                    {formatIssueLabel(issue)}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <p className="sidebar-settings__caption">
+                              No validation issues detected.
+                            </p>
+                          )}
+
+                          {skillSyncStatus.lastSyncResult ? (
+                            <div className="sidebar-settings__last-sync">
+                              <div className="sidebar-settings__subheading">
+                                Last sync
+                              </div>
+                              <div className="sidebar-settings__status-row">
+                                <span>
+                                  {skillSyncStatus.lastSyncResult.success
+                                    ? 'Succeeded'
+                                    : 'Failed'}
+                                </span>
+                                <strong>
+                                  {formatTimestamp(
+                                    skillSyncStatus.lastSyncResult.completedAt,
+                                  )}
+                                </strong>
+                              </div>
+                              {skillSyncStatus.lastSyncResult.providers.map((provider) => (
+                                <div
+                                  key={`last-sync-${provider.provider}`}
+                                  className="sidebar-settings__status-row"
+                                >
+                                  <span>{formatProviderLabel(provider.provider)}</span>
+                                  <strong>
+                                    {provider.skipped
+                                      ? 'Skipped'
+                                      : provider.changed
+                                        ? 'Updated'
+                                        : 'No changes'}
+                                  </strong>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </div>

@@ -10,6 +10,11 @@ import type {
   SessionRuntimeEvent,
   SessionSnapshot,
 } from './session'
+import type {
+  SkillLibrarySettings,
+  SkillSyncResult,
+  SkillSyncStatus,
+} from './skills'
 
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
@@ -22,7 +27,12 @@ export const IPC_CHANNELS = {
   closeSession: 'session:close',
   writeToSession: 'session:write',
   resizeSession: 'session:resize',
+  getSkillLibrarySettings: 'skills:get-settings',
+  updateSkillLibrarySettings: 'skills:update-settings',
+  getSkillSyncStatus: 'skills:get-status',
+  syncSkills: 'skills:sync',
   pickDirectory: 'dialog:pick-directory',
+  openPath: 'shell:open-path',
   listWindowsCommandPrompts: 'shell:list-windows-command-prompts',
   openWindowsCommandPrompt: 'shell:open-windows-command-prompt',
   closeWindowsCommandPrompt: 'shell:close-windows-command-prompt',
@@ -47,7 +57,14 @@ export interface AgentCliApi {
   closeSession(id: string): Promise<SessionCloseResult>
   writeToSession(id: string, data: string): Promise<void>
   resizeSession(id: string, cols: number, rows: number): Promise<void>
+  getSkillLibrarySettings(): Promise<SkillLibrarySettings>
+  updateSkillLibrarySettings(
+    settings: SkillLibrarySettings,
+  ): Promise<SkillLibrarySettings>
+  getSkillSyncStatus(): Promise<SkillSyncStatus>
+  syncSkills(): Promise<SkillSyncResult>
   pickDirectory(defaultPath?: string): Promise<string | null>
+  openPath(targetPath: string): Promise<void>
   listWindowsCommandPrompts(): Promise<string[]>
   openWindowsCommandPrompt(sessionId: string, cwd: string): Promise<void>
   closeWindowsCommandPrompt(sessionId: string): Promise<void>

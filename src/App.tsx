@@ -9,6 +9,11 @@ import {
   terminalRegistry,
 } from './lib/terminalRegistry'
 import type {
+  SkillLibrarySettings,
+  SkillTargetProvider,
+  SkillSyncStatus,
+} from './shared/skills'
+import type {
   CreateProjectInput,
   CreateSessionInput,
   ProjectSnapshot,
@@ -99,9 +104,69 @@ function App() {
       ? null
       : 'Agent bridge is unavailable. The preload script did not load.',
   )
+  const [skillLibrarySettings, setSkillLibrarySettings] =
+    useState<SkillLibrarySettings | null>(null)
+  const [skillSyncStatus, setSkillSyncStatus] = useState<SkillSyncStatus | null>(null)
+  const [skillsLoading, setSkillsLoading] = useState(Boolean(agentCli))
+  const [skillsBusy, setSkillsBusy] = useState(false)
+  const [skillsSyncing, setSkillsSyncing] = useState(false)
+  const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
 
   const sessions = flattenSessions(projects)
   const activeProject = findActiveProject(projects, activeSessionId)
+
+  const refreshWorkspace = async () => {
+    if (!agentCli) {
+      throw new Error('Agent bridge is unavailable.')
+    }
+
+    const payload = await agentCli.listSessions()
+    setInitialData(payload)
+  }
+
+  const refreshSkillState = async () => {
+    if (!agentCli) {
+      throw new Error('Agent bridge is unavailable.')
+    }
+
+    const [settings, status] = await Promise.all([
+      agentCli.getSkillLibrarySettings(),
+      agentCli.getSkillSyncStatus(),
+    ])
+
+    setSkillLibrarySettings(settings)
+    setSkillSyncStatus(status)
+  }
+
+  const persistSkillSettings = async (settings: SkillLibrarySettings) => {
+    if (!agentCli) {
+      throw new Error('Agent bridge is unavailable.')
+    }
+
+    const nextSettings = await agentCli.updateSkillLibrarySettings(settings)
+    setSkillLibrarySettings(nextSettings)
+    setSkillSyncStatus(await agentCli.getSkillSyncStatus())
+  }
+
+  const mutateSkillSettings = async (
+    transform: (current: SkillLibrarySettings) => SkillLibrarySettings,
+  ) => {
+    if (!skillLibrarySettings) {
+      setSkillsErrorMessage('Skill settings are still loading.')
+      return
+    }
+
+    setSkillsBusy(true)
+    setSkillsErrorMessage(null)
+
+    try {
+      await persistSkillSettings(transform(skillLibrarySettings))
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setSkillsBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!agentCli) {
@@ -109,6 +174,9 @@ function App() {
         projects: [],
         activeSessionId: null,
       })
+      setSkillLibrarySettings(null)
+      setSkillSyncStatus(null)
+      setSkillsLoading(false)
       return
     }
 
@@ -162,6 +230,26 @@ function App() {
       }
     })()
 
+    void (async () => {
+      setSkillsLoading(true)
+
+      try {
+        const [settings, status] = await Promise.all([
+          agentCli.getSkillLibrarySettings(),
+          agentCli.getSkillSyncStatus(),
+        ])
+        setSkillLibrarySettings(settings)
+        setSkillSyncStatus(status)
+        setSkillsErrorMessage(null)
+      } catch (error) {
+        setSkillLibrarySettings(null)
+        setSkillSyncStatus(null)
+        setSkillsErrorMessage(getErrorMessage(error))
+      } finally {
+        setSkillsLoading(false)
+      }
+    })()
+
     return () => {
       unsubscribeData()
       unsubscribeConfig()
@@ -189,15 +277,6 @@ function App() {
       // Ignore preference persistence failures and keep the in-memory state.
     }
   }, [sidebarOpen])
-
-  const refreshWorkspace = async () => {
-    if (!agentCli) {
-      throw new Error('Agent bridge is unavailable.')
-    }
-
-    const payload = await agentCli.listSessions()
-    setInitialData(payload)
-  }
 
   const handleCreateSession = async (input: CreateSessionInput) => {
     if (!agentCli) {
@@ -322,6 +401,134 @@ function App() {
     }
   }
 
+  const handlePickSkillLibraryRoot = async () => {
+    if (!agentCli || !skillLibrarySettings) {
+      setSkillsErrorMessage('Skill settings are unavailable.')
+      return
+    }
+
+    try {
+      setSkillsErrorMessage(null)
+      const selectedPath = await agentCli.pickDirectory(
+        skillLibrarySettings.libraryRoot || undefined,
+      )
+
+      if (!selectedPath) {
+        return
+      }
+
+      await mutateSkillSettings((current) => ({
+        ...current,
+        libraryRoot: selectedPath,
+      }))
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleClearSkillLibraryRoot = async () => {
+    await mutateSkillSettings((current) => ({
+      ...current,
+      libraryRoot: '',
+    }))
+  }
+
+  const handleOpenSkillLibraryRoot = async () => {
+    if (!agentCli || !skillLibrarySettings?.libraryRoot.trim()) {
+      return
+    }
+
+    try {
+      setSkillsErrorMessage(null)
+      await agentCli.openPath(skillLibrarySettings.libraryRoot)
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleToggleSkillAutoSync = async () => {
+    await mutateSkillSettings((current) => ({
+      ...current,
+      autoSyncOnAppStart: !current.autoSyncOnAppStart,
+    }))
+  }
+
+  const handlePickSkillTargetRoot = async (provider: SkillTargetProvider) => {
+    if (!agentCli || !skillLibrarySettings) {
+      setSkillsErrorMessage('Skill settings are unavailable.')
+      return
+    }
+
+    try {
+      setSkillsErrorMessage(null)
+      const selectedPath = await agentCli.pickDirectory(
+        skillLibrarySettings.providers[provider].targetRoot ||
+          skillLibrarySettings.libraryRoot ||
+          undefined,
+      )
+
+      if (!selectedPath) {
+        return
+      }
+
+      await mutateSkillSettings((current) => ({
+        ...current,
+        providers: {
+          ...current.providers,
+          [provider]: {
+            targetRoot: selectedPath,
+          },
+        },
+      }))
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleClearSkillTargetRoot = async (provider: SkillTargetProvider) => {
+    await mutateSkillSettings((current) => ({
+      ...current,
+      providers: {
+        ...current.providers,
+        [provider]: {
+          targetRoot: '',
+        },
+      },
+    }))
+  }
+
+  const handleOpenSkillTargetRoot = async (provider: SkillTargetProvider) => {
+    if (!agentCli || !skillLibrarySettings?.providers[provider].targetRoot.trim()) {
+      return
+    }
+
+    try {
+      setSkillsErrorMessage(null)
+      await agentCli.openPath(skillLibrarySettings.providers[provider].targetRoot)
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleSyncSkills = async () => {
+    if (!agentCli) {
+      setSkillsErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setSkillsSyncing(true)
+    setSkillsErrorMessage(null)
+
+    try {
+      await agentCli.syncSkills()
+      await refreshSkillState()
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setSkillsSyncing(false)
+    }
+  }
+
   const openCreateSessionDialog = (
     projectId: string | null = null,
     mode: CreateDialogMode = 'default',
@@ -394,6 +601,20 @@ function App() {
           onToggleProjectPaths={() =>
             setShowProjectPaths((current) => !current)
           }
+          skillLibrarySettings={skillLibrarySettings}
+          skillSyncStatus={skillSyncStatus}
+          skillsLoading={skillsLoading}
+          skillsBusy={skillsBusy}
+          skillsSyncing={skillsSyncing}
+          skillsErrorMessage={skillsErrorMessage}
+          onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
+          onClearSkillLibraryRoot={handleClearSkillLibraryRoot}
+          onOpenSkillLibraryRoot={handleOpenSkillLibraryRoot}
+          onToggleSkillAutoSync={handleToggleSkillAutoSync}
+          onPickSkillTargetRoot={handlePickSkillTargetRoot}
+          onClearSkillTargetRoot={handleClearSkillTargetRoot}
+          onOpenSkillTargetRoot={handleOpenSkillTargetRoot}
+          onSyncSkills={handleSyncSkills}
         />
       ) : null}
 
