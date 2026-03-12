@@ -22,6 +22,7 @@ function createListener<T>(
 const api: AgentCliApi = {
   restoreSessions: () => ipcRenderer.invoke(IPC_CHANNELS.restoreSessions),
   listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.listSessions),
+  createProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.createProject, input),
   createSession: (input) => ipcRenderer.invoke(IPC_CHANNELS.createSession, input),
   renameSession: (id, title) =>
     ipcRenderer.invoke(IPC_CHANNELS.renameSession, id, title),

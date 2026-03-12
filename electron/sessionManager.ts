@@ -7,6 +7,7 @@ import Store from 'electron-store'
 
 import {
   buildRuntime,
+  type CreateProjectInput,
   deriveProjectTitle,
   deriveSessionTitle,
   resolveProjectRoot,
@@ -14,6 +15,7 @@ import {
   type CreateSessionInput,
   type ListSessionsResponse,
   type ProjectConfig,
+  type ProjectSnapshot,
   type SessionCloseResult,
   type SessionConfig,
   type SessionDataEvent,
@@ -115,12 +117,6 @@ export class SessionManager {
       }
     }
 
-    const beforePrune = this.projects.size
-    this.pruneEmptyProjects()
-    if (beforePrune !== this.projects.size) {
-      shouldPersist = true
-    }
-
     if (this.activeSessionId && !this.configs.has(this.activeSessionId)) {
       this.activeSessionId = this.getOrderedConfigs()[0]?.id ?? null
       shouldPersist = true
@@ -133,12 +129,9 @@ export class SessionManager {
 
   listSessions(): ListSessionsResponse {
     return {
-      projects: this.getOrderedProjects().map((project) => ({
-        config: project,
-        sessions: this.getOrderedConfigs(project.id).map((config) =>
-          this.snapshotFor(config.id),
-        ),
-      })),
+      projects: this.getOrderedProjects().map((project) =>
+        this.projectSnapshotFor(project.id),
+      ),
       activeSessionId: this.activeSessionId,
     }
   }
@@ -152,6 +145,33 @@ export class SessionManager {
     }
 
     return this.listSessions()
+  }
+
+  createProject(input: CreateProjectInput): ProjectSnapshot {
+    const rootPath = input.rootPath.trim()
+    if (!rootPath) {
+      throw new Error('Project root path is required.')
+    }
+
+    const existingProject = this.findProjectByRootPath(rootPath)
+    if (existingProject) {
+      this.touchProject(existingProject.id)
+      this.persist()
+      return this.projectSnapshotFor(existingProject.id)
+    }
+
+    const now = new Date().toISOString()
+    const project: ProjectConfig = {
+      id: crypto.randomUUID(),
+      title: deriveProjectTitle(input.title, rootPath),
+      rootPath,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    this.projects.set(project.id, project)
+    this.persist()
+    return this.projectSnapshotFor(project.id)
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionSnapshot> {
@@ -219,7 +239,6 @@ export class SessionManager {
     }
 
     const closingConfig = this.requireConfig(id)
-    const closingProjectId = closingConfig.projectId
 
     this.stopSession(id, true)
     this.cancelExternalSessionDetection(id)
@@ -232,10 +251,6 @@ export class SessionManager {
         orderedIds[closingIndex + 1] ??
         orderedIds[closingIndex - 1] ??
         null
-    }
-
-    if (!this.hasSessions(closingProjectId)) {
-      this.projects.delete(closingProjectId)
     }
 
     this.persist()
@@ -913,6 +928,17 @@ export class SessionManager {
     }
   }
 
+  private projectSnapshotFor(id: string): ProjectSnapshot {
+    const project = this.requireProject(id)
+
+    return {
+      config: project,
+      sessions: this.getOrderedConfigs(project.id).map((config) =>
+        this.snapshotFor(config.id),
+      ),
+    }
+  }
+
   private requireConfig(id: string): SessionConfig {
     const config = this.configs.get(id)
     if (!config) {
@@ -924,7 +950,6 @@ export class SessionManager {
 
   private getOrderedProjects(): ProjectConfig[] {
     return Array.from(this.projects.values())
-      .filter((project) => this.hasSessions(project.id))
       .sort((left, right) => {
         const lastRight = this.getProjectSortValue(right.id)
         const lastLeft = this.getProjectSortValue(left.id)
@@ -966,12 +991,6 @@ export class SessionManager {
     return this.runtimes.get(id)?.lastActiveAt ?? fallbackValue
   }
 
-  private hasSessions(projectId: string): boolean {
-    return Array.from(this.configs.values()).some(
-      (config) => config.projectId === projectId,
-    )
-  }
-
   private findProjectByRootPath(rootPath: string): ProjectConfig | undefined {
     const targetPath = this.normalizePath(rootPath)
 
@@ -980,21 +999,7 @@ export class SessionManager {
     )
   }
 
-  private pruneEmptyProjects(): void {
-    const activeProjectIds = new Set(
-      Array.from(this.configs.values()).map((config) => config.projectId),
-    )
-
-    for (const projectId of Array.from(this.projects.keys())) {
-      if (!activeProjectIds.has(projectId)) {
-        this.projects.delete(projectId)
-      }
-    }
-  }
-
   private persist(): void {
-    this.pruneEmptyProjects()
-
     this.store.set({
       projects: Array.from(this.projects.values()),
       sessions: Array.from(this.configs.values()),

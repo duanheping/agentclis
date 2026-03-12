@@ -52,38 +52,24 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
-  const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>([])
+  const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement | null>(null)
-  const visibleCollapsedProjectIds = collapsedProjectIds.filter((projectId) =>
-    projects.some((project) => project.config.id === projectId),
-  )
   const activeProjectId =
     projects.find((project) =>
       project.sessions.some((session) => session.config.id === activeSessionId),
     )?.config.id ?? null
-
-  useEffect(() => {
-    setCollapsedProjectIds((current) => {
-      const next = new Set(
-        current.filter((projectId) =>
-          projects.some((project) => project.config.id === projectId),
-        ),
-      )
-
-      for (const project of projects) {
-        if (project.config.id === activeProjectId) {
-          next.delete(project.config.id)
-          continue
-        }
-
-        next.add(project.config.id)
-      }
-
-      return Array.from(next)
-    })
-  }, [activeProjectId, projects])
+  const visibleExpandedProjectIds = expandedProjectIds.filter((projectId) =>
+    projects.some((project) => project.config.id === projectId),
+  )
+  const visibleCollapsedProjectIds = projects
+    .map((project) => project.config.id)
+    .filter(
+      (projectId) =>
+        projectId !== activeProjectId &&
+        !visibleExpandedProjectIds.includes(projectId),
+    )
 
   useEffect(() => {
     if (!contextMenu) {
@@ -152,7 +138,7 @@ export function SessionSidebar({
   }
 
   const toggleProject = (projectId: string) => {
-    setCollapsedProjectIds((current) =>
+    setExpandedProjectIds((current) =>
       current.includes(projectId)
         ? current.filter((id) => id !== projectId)
         : [...current, projectId],
@@ -231,7 +217,7 @@ export function SessionSidebar({
           {projects.length === 0 ? (
             <div className="sidebar__empty">
               <p>No projects yet.</p>
-              <span>Create a session and it will appear under its project.</span>
+              <span>Create a project or session to get started.</span>
             </div>
           ) : null}
 
@@ -276,6 +262,10 @@ export function SessionSidebar({
 
                 {!projectCollapsed ? (
                   <div className="project-group__sessions" id={projectSessionsId}>
+                    {project.sessions.length === 0 ? (
+                      <div className="project-group__empty">No sessions yet.</div>
+                    ) : null}
+
                     {project.sessions.map((session) => {
                       const active = session.config.id === activeSessionId
                       const editing = session.config.id === editingId

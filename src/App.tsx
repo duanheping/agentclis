@@ -9,6 +9,7 @@ import {
   terminalRegistry,
 } from './lib/terminalRegistry'
 import type {
+  CreateProjectInput,
   CreateSessionInput,
   ProjectSnapshot,
   SessionSnapshot,
@@ -174,6 +175,22 @@ function App() {
     setErrorMessage(null)
     try {
       await agentCli.createSession(input)
+      await refreshWorkspace()
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setErrorMessage(message)
+      throw new Error(message)
+    }
+  }
+
+  const handleCreateProject = async (input: CreateProjectInput) => {
+    if (!agentCli) {
+      throw new Error('Agent bridge is unavailable.')
+    }
+
+    setErrorMessage(null)
+    try {
+      await agentCli.createProject(input)
       await refreshWorkspace()
     } catch (error) {
       const message = getErrorMessage(error)
@@ -361,7 +378,8 @@ function App() {
           null
         }
         onClose={closeCreateSessionDialog}
-        onSubmit={handleCreateSession}
+        onCreateProject={handleCreateProject}
+        onCreateSession={handleCreateSession}
       />
     </div>
   )

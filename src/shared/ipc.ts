@@ -1,6 +1,8 @@
 import type {
+  CreateProjectInput,
   CreateSessionInput,
   ListSessionsResponse,
+  ProjectSnapshot,
   SessionCloseResult,
   SessionDataEvent,
   SessionExitMeta,
@@ -11,6 +13,7 @@ import type {
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
   listSessions: 'session:list',
+  createProject: 'project:create',
   createSession: 'session:create',
   renameSession: 'session:rename',
   activateSession: 'session:activate',
@@ -34,6 +37,7 @@ export const IPC_CHANNELS = {
 export interface AgentCliApi {
   restoreSessions(): Promise<ListSessionsResponse>
   listSessions(): Promise<ListSessionsResponse>
+  createProject(input: CreateProjectInput): Promise<ProjectSnapshot>
   createSession(input: CreateSessionInput): Promise<SessionSnapshot>
   renameSession(id: string, title: string): Promise<SessionSnapshot>
   activateSession(id: string): Promise<void>

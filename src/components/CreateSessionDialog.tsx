@@ -1,6 +1,10 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 
-import type { CreateSessionInput, ProjectSnapshot } from '../shared/session'
+import type {
+  CreateProjectInput,
+  CreateSessionInput,
+  ProjectSnapshot,
+} from '../shared/session'
 
 interface CreateSessionDialogProps {
   open: boolean
@@ -8,7 +12,8 @@ interface CreateSessionDialogProps {
   projects: ProjectSnapshot[]
   activeProjectId: string | null
   onClose: () => void
-  onSubmit: (input: CreateSessionInput) => Promise<void>
+  onCreateProject: (input: CreateProjectInput) => Promise<void>
+  onCreateSession: (input: CreateSessionInput) => Promise<void>
 }
 
 interface CreateSessionFormState {
@@ -67,7 +72,8 @@ export function CreateSessionDialog({
   projects,
   activeProjectId,
   onClose,
-  onSubmit,
+  onCreateProject,
+  onCreateSession,
 }: CreateSessionDialogProps) {
   const projectSelectRef = useRef<HTMLDivElement | null>(null)
   const [formState, setFormState] = useState<CreateSessionFormState>(() =>
@@ -84,13 +90,13 @@ export function CreateSessionDialog({
     projects.find((project) => project.config.id === formState.projectSelection) ?? null
   const dialogEyebrow = creatingNewProject ? 'New Project' : 'New Session'
   const dialogTitle = creatingNewProject
-    ? 'Create project and first session'
+    ? 'Create project'
     : 'Create Agent CLI Session'
   const sessionTitleLabel = creatingNewProject
     ? 'First session title (optional)'
     : 'Session title (optional)'
   const startupCommandLabel = creatingNewProject
-    ? 'First session startup command'
+    ? 'First session startup command (optional)'
     : 'Startup command'
   const sessionCwdLabel = creatingNewProject
     ? 'First session working directory (optional)'
@@ -204,7 +210,9 @@ export function CreateSessionDialog({
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    if (!formState.startupCommand.trim()) {
+    const startupCommand = formState.startupCommand.trim()
+
+    if (!creatingNewProject && !startupCommand) {
       setErrorMessage('Startup command is required.')
       return
     }
@@ -218,6 +226,15 @@ export function CreateSessionDialog({
     setErrorMessage(null)
 
     try {
+      if (creatingNewProject && !startupCommand) {
+        await onCreateProject({
+          title: formState.projectTitle,
+          rootPath: formState.projectRootPath,
+        })
+        onClose()
+        return
+      }
+
       const payload: CreateSessionInput = {
         title: formState.title,
         startupCommand: formState.startupCommand,
@@ -231,7 +248,7 @@ export function CreateSessionDialog({
         payload.projectId = formState.projectSelection
       }
 
-      await onSubmit(payload)
+      await onCreateSession(payload)
       onClose()
     } catch (error) {
       setErrorMessage(
@@ -435,11 +452,16 @@ export function CreateSessionDialog({
             <span>{startupCommandLabel}</span>
             <input
               type="text"
-              autoFocus
+              autoFocus={!creatingNewProject}
               value={formState.startupCommand}
               placeholder="Example: agent --profile dev"
               onChange={(event) => updateField('startupCommand', event.target.value)}
             />
+            {creatingNewProject ? (
+              <span className="field-hint">
+                Leave it empty to create the project now and add a session later.
+              </span>
+            ) : null}
           </label>
 
           <label className="field">

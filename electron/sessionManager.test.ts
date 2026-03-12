@@ -3,18 +3,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
-  let persistedState: any = null
+  let persistedState: unknown = null
   let nextPid = 1000
-  const terminals: any[] = []
+  const createTerminal = () => ({
+    pid: nextPid++,
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    onData: vi.fn(),
+    onExit: vi.fn(),
+  })
+  const terminals: Array<ReturnType<typeof createTerminal>> = []
   const spawn = vi.fn(() => {
-    const terminal = {
-      pid: nextPid++,
-      write: vi.fn(),
-      resize: vi.fn(),
-      kill: vi.fn(),
-      onData: vi.fn(),
-      onExit: vi.fn(),
-    }
+    const terminal = createTerminal()
     terminals.push(terminal)
     return terminal
   })
@@ -23,7 +24,7 @@ const mocks = vi.hoisted(() => {
     terminals,
     spawn,
     getPersistedState: () => persistedState,
-    setPersistedState: (value: any) => {
+    setPersistedState: (value: unknown) => {
       persistedState = structuredClone(value)
     },
     reset: () => {
@@ -32,14 +33,7 @@ const mocks = vi.hoisted(() => {
       terminals.length = 0
       spawn.mockReset()
       spawn.mockImplementation(() => {
-        const terminal = {
-          pid: nextPid++,
-          write: vi.fn(),
-          resize: vi.fn(),
-          kill: vi.fn(),
-          onData: vi.fn(),
-          onExit: vi.fn(),
-        }
+        const terminal = createTerminal()
         terminals.push(terminal)
         return terminal
       })
@@ -54,7 +48,7 @@ vi.mock('electron-store', () => {
 
       constructor(options?: { defaults?: T }) {
         const initial = mocks.getPersistedState() ?? options?.defaults ?? {}
-        this.store = structuredClone(initial)
+        this.store = structuredClone(initial) as T
       }
 
       set(value: T): void {
@@ -167,5 +161,71 @@ describe('SessionManager restore policy', () => {
 
     await manager.activateSession('session-a')
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('SessionManager project lifecycle', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mocks.reset()
+  })
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+  })
+
+  it('creates a project without creating a session', () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const project = manager.createProject({
+      title: 'Workspace',
+      rootPath: 'C:\\repo',
+    })
+
+    expect(project.config.title).toBe('Workspace')
+    expect(project.sessions).toEqual([])
+    expect(mocks.spawn).not.toHaveBeenCalled()
+    expect(manager.listSessions()).toEqual({
+      projects: [project],
+      activeSessionId: null,
+    })
+  })
+
+  it('keeps the project after its last session is closed', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+    })
+
+    vi.runOnlyPendingTimers()
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+
+    manager.closeSession(session.config.id)
+
+    expect(manager.listSessions()).toEqual({
+      projects: [
+        {
+          config: expect.objectContaining({
+            id: session.config.projectId,
+            title: 'Workspace',
+            rootPath: 'C:\\repo',
+          }),
+          sessions: [],
+        },
+      ],
+      activeSessionId: null,
+    })
   })
 })

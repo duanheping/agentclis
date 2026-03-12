@@ -4,17 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   let nextPid = 2000
-  const prompts: any[] = []
+  const createPrompt = () => ({
+    pid: nextPid++,
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    onData: vi.fn(),
+    onExit: vi.fn(),
+  })
+  const prompts: Array<ReturnType<typeof createPrompt>> = []
   const spawn = vi.fn(() => {
-    const prompt = {
-      pid: nextPid++,
-      write: vi.fn(),
-      resize: vi.fn(),
-      kill: vi.fn(),
-      onData: vi.fn(),
-      onExit: vi.fn(),
-    }
-
+    const prompt = createPrompt()
     prompts.push(prompt)
     return prompt
   })
@@ -27,15 +27,7 @@ const mocks = vi.hoisted(() => {
       prompts.length = 0
       spawn.mockReset()
       spawn.mockImplementation(() => {
-        const prompt = {
-          pid: nextPid++,
-          write: vi.fn(),
-          resize: vi.fn(),
-          kill: vi.fn(),
-          onData: vi.fn(),
-          onExit: vi.fn(),
-        }
-
+        const prompt = createPrompt()
         prompts.push(prompt)
         return prompt
       })

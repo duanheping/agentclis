@@ -137,6 +137,9 @@ async function createMainWindow(): Promise<void> {
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.restoreSessions, () => sessionManager.restoreSessions())
   ipcMain.handle(IPC_CHANNELS.listSessions, () => sessionManager.listSessions())
+  ipcMain.handle(IPC_CHANNELS.createProject, (_event, input) =>
+    sessionManager.createProject(input),
+  )
   ipcMain.handle(IPC_CHANNELS.createSession, (_event, input) =>
     sessionManager.createSession(input),
   )
