@@ -15,14 +15,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   let persistedState: unknown = null
+  const generateSkillMerge = vi.fn()
+  const reviewSkillMerge = vi.fn()
 
   return {
     getPersistedState: () => persistedState,
     setPersistedState: (value: unknown) => {
       persistedState = structuredClone(value)
     },
+    generateSkillMerge,
+    reviewSkillMerge,
     reset: () => {
       persistedState = null
+      generateSkillMerge.mockReset()
+      reviewSkillMerge.mockReset()
     },
   }
 })
@@ -44,6 +50,11 @@ vi.mock('electron-store', () => {
     },
   }
 })
+
+vi.mock('./skillMergeAgent', () => ({
+  generateSkillMerge: mocks.generateSkillMerge,
+  reviewSkillMerge: mocks.reviewSkillMerge,
+}))
 
 import { SkillLibraryManager } from './skillLibraryManager'
 
@@ -93,6 +104,8 @@ describe('SkillLibraryManager', () => {
         },
       },
       autoSyncOnAppStart: false,
+      primaryMergeAgent: 'codex',
+      reviewMergeAgent: 'none',
     })
 
     return {
@@ -152,7 +165,17 @@ describe('SkillLibraryManager', () => {
       new Date('2026-03-12T10:00:00.000Z'),
     )
     await utimes(
+      path.join(codexRoot, 'document-topic-search', 'notes.txt'),
+      new Date('2026-03-12T10:00:00.000Z'),
+      new Date('2026-03-12T10:00:00.000Z'),
+    )
+    await utimes(
       path.join(claudeRoot, 'document-topic-search', 'SKILL.md'),
+      new Date('2026-03-12T11:00:00.000Z'),
+      new Date('2026-03-12T11:00:00.000Z'),
+    )
+    await utimes(
+      path.join(claudeRoot, 'document-topic-search', 'notes.txt'),
       new Date('2026-03-12T11:00:00.000Z'),
       new Date('2026-03-12T11:00:00.000Z'),
     )
@@ -248,6 +271,76 @@ describe('SkillLibraryManager', () => {
     expect(codexStatus?.skillNames).toEqual(['document-topic-search'])
   })
 
+  it('uses the configured primary merge agent and optional reviewer', async () => {
+    const { manager, codexRoot, claudeRoot } = await createManager()
+
+    manager.updateSettings({
+      ...manager.getSettings(),
+      primaryMergeAgent: 'claude',
+      reviewMergeAgent: 'codex',
+    })
+
+    await writeFiles(codexRoot, {
+      'document-topic-search/SKILL.md': '# codex\n',
+    })
+    await writeFiles(claudeRoot, {
+      'document-topic-search/SKILL.md': '# claude\n',
+    })
+
+    mocks.generateSkillMerge.mockResolvedValue({
+      skillName: 'document-topic-search',
+      mergeAgent: 'claude',
+      generatedAt: '2026-03-12T18:00:00.000Z',
+      summary: 'Merged by Claude.',
+      rationale: 'Chose the stronger combined instructions.',
+      warnings: [],
+      sourceRoots: ['codex', 'claude'],
+      files: [
+        {
+          path: 'SKILL.md',
+          content: '# merged\n',
+        },
+      ],
+      review: null,
+    })
+    mocks.reviewSkillMerge.mockResolvedValue({
+      reviewer: 'codex',
+      reviewedAt: '2026-03-12T18:01:00.000Z',
+      status: 'approved-with-warnings',
+      summary: 'Looks good overall.',
+      rationale: 'The merge preserved the important content.',
+      warnings: ['Double-check one helper note manually.'],
+    })
+
+    const proposal = await manager.generateAiMerge('document-topic-search')
+
+    expect(mocks.generateSkillMerge).toHaveBeenCalledWith(
+      'claude',
+      'document-topic-search',
+      expect.arrayContaining([
+        expect.objectContaining({ root: 'codex' }),
+        expect.objectContaining({ root: 'claude' }),
+      ]),
+    )
+    expect(mocks.reviewSkillMerge).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({
+        skillName: 'document-topic-search',
+        mergeAgent: 'claude',
+      }),
+      expect.arrayContaining([
+        expect.objectContaining({ root: 'codex' }),
+        expect.objectContaining({ root: 'claude' }),
+      ]),
+    )
+    expect(proposal.review).toEqual(
+      expect.objectContaining({
+        reviewer: 'codex',
+        status: 'approved-with-warnings',
+      }),
+    )
+  })
+
   it('drops legacy provider-based sync results from persisted state', async () => {
     mocks.setPersistedState({
       settings: {
@@ -294,6 +387,8 @@ describe('SkillLibraryManager', () => {
         },
       },
       autoSyncOnAppStart: true,
+      primaryMergeAgent: 'codex',
+      reviewMergeAgent: 'none',
     })
     expect(status.lastSyncResult).toBeNull()
   })

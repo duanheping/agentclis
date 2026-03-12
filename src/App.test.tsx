@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import type {
+  SkillAiMergeProposal,
   SkillLibrarySettings,
   SkillSyncResult,
   SkillSyncStatus,
@@ -22,6 +23,8 @@ function buildSkillSettings(): SkillLibrarySettings {
       },
     },
     autoSyncOnAppStart: false,
+    primaryMergeAgent: 'codex',
+    reviewMergeAgent: 'none',
   }
 }
 
@@ -134,6 +137,35 @@ function createAgentCliMock() {
     ],
   }
 
+  const mergeProposal: SkillAiMergeProposal = {
+    skillName: 'document-topic-search',
+    mergeAgent: 'codex',
+    generatedAt: '2026-03-12T18:05:00.000Z',
+    summary: 'Merged the stronger instructions and combined non-overlapping helper files.',
+    rationale:
+      'Kept the clearer SKILL.md structure, retained both useful helper scripts, and removed duplicate wording.',
+    warnings: ['Review the merged notes.txt wording before final apply.'],
+    sourceRoots: ['codex', 'claude'],
+    files: [
+      {
+        path: 'SKILL.md',
+        content: '# merged skill\n',
+      },
+      {
+        path: 'notes.txt',
+        content: 'merged notes\n',
+      },
+    ],
+    review: {
+      reviewer: 'claude',
+      reviewedAt: '2026-03-12T18:06:00.000Z',
+      status: 'approved-with-warnings',
+      summary: 'The merge looks sound.',
+      rationale: 'The combined skill preserves the stronger instructions.',
+      warnings: ['The merged notes remain slightly verbose.'],
+    },
+  }
+
   const agentCli = {
     restoreSessions: vi.fn().mockResolvedValue({
       projects: [],
@@ -242,6 +274,16 @@ function createAgentCliMock() {
 
       return resolveResult
     }),
+    generateSkillAiMerge: vi.fn().mockResolvedValue(mergeProposal),
+    applySkillAiMerge: vi.fn().mockImplementation(async () => {
+      currentSkillStatus = {
+        ...currentSkillStatus,
+        conflicts: [],
+        lastSyncResult: resolveResult,
+      }
+
+      return resolveResult
+    }),
     pickDirectory: vi
       .fn()
       .mockResolvedValueOnce('C:\\repo\\agentclis-skills')
@@ -263,6 +305,7 @@ function createAgentCliMock() {
 
   return {
     agentCli,
+    mergeProposal,
   }
 }
 
@@ -304,6 +347,12 @@ describe('App skills settings', () => {
       expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
     })
 
+    await user.selectOptions(
+      screen.getByLabelText('Primary merge agent'),
+      'claude',
+    )
+    await user.selectOptions(screen.getByLabelText('Review agent'), 'codex')
+
     await user.click(screen.getByRole('button', { name: 'Sync now' }))
 
     await waitFor(() => {
@@ -313,6 +362,12 @@ describe('App skills settings', () => {
 
     expect(agentCli.updateSkillLibrarySettings).toHaveBeenCalled()
     expect(agentCli.syncSkills).toHaveBeenCalledTimes(1)
+    const lastSettingsCall =
+      agentCli.updateSkillLibrarySettings.mock.calls.at(-1)?.[0] as
+        | SkillLibrarySettings
+        | undefined
+    expect(lastSettingsCall?.primaryMergeAgent).toBe('claude')
+    expect(lastSettingsCall?.reviewMergeAgent).toBe('codex')
   })
 
   it('shows skill conflicts and lets the user resolve one from the settings panel', async () => {
@@ -343,5 +398,42 @@ describe('App skills settings', () => {
       'document-topic-search',
       'codex',
     )
+  })
+
+  it('generates an AI merge preview and applies it from the settings panel', async () => {
+    const user = userEvent.setup()
+    const { agentCli, mergeProposal } = createAgentCliMock()
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Create a project or session to get started.')
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+
+    const chooseButtons = screen.getAllByRole('button', { name: 'Choose' })
+    await user.click(chooseButtons[0]!)
+
+    await waitFor(() => {
+      expect(screen.getByText('Conflicts')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'AI Merge' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('AI Merge Preview')).toBeInTheDocument()
+      expect(screen.getByText(/Merged the stronger instructions/i)).toBeInTheDocument()
+      expect(screen.getByText('notes.txt')).toBeInTheDocument()
+      expect(screen.getByText('Approved with warnings by Claude')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Apply Merge' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Conflicts')).not.toBeInTheDocument()
+    })
+
+    expect(agentCli.generateSkillAiMerge).toHaveBeenCalledWith('document-topic-search')
+    expect(agentCli.applySkillAiMerge).toHaveBeenCalledWith(mergeProposal)
   })
 })

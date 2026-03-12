@@ -1,6 +1,11 @@
 import { type MouseEvent, useEffect, useRef, useState } from 'react'
 
 import {
+  type SkillAiMergeAgent,
+  type SkillAiMergeProposal,
+  type SkillAiReviewAgent,
+  type SkillAiMergeReviewStatus,
+  SKILL_AI_MERGE_AGENTS,
   SKILL_SYNC_ROOTS,
   SKILL_TARGET_PROVIDERS,
   type SkillConflict,
@@ -32,11 +37,16 @@ interface SessionSidebarProps {
   skillsBusy: boolean
   skillsSyncing: boolean
   skillsResolving: string | null
+  skillsGeneratingMerge: string | null
+  skillsApplyingMerge: boolean
+  skillAiMergeProposal: SkillAiMergeProposal | null
   skillsErrorMessage: string | null
   onPickSkillLibraryRoot: () => Promise<void>
   onClearSkillLibraryRoot: () => Promise<void>
   onOpenSkillLibraryRoot: () => Promise<void>
   onToggleSkillAutoSync: () => Promise<void>
+  onSetPrimaryMergeAgent: (agent: SkillAiMergeAgent) => Promise<void>
+  onSetReviewMergeAgent: (agent: SkillAiReviewAgent) => Promise<void>
   onPickSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
   onClearSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
   onOpenSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
@@ -45,6 +55,9 @@ interface SessionSidebarProps {
     skillName: string,
     sourceRoot: SkillSyncRoot,
   ) => Promise<void>
+  onGenerateSkillAiMerge: (skillName: string) => Promise<void>
+  onApplySkillAiMerge: () => Promise<void>
+  onDismissSkillAiMerge: () => void
 }
 
 type ContextMenuState =
@@ -81,6 +94,10 @@ function formatProviderLabel(provider: SkillTargetProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude'
 }
 
+function formatMergeAgentLabel(agent: SkillAiMergeAgent): string {
+  return agent === 'codex' ? 'Codex' : 'Claude'
+}
+
 function formatRootLabel(root: SkillSyncRoot): string {
   if (root === 'library') {
     return 'Library'
@@ -111,6 +128,18 @@ function formatIssueLabel(issue: SkillSyncIssue): string {
   return `${prefixParts.join(' / ')}: ${issue.message}`
 }
 
+function formatReviewStatus(status: SkillAiMergeReviewStatus): string {
+  if (status === 'approved') {
+    return 'Approved'
+  }
+
+  if (status === 'approved-with-warnings') {
+    return 'Approved with warnings'
+  }
+
+  return 'Changes requested'
+}
+
 function summarizeSkills(skills: string[]): string {
   if (skills.length === 0) {
     return 'No detected skills'
@@ -135,6 +164,13 @@ function summarizeDifferingFiles(conflict: SkillConflict): string {
   return `${conflict.differingFiles.slice(0, 3).join(', ')} +${conflict.differingFiles.length - 3} more`
 }
 
+function findSkillFile(
+  proposal: SkillAiMergeProposal,
+  relativePath: string,
+) {
+  return proposal.files.find((file) => file.path === relativePath) ?? null
+}
+
 export function SessionSidebar({
   projects,
   activeSessionId,
@@ -155,16 +191,24 @@ export function SessionSidebar({
   skillsBusy,
   skillsSyncing,
   skillsResolving,
+  skillsGeneratingMerge,
+  skillsApplyingMerge,
+  skillAiMergeProposal,
   skillsErrorMessage,
   onPickSkillLibraryRoot,
   onClearSkillLibraryRoot,
   onOpenSkillLibraryRoot,
   onToggleSkillAutoSync,
+  onSetPrimaryMergeAgent,
+  onSetReviewMergeAgent,
   onPickSkillTargetRoot,
   onClearSkillTargetRoot,
   onOpenSkillTargetRoot,
   onSyncSkills,
   onResolveSkillConflict,
+  onGenerateSkillAiMerge,
+  onApplySkillAiMerge,
+  onDismissSkillAiMerge,
 }: SessionSidebarProps) {
   const activeProjectId = findActiveProjectId(projects, activeSessionId)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -610,6 +654,64 @@ export function SessionSidebar({
                         <span>Auto-sync on app start</span>
                       </label>
 
+                      <div className="sidebar-settings__agent-grid">
+                        <label className="sidebar-settings__select-group">
+                          <span className="sidebar-settings__field-label">
+                            Primary merge agent
+                          </span>
+                          <select
+                            className="sidebar-settings__select"
+                            value={skillLibrarySettings.primaryMergeAgent}
+                            disabled={
+                              skillsBusy ||
+                              skillsGeneratingMerge !== null ||
+                              skillsApplyingMerge
+                            }
+                            onChange={(event) => {
+                              void onSetPrimaryMergeAgent(
+                                event.target.value as SkillAiMergeAgent,
+                              )
+                            }}
+                          >
+                            {SKILL_AI_MERGE_AGENTS.map((agent) => (
+                              <option key={`primary-${agent}`} value={agent}>
+                                {formatMergeAgentLabel(agent)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="sidebar-settings__select-group">
+                          <span className="sidebar-settings__field-label">
+                            Review agent
+                          </span>
+                          <select
+                            className="sidebar-settings__select"
+                            value={skillLibrarySettings.reviewMergeAgent}
+                            disabled={
+                              skillsBusy ||
+                              skillsGeneratingMerge !== null ||
+                              skillsApplyingMerge
+                            }
+                            onChange={(event) => {
+                              void onSetReviewMergeAgent(
+                                event.target.value as SkillAiReviewAgent,
+                              )
+                            }}
+                          >
+                            <option value="none">None</option>
+                            {SKILL_AI_MERGE_AGENTS.filter(
+                              (agent) =>
+                                agent !== skillLibrarySettings.primaryMergeAgent,
+                            ).map((agent) => (
+                              <option key={`review-${agent}`} value={agent}>
+                                {formatMergeAgentLabel(agent)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
                       <div className="sidebar-settings__provider-list">
                         {SKILL_TARGET_PROVIDERS.map((provider) => {
                           const providerStatus = providerStatuses[provider]
@@ -716,6 +818,13 @@ export function SessionSidebar({
                                   const availableRoots = new Set(
                                     conflict.roots.map((entry) => entry.root),
                                   )
+                                  const mergePreview =
+                                    skillAiMergeProposal?.skillName === conflict.skillName
+                                      ? skillAiMergeProposal
+                                      : null
+                                  const mergedSkillFile = mergePreview
+                                    ? findSkillFile(mergePreview, 'SKILL.md')
+                                    : null
 
                                   return (
                                     <div
@@ -736,6 +845,24 @@ export function SessionSidebar({
                                         {summarizeDifferingFiles(conflict)}
                                       </p>
                                       <div className="sidebar-settings__actions">
+                                        <button
+                                          type="button"
+                                          className="ghost-button sidebar-settings__action"
+                                          disabled={
+                                            skillsSyncing ||
+                                            skillsBusy ||
+                                            skillsResolving !== null ||
+                                            skillsGeneratingMerge !== null ||
+                                            skillsApplyingMerge
+                                          }
+                                          onClick={() => {
+                                            void onGenerateSkillAiMerge(conflict.skillName)
+                                          }}
+                                        >
+                                          {skillsGeneratingMerge === conflict.skillName
+                                            ? 'Merging…'
+                                            : 'AI Merge'}
+                                        </button>
                                         {SKILL_SYNC_ROOTS.map((root) => (
                                           <button
                                             key={`${conflict.skillName}-${root}`}
@@ -745,7 +872,9 @@ export function SessionSidebar({
                                               !availableRoots.has(root) ||
                                               skillsSyncing ||
                                               skillsBusy ||
-                                              skillsResolving !== null
+                                              skillsResolving !== null ||
+                                              skillsGeneratingMerge !== null ||
+                                              skillsApplyingMerge
                                             }
                                             onClick={() => {
                                               void onResolveSkillConflict(
@@ -760,6 +889,125 @@ export function SessionSidebar({
                                           </button>
                                         ))}
                                       </div>
+                                      {mergePreview ? (
+                                        <div className="sidebar-settings__merge-preview">
+                                          <div className="sidebar-settings__conflict-header">
+                                            <span className="sidebar-settings__field-label">
+                                              AI Merge Preview
+                                            </span>
+                                            <span className="sidebar-settings__pill">
+                                              Via {formatMergeAgentLabel(mergePreview.mergeAgent)}
+                                            </span>
+                                          </div>
+                                          <p className="sidebar-settings__caption">
+                                            {mergePreview.summary}
+                                          </p>
+                                          <p className="sidebar-settings__caption">
+                                            {mergePreview.rationale}
+                                          </p>
+                                          {mergePreview.warnings.length > 0 ? (
+                                            <ul className="sidebar-settings__issue-list">
+                                              {mergePreview.warnings.map((warning, index) => (
+                                                <li
+                                                  key={`${mergePreview.skillName}-warning-${index}`}
+                                                  className="sidebar-settings__issue sidebar-settings__issue--warning"
+                                                >
+                                                  {warning}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          ) : null}
+                                          {mergePreview.review ? (
+                                            <div className="sidebar-settings__merge-review">
+                                              <div className="sidebar-settings__conflict-header">
+                                                <span className="sidebar-settings__field-label">
+                                                  Review
+                                                </span>
+                                                <span className="sidebar-settings__pill">
+                                                  {formatReviewStatus(
+                                                    mergePreview.review.status,
+                                                  )}{' '}
+                                                  by{' '}
+                                                  {formatMergeAgentLabel(
+                                                    mergePreview.review.reviewer,
+                                                  )}
+                                                </span>
+                                              </div>
+                                              <p className="sidebar-settings__caption">
+                                                {mergePreview.review.summary}
+                                              </p>
+                                              <p className="sidebar-settings__caption">
+                                                {mergePreview.review.rationale}
+                                              </p>
+                                              {mergePreview.review.warnings.length > 0 ? (
+                                                <ul className="sidebar-settings__issue-list">
+                                                  {mergePreview.review.warnings.map(
+                                                    (warning, index) => (
+                                                      <li
+                                                        key={`${mergePreview.skillName}-review-warning-${index}`}
+                                                        className="sidebar-settings__issue sidebar-settings__issue--warning"
+                                                      >
+                                                        {warning}
+                                                      </li>
+                                                    ),
+                                                  )}
+                                                </ul>
+                                              ) : null}
+                                            </div>
+                                          ) : null}
+                                          <div className="sidebar-settings__merge-files">
+                                            {mergePreview.files.map((file) => (
+                                              <details
+                                                key={`${mergePreview.skillName}-${file.path}`}
+                                                className="sidebar-settings__merge-file"
+                                                open={file.path === 'SKILL.md'}
+                                              >
+                                                <summary className="sidebar-settings__merge-file-title">
+                                                  {file.path}
+                                                </summary>
+                                                <pre className="sidebar-settings__merge-file-preview">
+                                                  {file.content}
+                                                </pre>
+                                              </details>
+                                            ))}
+                                          </div>
+                                          {mergedSkillFile ? null : (
+                                            <p className="sidebar-settings__error">
+                                              The AI merge preview is missing SKILL.md.
+                                            </p>
+                                          )}
+                                          <div className="sidebar-settings__actions">
+                                            <button
+                                              type="button"
+                                              className="ghost-button sidebar-settings__action"
+                                              disabled={
+                                                !mergedSkillFile ||
+                                                skillsApplyingMerge ||
+                                                skillsSyncing ||
+                                                skillsBusy
+                                              }
+                                              onClick={() => {
+                                                void onApplySkillAiMerge()
+                                              }}
+                                            >
+                                              {skillsApplyingMerge
+                                                ? 'Applying merge…'
+                                                : mergePreview.review?.status ===
+                                                    'changes-requested'
+                                                  ? 'Apply Merge Anyway'
+                                                  : 'Apply Merge'}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="ghost-button sidebar-settings__action"
+                                              disabled={skillsApplyingMerge}
+                                              onClick={onDismissSkillAiMerge}
+                                            >
+                                              Dismiss
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ) : null}
                                     </div>
                                   )
                                 })}

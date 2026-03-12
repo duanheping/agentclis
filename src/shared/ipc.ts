@@ -11,6 +11,7 @@ import type {
   SessionSnapshot,
 } from './session'
 import type {
+  SkillAiMergeProposal,
   SkillLibrarySettings,
   SkillSyncResult,
   SkillSyncRoot,
@@ -33,6 +34,8 @@ export const IPC_CHANNELS = {
   getSkillSyncStatus: 'skills:get-status',
   syncSkills: 'skills:sync',
   resolveSkillConflict: 'skills:resolve-conflict',
+  generateSkillAiMerge: 'skills:generate-ai-merge',
+  applySkillAiMerge: 'skills:apply-ai-merge',
   pickDirectory: 'dialog:pick-directory',
   openPath: 'shell:open-path',
   listWindowsCommandPrompts: 'shell:list-windows-command-prompts',
@@ -69,6 +72,8 @@ export interface AgentCliApi {
     skillName: string,
     sourceRoot: SkillSyncRoot,
   ): Promise<SkillSyncResult>
+  generateSkillAiMerge(skillName: string): Promise<SkillAiMergeProposal>
+  applySkillAiMerge(proposal: SkillAiMergeProposal): Promise<SkillSyncResult>
   pickDirectory(defaultPath?: string): Promise<string | null>
   openPath(targetPath: string): Promise<void>
   listWindowsCommandPrompts(): Promise<string[]>

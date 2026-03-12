@@ -13,6 +13,10 @@ import path from 'node:path'
 import Store from 'electron-store'
 
 import {
+  type SkillAiMergeAgent,
+  type SkillAiMergeProposal,
+  type SkillAiReviewAgent,
+  SKILL_AI_MERGE_AGENTS,
   SKILL_SYNC_ROOTS,
   type SkillConflict,
   type SkillConflictRootVersion,
@@ -25,6 +29,7 @@ import {
   type SkillSyncStatus,
   type SkillTargetProvider,
 } from '../src/shared/skills'
+import { generateSkillMerge, reviewSkillMerge } from './skillMergeAgent'
 
 interface PersistedSkillLibraryState {
   settings: SkillLibrarySettings
@@ -91,21 +96,56 @@ function buildDefaultSettings(): SkillLibrarySettings {
       },
     },
     autoSyncOnAppStart: false,
+    primaryMergeAgent: 'codex',
+    reviewMergeAgent: 'none',
   }
 }
 
-function normalizeSettings(settings: SkillLibrarySettings): SkillLibrarySettings {
+function normalizeMergeAgent(value: unknown): SkillAiMergeAgent {
+  return SKILL_AI_MERGE_AGENTS.includes(value as SkillAiMergeAgent)
+    ? (value as SkillAiMergeAgent)
+    : 'codex'
+}
+
+function normalizeReviewMergeAgent(
+  value: unknown,
+  primaryMergeAgent: SkillAiMergeAgent,
+): SkillAiReviewAgent {
+  if (value !== 'codex' && value !== 'claude' && value !== 'none') {
+    return 'none'
+  }
+
+  return value === primaryMergeAgent ? 'none' : value
+}
+
+function normalizeSettings(
+  settings: Partial<SkillLibrarySettings> | SkillLibrarySettings,
+): SkillLibrarySettings {
+  const primaryMergeAgent = normalizeMergeAgent(settings.primaryMergeAgent)
+
   return {
-    libraryRoot: settings.libraryRoot.trim(),
+    libraryRoot:
+      typeof settings.libraryRoot === 'string' ? settings.libraryRoot.trim() : '',
     providers: {
       codex: {
-        targetRoot: settings.providers.codex.targetRoot.trim(),
+        targetRoot:
+          typeof settings.providers?.codex?.targetRoot === 'string'
+            ? settings.providers.codex.targetRoot.trim()
+            : DEFAULT_TARGET_ROOTS.codex,
       },
       claude: {
-        targetRoot: settings.providers.claude.targetRoot.trim(),
+        targetRoot:
+          typeof settings.providers?.claude?.targetRoot === 'string'
+            ? settings.providers.claude.targetRoot.trim()
+            : DEFAULT_TARGET_ROOTS.claude,
       },
     },
-    autoSyncOnAppStart: settings.autoSyncOnAppStart,
+    autoSyncOnAppStart: Boolean(settings.autoSyncOnAppStart),
+    primaryMergeAgent,
+    reviewMergeAgent: normalizeReviewMergeAgent(
+      settings.reviewMergeAgent,
+      primaryMergeAgent,
+    ),
   }
 }
 
@@ -604,6 +644,71 @@ export class SkillLibraryManager {
     return result
   }
 
+  async generateAiMerge(skillName: string): Promise<SkillAiMergeProposal> {
+    const inspection = await this.inspectRoots()
+    const settings = this.getSettings()
+    const conflict = inspection.conflicts.find(
+      (entry) => entry.skillName === skillName,
+    )
+
+    if (!conflict) {
+      throw new Error(`No unresolved conflict was found for "${skillName}".`)
+    }
+
+    const snapshots = this.buildMergeSources(inspection, skillName)
+
+    if (snapshots.length < 2) {
+      throw new Error(`At least two valid versions are required to AI-merge "${skillName}".`)
+    }
+
+    const proposal = await generateSkillMerge(
+      settings.primaryMergeAgent,
+      skillName,
+      snapshots,
+    )
+
+    if (settings.reviewMergeAgent !== 'none') {
+      proposal.review = await reviewSkillMerge(
+        settings.reviewMergeAgent,
+        proposal,
+        snapshots,
+      )
+    }
+
+    return proposal
+  }
+
+  async applyAiMerge(proposal: SkillAiMergeProposal): Promise<SkillSyncResult> {
+    const startedAt = new Date().toISOString()
+    const inspection = await this.inspectRoots()
+    const changedSkillsByRoot = this.initializeChangedSkillMap()
+    const desiredFiles = this.buildDesiredFilesFromProposal(proposal)
+
+    for (const scannedRoot of inspection.scannedRoots.values()) {
+      if (!scannedRoot.configured || !scannedRoot.syncable || !scannedRoot.rootPath) {
+        continue
+      }
+
+      const changed = await this.syncSkillDirectory(
+        path.join(scannedRoot.rootPath, proposal.skillName),
+        desiredFiles,
+      )
+
+      if (changed) {
+        changedSkillsByRoot.get(scannedRoot.root)?.add(proposal.skillName)
+      }
+    }
+
+    const result = await this.buildResult(
+      startedAt,
+      inspection,
+      [proposal.skillName],
+      changedSkillsByRoot,
+    )
+    this.persistResult(result)
+    return result
+  }
+
   async syncOnAppStart(): Promise<SkillSyncResult | null> {
     const settings = this.getSettings()
     if (!settings.autoSyncOnAppStart) {
@@ -624,6 +729,39 @@ export class SkillLibraryManager {
     return new Map(
       SKILL_SYNC_ROOTS.map((root) => [root, new Set<string>()]),
     )
+  }
+
+  private buildDesiredFilesFromProposal(
+    proposal: SkillAiMergeProposal,
+  ): Map<string, Buffer> {
+    const files = new Map<string, Buffer>()
+
+    for (const file of proposal.files) {
+      const normalizedPath = file.path.replace(/\\/g, '/').replace(/^\/+/, '')
+      if (!normalizedPath || normalizedPath.startsWith('..') || path.isAbsolute(normalizedPath)) {
+        throw new Error(`Invalid merged file path "${file.path}".`)
+      }
+
+      files.set(normalizedPath, Buffer.from(file.content, 'utf8'))
+    }
+
+    if (!files.has('SKILL.md')) {
+      throw new Error('AI merge proposal must include SKILL.md.')
+    }
+
+    return files
+  }
+
+  private buildMergeSources(
+    inspection: SkillInspection,
+    skillName: string,
+  ): Array<{ root: SkillSyncRoot; files: Map<string, Buffer> }> {
+    return [...(inspection.snapshotsBySkill.get(skillName)?.values() ?? [])]
+      .sort((left, right) => left.root.localeCompare(right.root))
+      .map((snapshot) => ({
+        root: snapshot.root,
+        files: snapshot.files,
+      }))
   }
 
   private async buildResult(

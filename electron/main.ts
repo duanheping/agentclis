@@ -184,6 +184,12 @@ function registerIpcHandlers(): void {
     (_event, skillName: string, sourceRoot) =>
       skillLibraryManager.resolveConflict(skillName, sourceRoot),
   )
+  ipcMain.handle(IPC_CHANNELS.generateSkillAiMerge, (_event, skillName: string) =>
+    skillLibraryManager.generateAiMerge(skillName),
+  )
+  ipcMain.handle(IPC_CHANNELS.applySkillAiMerge, (_event, proposal) =>
+    skillLibraryManager.applyAiMerge(proposal),
+  )
   ipcMain.handle(IPC_CHANNELS.pickDirectory, async (_event, defaultPath?: string) => {
     const options: OpenDialogOptions = {
       title: 'Select project folder',
