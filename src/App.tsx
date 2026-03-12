@@ -19,6 +19,7 @@ import { useSessionsStore } from './store/useSessionsStore'
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
 const SIDEBAR_OPEN_KEY = 'agenclis:sidebar-open'
 type CreateDialogIntent = 'session' | 'project'
+type CreateDialogMode = 'default' | 'project-context'
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -82,6 +83,8 @@ function App() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [createDialogIntent, setCreateDialogIntent] =
     useState<CreateDialogIntent>('session')
+  const [createDialogMode, setCreateDialogMode] =
+    useState<CreateDialogMode>('default')
   const [dialogProjectId, setDialogProjectId] = useState<string | null>(null)
   const [showProjectPaths, setShowProjectPaths] = useState<boolean>(() =>
     readShowProjectPathsPreference(),
@@ -319,14 +322,19 @@ function App() {
     }
   }
 
-  const openCreateSessionDialog = (projectId: string | null = null) => {
+  const openCreateSessionDialog = (
+    projectId: string | null = null,
+    mode: CreateDialogMode = 'default',
+  ) => {
     setCreateDialogIntent('session')
+    setCreateDialogMode(mode)
     setDialogProjectId(projectId)
     setDialogOpen(true)
   }
 
   const openCreateProjectDialog = () => {
     setCreateDialogIntent('project')
+    setCreateDialogMode('default')
     setDialogProjectId(null)
     setDialogOpen(true)
   }
@@ -334,6 +342,7 @@ function App() {
   const closeCreateSessionDialog = () => {
     setDialogOpen(false)
     setCreateDialogIntent('session')
+    setCreateDialogMode('default')
     setDialogProjectId(null)
   }
 
@@ -374,7 +383,9 @@ function App() {
           onToggleSidebar={() => setSidebarOpen(false)}
           onCreateSession={() => openCreateSessionDialog()}
           onCreateProject={openCreateProjectDialog}
-          onCreateForProject={(projectId) => openCreateSessionDialog(projectId)}
+          onCreateForProject={(projectId) =>
+            openCreateSessionDialog(projectId, 'project-context')
+          }
           onSelect={handleActivateSession}
           onRename={handleRenameSession}
           onClose={handleCloseSession}
@@ -410,6 +421,7 @@ function App() {
       <CreateSessionDialog
         open={dialogOpen}
         initialIntent={createDialogIntent}
+        mode={createDialogMode}
         projects={projects}
         activeProjectId={
           dialogProjectId ??

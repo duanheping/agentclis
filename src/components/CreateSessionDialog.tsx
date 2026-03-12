@@ -1,14 +1,17 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 
-import type {
-  CreateProjectInput,
-  CreateSessionInput,
-  ProjectSnapshot,
+import {
+  MANAGED_CLI_PROVIDERS,
+  type CreateProjectInput,
+  type CreateSessionInput,
+  type ManagedCliProvider,
+  type ProjectSnapshot,
 } from '../shared/session'
 
 interface CreateSessionDialogProps {
   open: boolean
   initialIntent: 'session' | 'project'
+  mode?: 'default' | 'project-context'
   projects: ProjectSnapshot[]
   activeProjectId: string | null
   onClose: () => void
@@ -20,6 +23,7 @@ interface CreateSessionFormState {
   projectSelection: string
   projectTitle: string
   projectRootPath: string
+  agentCliProvider: ManagedCliProvider
   title: string
   startupCommand: string
   cwd: string
@@ -45,6 +49,7 @@ function buildInitialFormState(
       projectSelection: NEW_PROJECT_VALUE,
       projectTitle: '',
       projectRootPath: '',
+      agentCliProvider: 'codex',
       title: '',
       startupCommand: '',
       cwd: '',
@@ -60,6 +65,7 @@ function buildInitialFormState(
     projectSelection: activeProject?.config.id ?? NEW_PROJECT_VALUE,
     projectTitle: '',
     projectRootPath: activeProject?.config.rootPath ?? '',
+    agentCliProvider: 'codex',
     title: '',
     startupCommand: '',
     cwd: activeProject?.config.rootPath ?? '',
@@ -69,6 +75,7 @@ function buildInitialFormState(
 export function CreateSessionDialog({
   open,
   initialIntent,
+  mode = 'default',
   projects,
   activeProjectId,
   onClose,
@@ -88,6 +95,8 @@ export function CreateSessionDialog({
   const creatingNewProject = formState.projectSelection === NEW_PROJECT_VALUE
   const selectedProject =
     projects.find((project) => project.config.id === formState.projectSelection) ?? null
+  const compactProjectSessionFlow =
+    mode === 'project-context' && !creatingNewProject && selectedProject !== null
   const dialogEyebrow = creatingNewProject ? 'New Project' : 'New Session'
   const dialogTitle = creatingNewProject
     ? 'Create project'
@@ -210,7 +219,11 @@ export function CreateSessionDialog({
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    const startupCommand = formState.startupCommand.trim()
+    const startupCommand = (
+      compactProjectSessionFlow
+        ? formState.agentCliProvider
+        : formState.startupCommand
+    ).trim()
 
     if (!creatingNewProject && !startupCommand) {
       setErrorMessage('Startup command is required.')
@@ -237,7 +250,7 @@ export function CreateSessionDialog({
 
       const payload: CreateSessionInput = {
         title: formState.title,
-        startupCommand: formState.startupCommand,
+        startupCommand,
         cwd: formState.cwd,
       }
 
@@ -312,77 +325,91 @@ export function CreateSessionDialog({
         </div>
 
         <form className="dialog-form" onSubmit={handleSubmit}>
-          <label className="field">
-            <span>Project</span>
-            <div className="project-select" ref={projectSelectRef}>
-              <button
-                type="button"
-                className={`project-select__trigger${projectMenuOpen ? ' is-open' : ''}`}
-                aria-expanded={projectMenuOpen}
-                aria-haspopup="listbox"
-                onClick={() => setProjectMenuOpen((current) => !current)}
-              >
-                <span className="project-select__summary">
-                  <span className="project-select__label">
-                    {creatingNewProject
-                      ? 'Create new project'
-                      : (selectedProject?.config.title ?? 'Select project')}
-                  </span>
-                  <span
-                    className={`project-select__meta${creatingNewProject ? ' is-placeholder' : ''}`}
-                  >
-                    {creatingNewProject
-                      ? 'Choose a folder and start nesting sessions beneath it'
-                      : (selectedProject?.config.rootPath ?? 'Select an existing project')}
-                  </span>
+          {compactProjectSessionFlow ? (
+            <label className="field">
+              <span>Project</span>
+              <div className="project-summary">
+                <span className="project-summary__title">
+                  {selectedProject.config.title}
                 </span>
-                <span className="project-select__chevron" aria-hidden="true">
-                  {projectMenuOpen ? '▴' : '▾'}
+                <span className="project-summary__path">
+                  {selectedProject.config.rootPath}
                 </span>
-              </button>
-
-              {projectMenuOpen ? (
-                <div className="project-select__menu" role="listbox">
-                  {projects.map((project) => {
-                    const selected = project.config.id === formState.projectSelection
-
-                    return (
-                      <button
-                        key={project.config.id}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        className={`project-select__option${selected ? ' is-selected' : ''}`}
-                        onClick={() => handleProjectSelection(project.config.id)}
-                      >
-                        <span className="project-select__option-title">
-                          {project.config.title}
-                        </span>
-                        <span className="project-select__option-meta">
-                          {project.config.rootPath}
-                        </span>
-                      </button>
-                    )
-                  })}
-
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={creatingNewProject}
-                    className={`project-select__option is-create${creatingNewProject ? ' is-selected' : ''}`}
-                    onClick={() => handleProjectSelection(NEW_PROJECT_VALUE)}
-                  >
-                    <span className="project-select__option-title">
-                      Create new project
+              </div>
+            </label>
+          ) : (
+            <label className="field">
+              <span>Project</span>
+              <div className="project-select" ref={projectSelectRef}>
+                <button
+                  type="button"
+                  className={`project-select__trigger${projectMenuOpen ? ' is-open' : ''}`}
+                  aria-expanded={projectMenuOpen}
+                  aria-haspopup="listbox"
+                  onClick={() => setProjectMenuOpen((current) => !current)}
+                >
+                  <span className="project-select__summary">
+                    <span className="project-select__label">
+                      {creatingNewProject
+                        ? 'Create new project'
+                        : (selectedProject?.config.title ?? 'Select project')}
                     </span>
-                    <span className="project-select__option-meta">
-                      Choose a folder and start grouping sessions under it
+                    <span
+                      className={`project-select__meta${creatingNewProject ? ' is-placeholder' : ''}`}
+                    >
+                      {creatingNewProject
+                        ? 'Choose a folder and start nesting sessions beneath it'
+                        : (selectedProject?.config.rootPath ?? 'Select an existing project')}
                     </span>
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </label>
+                  </span>
+                  <span className="project-select__chevron" aria-hidden="true">
+                    {projectMenuOpen ? '▴' : '▾'}
+                  </span>
+                </button>
+
+                {projectMenuOpen ? (
+                  <div className="project-select__menu" role="listbox">
+                    {projects.map((project) => {
+                      const selected = project.config.id === formState.projectSelection
+
+                      return (
+                        <button
+                          key={project.config.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          className={`project-select__option${selected ? ' is-selected' : ''}`}
+                          onClick={() => handleProjectSelection(project.config.id)}
+                        >
+                          <span className="project-select__option-title">
+                            {project.config.title}
+                          </span>
+                          <span className="project-select__option-meta">
+                            {project.config.rootPath}
+                          </span>
+                        </button>
+                      )
+                    })}
+
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={creatingNewProject}
+                      className={`project-select__option is-create${creatingNewProject ? ' is-selected' : ''}`}
+                      onClick={() => handleProjectSelection(NEW_PROJECT_VALUE)}
+                    >
+                      <span className="project-select__option-title">
+                        Create new project
+                      </span>
+                      <span className="project-select__option-meta">
+                        Choose a folder and start grouping sessions under it
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </label>
+          )}
 
           {creatingNewProject ? (
             <>
@@ -438,80 +465,112 @@ export function CreateSessionDialog({
             </>
           ) : null}
 
-          <label className="field">
-            <span>{sessionTitleLabel}</span>
-            <input
-              type="text"
-              value={formState.title}
-              placeholder="Example: Agent / Research / Build"
-              onChange={(event) => updateField('title', event.target.value)}
-            />
-          </label>
-
-          <label className="field">
-            <span>{startupCommandLabel}</span>
-            <input
-              type="text"
-              autoFocus={!creatingNewProject}
-              value={formState.startupCommand}
-              placeholder="Example: agent --profile dev"
-              onChange={(event) => updateField('startupCommand', event.target.value)}
-            />
-            {creatingNewProject ? (
+          {compactProjectSessionFlow ? (
+            <label className="field">
+              <span>Agent CLI</span>
+              <div className="provider-picker" role="radiogroup" aria-label="Agent CLI">
+                {MANAGED_CLI_PROVIDERS.map((provider) => (
+                  <label key={provider} className="provider-option">
+                    <input
+                      type="radio"
+                      name="agent-cli-provider"
+                      value={provider}
+                      checked={formState.agentCliProvider === provider}
+                      onChange={() => updateField('agentCliProvider', provider)}
+                    />
+                    <span className="provider-option__body">
+                      <span className="provider-option__title">
+                        {provider === 'codex' ? 'Codex CLI' : 'Copilot CLI'}
+                      </span>
+                      <span className="provider-option__meta">
+                        Startup command: {provider}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
               <span className="field-hint">
-                Leave it empty to create the project now and add a session later.
+                The session uses the selected project root as its working directory.
               </span>
-            ) : null}
-          </label>
+            </label>
+          ) : (
+            <>
+              <label className="field">
+                <span>{sessionTitleLabel}</span>
+                <input
+                  type="text"
+                  value={formState.title}
+                  placeholder="Example: Agent / Research / Build"
+                  onChange={(event) => updateField('title', event.target.value)}
+                />
+              </label>
 
-          <label className="field">
-            <span>{sessionCwdLabel}</span>
-            <div className="path-picker">
-              <button
-                type="button"
-                className="path-picker__value"
-                onClick={() => {
-                  void handlePickSessionCwd()
-                }}
-                disabled={submitting || pickingSessionCwd}
-              >
-                <span
-                  className={
-                    formState.cwd
-                      ? 'path-picker__text'
-                      : 'path-picker__text is-placeholder'
-                  }
-                >
-                  {formState.cwd || 'Click to choose a session working folder'}
-                </span>
-              </button>
-              <div className="path-picker__actions">
-                <button
-                  type="button"
-                  className="ghost-button path-picker__action"
-                  onClick={() => {
-                    void handlePickSessionCwd()
-                  }}
-                  disabled={submitting || pickingSessionCwd}
-                >
-                  {pickingSessionCwd ? 'Opening…' : 'Choose folder'}
-                </button>
-                {formState.cwd ? (
+              <label className="field">
+                <span>{startupCommandLabel}</span>
+                <input
+                  type="text"
+                  autoFocus={!creatingNewProject}
+                  value={formState.startupCommand}
+                  placeholder="Example: agent --profile dev"
+                  onChange={(event) => updateField('startupCommand', event.target.value)}
+                />
+                {creatingNewProject ? (
+                  <span className="field-hint">
+                    Leave it empty to create the project now and add a session later.
+                  </span>
+                ) : null}
+              </label>
+
+              <label className="field">
+                <span>{sessionCwdLabel}</span>
+                <div className="path-picker">
                   <button
                     type="button"
-                    className="ghost-button path-picker__action"
-                    onClick={() => updateField('cwd', '')}
+                    className="path-picker__value"
+                    onClick={() => {
+                      void handlePickSessionCwd()
+                    }}
                     disabled={submitting || pickingSessionCwd}
                   >
-                    Clear
+                    <span
+                      className={
+                        formState.cwd
+                          ? 'path-picker__text'
+                          : 'path-picker__text is-placeholder'
+                      }
+                    >
+                      {formState.cwd || 'Click to choose a session working folder'}
+                    </span>
                   </button>
-                ) : null}
-              </div>
-            </div>
-            <span className="field-hint">
-              Leave it empty to use the selected project root directory.
-            </span>
-          </label>
+                  <div className="path-picker__actions">
+                    <button
+                      type="button"
+                      className="ghost-button path-picker__action"
+                      onClick={() => {
+                        void handlePickSessionCwd()
+                      }}
+                      disabled={submitting || pickingSessionCwd}
+                    >
+                      {pickingSessionCwd ? 'Opening…' : 'Choose folder'}
+                    </button>
+                    {formState.cwd ? (
+                      <button
+                        type="button"
+                        className="ghost-button path-picker__action"
+                        onClick={() => updateField('cwd', '')}
+                        disabled={submitting || pickingSessionCwd}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <span className="field-hint">
+                  Leave it empty to use the selected project root directory.
+                </span>
+              </label>
+            </>
+          )}
 
           {errorMessage ? <p className="form-error">{errorMessage}</p> : null}
 
