@@ -33,7 +33,6 @@
   grid-row: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
   min-width: 0;
   padding: 0 152px 0 18px;
@@ -45,9 +44,7 @@
   user-select: none;
 }
 
-.titlebar__brand,
-.titlebar__status,
-.titlebar__pill {
+.titlebar__brand {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -66,25 +63,6 @@
   color: #8ea7c7;
   font-size: 0.8rem;
   font-weight: 600;
-}
-
-.titlebar__status {
-  justify-content: flex-end;
-  max-width: 40%;
-}
-
-.titlebar__pill {
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid rgba(122, 224, 214, 0.18);
-  border-radius: 999px;
-  padding: 0.38rem 0.75rem;
-  background: rgba(8, 18, 33, 0.84);
-  color: #dbe7f6;
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sidebar {

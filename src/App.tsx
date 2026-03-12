@@ -82,8 +82,6 @@ function App() {
 
   const sessions = flattenSessions(projects)
   const activeProject = findActiveProject(projects, activeSessionId)
-  const activeSession =
-    sessions.find((session) => session.config.id === activeSessionId) ?? null
 
   useEffect(() => {
     if (!agentCli) {
@@ -326,11 +324,6 @@ function App() {
           </span>
           <span className="titlebar__section">
             {activeProject?.config.title ?? 'Workspace'}
-          </span>
-        </div>
-        <div className="titlebar__status">
-          <span className="titlebar__pill">
-            {activeSession ? activeSession.config.title : 'No active session'}
           </span>
         </div>
       </header>
