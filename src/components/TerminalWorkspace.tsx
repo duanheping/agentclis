@@ -7,6 +7,7 @@ import {
   buildWindowsCommandPromptTerminalId,
   terminalRegistry,
 } from '../lib/terminalRegistry'
+import { getTerminalShortcutInput } from '../lib/terminalKeybindings'
 import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
 import type { SessionSnapshot } from '../shared/session'
 
@@ -166,6 +167,17 @@ function TerminalSurface({
     terminal.loadAddon(fitAddon)
     terminal.open(containerRef.current!)
     const detachPasteHandler = attachPlainTextPasteHandler(terminal)
+    terminal.attachCustomKeyEventHandler((event) => {
+      const shortcutInput = getTerminalShortcutInput(event)
+      if (shortcutInput === null) {
+        return true
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      onInputRef.current(shortcutInput)
+      return false
+    })
 
     const fitTerminal = () => {
       fitAddon.fit()
