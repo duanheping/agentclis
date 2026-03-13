@@ -95,7 +95,15 @@ function formatProviderLabel(provider: SkillTargetProvider): string {
 }
 
 function formatMergeAgentLabel(agent: SkillAiMergeAgent): string {
-  return agent === 'codex' ? 'Codex' : 'Claude'
+  if (agent === 'codex') {
+    return 'Codex'
+  }
+
+  if (agent === 'claude') {
+    return 'Claude'
+  }
+
+  return 'Copilot'
 }
 
 function formatRootLabel(root: SkillSyncRoot): string {

@@ -57,7 +57,15 @@ function joinCommandTokens(tokens: string[]): string {
 }
 
 function formatAgentLabel(agent: SkillAiMergeAgent): string {
-  return agent === 'codex' ? 'Codex' : 'Claude'
+  if (agent === 'codex') {
+    return 'Codex'
+  }
+
+  if (agent === 'claude') {
+    return 'Claude'
+  }
+
+  return 'Copilot'
 }
 
 async function listFilesRecursive(rootPath: string): Promise<DirectoryFiles> {
@@ -428,6 +436,33 @@ async function runClaudeStructured(
   return result.stdout
 }
 
+async function runCopilotStructured(
+  workingDirectory: string,
+  prompt: string,
+): Promise<string> {
+  const structuredPrompt = `${prompt}\nReturn only JSON. Do not wrap it in markdown.`
+  const result = await runCommand(
+    'copilot',
+    workingDirectory,
+    [
+      '--output-format',
+      'json',
+      '--stream',
+      'off',
+      '--allow-all',
+      '--no-ask-user',
+      '--no-custom-instructions',
+      '--add-dir',
+      workingDirectory,
+      '--prompt',
+      structuredPrompt,
+    ],
+    null,
+  )
+
+  return result.stdout
+}
+
 async function readMergedFiles(mergedRoot: string): Promise<SkillAiMergeProposal['files']> {
   const mergedFiles = await listFilesRecursive(mergedRoot)
   return Promise.all(
@@ -460,26 +495,23 @@ export async function generateSkillMerge(
     const mergeSchema = buildMergeSchema()
     await writeFile(schemaPath, `${mergeSchema}\n`, 'utf8')
 
+    const prompt = buildMergePrompt(
+      skillName,
+      sources.map((source) => source.root),
+    )
+
     if (agent === 'codex') {
-      await runCodexMerge(
-        tempRoot,
-        schemaPath,
-        outputPath,
-        buildMergePrompt(
-          skillName,
-          sources.map((source) => source.root),
-        ),
-      )
-    } else {
+      await runCodexMerge(tempRoot, schemaPath, outputPath, prompt)
+    } else if (agent === 'claude') {
       const output = await runClaudeStructured(
         tempRoot,
         mergeSchema,
-        buildMergePrompt(
-          skillName,
-          sources.map((source) => source.root),
-        ),
+        prompt,
         'bypassPermissions',
       )
+      await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
+    } else {
+      const output = await runCopilotStructured(tempRoot, prompt)
       await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
     }
 
@@ -545,13 +577,16 @@ export async function reviewSkillMerge(
 
     if (reviewer === 'codex') {
       await runCodexMerge(tempRoot, schemaPath, outputPath, prompt)
-    } else {
+    } else if (reviewer === 'claude') {
       const output = await runClaudeStructured(
         tempRoot,
         reviewSchema,
         prompt,
         'dontAsk',
       )
+      await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
+    } else {
+      const output = await runCopilotStructured(tempRoot, prompt)
       await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
     }
 

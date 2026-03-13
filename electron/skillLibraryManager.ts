@@ -111,11 +111,15 @@ function normalizeReviewMergeAgent(
   value: unknown,
   primaryMergeAgent: SkillAiMergeAgent,
 ): SkillAiReviewAgent {
-  if (value !== 'codex' && value !== 'claude' && value !== 'none') {
+  if (value === 'none') {
     return 'none'
   }
 
-  return value === primaryMergeAgent ? 'none' : value
+  if (!SKILL_AI_MERGE_AGENTS.includes(value as SkillAiMergeAgent)) {
+    return 'none'
+  }
+
+  return value === primaryMergeAgent ? 'none' : (value as SkillAiReviewAgent)
 }
 
 function normalizeSettings(

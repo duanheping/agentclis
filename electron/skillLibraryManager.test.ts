@@ -277,7 +277,7 @@ describe('SkillLibraryManager', () => {
     manager.updateSettings({
       ...manager.getSettings(),
       primaryMergeAgent: 'claude',
-      reviewMergeAgent: 'codex',
+      reviewMergeAgent: 'copilot',
     })
 
     await writeFiles(codexRoot, {
@@ -304,7 +304,7 @@ describe('SkillLibraryManager', () => {
       review: null,
     })
     mocks.reviewSkillMerge.mockResolvedValue({
-      reviewer: 'codex',
+      reviewer: 'copilot',
       reviewedAt: '2026-03-12T18:01:00.000Z',
       status: 'approved-with-warnings',
       summary: 'Looks good overall.',
@@ -323,7 +323,7 @@ describe('SkillLibraryManager', () => {
       ]),
     )
     expect(mocks.reviewSkillMerge).toHaveBeenCalledWith(
-      'codex',
+      'copilot',
       expect.objectContaining({
         skillName: 'document-topic-search',
         mergeAgent: 'claude',
@@ -335,7 +335,7 @@ describe('SkillLibraryManager', () => {
     )
     expect(proposal.review).toEqual(
       expect.objectContaining({
-        reviewer: 'codex',
+        reviewer: 'copilot',
         status: 'approved-with-warnings',
       }),
     )

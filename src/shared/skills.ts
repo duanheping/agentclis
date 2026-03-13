@@ -2,7 +2,7 @@ export const SKILL_TARGET_PROVIDERS = ['codex', 'claude'] as const
 
 export type SkillTargetProvider = (typeof SKILL_TARGET_PROVIDERS)[number]
 
-export const SKILL_AI_MERGE_AGENTS = ['codex', 'claude'] as const
+export const SKILL_AI_MERGE_AGENTS = ['codex', 'claude', 'copilot'] as const
 
 export type SkillAiMergeAgent = (typeof SKILL_AI_MERGE_AGENTS)[number]
 

@@ -440,7 +440,7 @@ describe('App skills settings', () => {
       screen.getByLabelText('Primary merge agent'),
       'claude',
     )
-    await user.selectOptions(screen.getByLabelText('Review agent'), 'codex')
+    await user.selectOptions(screen.getByLabelText('Review agent'), 'copilot')
 
     await user.click(screen.getByRole('button', { name: 'Sync now' }))
 
@@ -456,7 +456,7 @@ describe('App skills settings', () => {
         | SkillLibrarySettings
         | undefined
     expect(lastSettingsCall?.primaryMergeAgent).toBe('claude')
-    expect(lastSettingsCall?.reviewMergeAgent).toBe('codex')
+    expect(lastSettingsCall?.reviewMergeAgent).toBe('copilot')
   })
 
   it('shows skill conflicts and lets the user resolve one from the settings panel', async () => {

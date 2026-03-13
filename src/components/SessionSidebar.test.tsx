@@ -254,4 +254,25 @@ describe('SessionSidebar', () => {
     expect(onApplySkillAiMerge).toHaveBeenCalledTimes(1)
     expect(onDismissSkillAiMerge).toHaveBeenCalledTimes(1)
   })
+
+  it('exposes Copilot in the merge agent selectors', async () => {
+    const user = userEvent.setup()
+    const onSetPrimaryMergeAgent = vi.fn().mockResolvedValue(undefined)
+    const onSetReviewMergeAgent = vi.fn().mockResolvedValue(undefined)
+
+    renderSidebar({
+      onSetPrimaryMergeAgent,
+      onSetReviewMergeAgent,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.getAllByRole('option', { name: 'Copilot' })).toHaveLength(2)
+
+    await user.selectOptions(screen.getByLabelText('Primary merge agent'), 'copilot')
+    await user.selectOptions(screen.getByLabelText('Review agent'), 'copilot')
+
+    expect(onSetPrimaryMergeAgent).toHaveBeenCalledWith('copilot')
+    expect(onSetReviewMergeAgent).toHaveBeenCalledWith('copilot')
+  })
 })
