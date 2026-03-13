@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -103,6 +103,35 @@ function buildProjectGitOverview(): ProjectGitOverview {
   }
 }
 
+function mockElementRect(
+  element: Element,
+  rect: {
+    left: number
+    top?: number
+    width: number
+    height?: number
+  },
+): void {
+  const top = rect.top ?? 0
+  const height = rect.height ?? 0
+  const right = rect.left + rect.width
+  const bottom = top + height
+
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      x: rect.left,
+      y: top,
+      left: rect.left,
+      top,
+      width: rect.width,
+      height,
+      right,
+      bottom,
+      toJSON: () => '',
+    }),
+  })
+}
 function createAgentCliMock(
   workspacePayload: ListSessionsResponse = buildWorkspacePayload(),
   gitOverview: ProjectGitOverview = buildProjectGitOverview(),
@@ -362,6 +391,20 @@ describe('App skills settings', () => {
 
   beforeEach(() => {
     window.localStorage.clear()
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
     useSessionsStore.setState({
       projects: [],
       activeSessionId: null,
@@ -554,5 +597,93 @@ describe('App skills settings', () => {
       'src/App.tsx',
       false,
     )
+  })
+
+  it('lets the user drag the sidebar and diff splitters to resize panes', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'Resize sidebar' })
+
+    const appShell = document.querySelector('.app-shell') as HTMLDivElement | null
+    const workspaceBody = document.querySelector(
+      '.workspace-shell__body',
+    ) as HTMLElement | null
+
+    expect(appShell).not.toBeNull()
+    expect(workspaceBody).not.toBeNull()
+
+    mockElementRect(appShell!, { left: 0, width: 1400, height: 900 })
+    mockElementRect(workspaceBody!, { left: 0, width: 1080, height: 900 })
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize sidebar' }), {
+      clientX: 288,
+    })
+    fireEvent.pointerMove(window, { clientX: 360 })
+    fireEvent.pointerUp(window)
+
+    await waitFor(() => {
+      expect(appShell!.style.getPropertyValue('--sidebar-width')).toBe('360px')
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Changes')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Resize diff panel' })).toBeInTheDocument()
+    })
+
+    mockElementRect(workspaceBody!, { left: 0, width: 1040, height: 900 })
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize diff panel' }), {
+      clientX: 620,
+    })
+    fireEvent.pointerMove(window, { clientX: 560 })
+    fireEvent.pointerUp(window)
+
+    await waitFor(() => {
+      expect(workspaceBody!.style.getPropertyValue('--diff-panel-width')).toBe(
+        '480px',
+      )
+    })
   })
 })

@@ -1,10 +1,14 @@
 .app-shell {
   --titlebar-height: 48px;
   --sidebar-width: 288px;
+  --sidebar-resizer-size: 10px;
   --sidebar-mobile-size: auto;
   position: relative;
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns:
+    var(--sidebar-width)
+    var(--sidebar-resizer-size)
+    minmax(0, 1fr);
   grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
   gap: 0;
   min-height: 100vh;
@@ -15,6 +19,7 @@
 
 .app-shell--sidebar-collapsed {
   --sidebar-width: 0px;
+  --sidebar-resizer-size: 0px;
   --sidebar-mobile-size: 0px;
 }
 
@@ -40,6 +45,40 @@
 
 .workspace-shell {
   z-index: 1;
+}
+
+.pane-resizer {
+  position: relative;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  cursor: col-resize;
+}
+
+.pane-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: rgba(142, 171, 211, 0.14);
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.pane-resizer:hover::before,
+.pane-resizer:focus-visible::before {
+  background: rgba(122, 224, 214, 0.74);
+  box-shadow: 0 0 0 1px rgba(122, 224, 214, 0.18);
+}
+
+.pane-resizer:focus-visible {
+  outline: none;
 }
 
 .titlebar {
@@ -270,8 +309,14 @@
   overflow: visible;
 }
 
-.workspace-shell {
+.app-shell__sidebar-resizer {
   grid-column: 2;
+  grid-row: 2;
+  z-index: 4;
+}
+
+.workspace-shell {
+  grid-column: 3;
   grid-row: 2;
   border: 0;
   background: rgba(8, 17, 31, 0.78);
@@ -656,6 +701,8 @@
 }
 
 .workspace-shell__body {
+  --diff-panel-width: 420px;
+  --diff-resizer-size: 10px;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -664,7 +711,14 @@
 
 .workspace-shell__body--with-diff {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  grid-template-columns:
+    minmax(0, 1fr)
+    var(--diff-resizer-size)
+    minmax(340px, var(--diff-panel-width));
+}
+
+.workspace-shell__resizer {
+  min-height: 0;
 }
 
 .workspace-shell__caption {
@@ -780,7 +834,7 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid rgba(142, 171, 211, 0.08);
+  border-left: none;
   background:
     radial-gradient(circle at top right, rgba(56, 111, 227, 0.16), transparent 26%),
     linear-gradient(180deg, rgba(9, 17, 31, 0.96), rgba(6, 13, 24, 0.98));
@@ -1861,6 +1915,11 @@
     grid-column: 1;
     grid-row: 2;
     max-height: 42vh;
+  }
+
+  .app-shell__sidebar-resizer,
+  .workspace-shell__resizer {
+    display: none;
   }
 
   .workspace-shell {

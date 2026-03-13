@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react'
 
 import './App.css'
 import { CreateSessionDialog } from './components/CreateSessionDialog'
@@ -34,6 +38,17 @@ import { useSessionsStore } from './store/useSessionsStore'
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
 const SIDEBAR_OPEN_KEY = 'agenclis:sidebar-open'
 const DIFF_PANEL_OPEN_KEY = 'agenclis:diff-panel-open'
+const SIDEBAR_WIDTH_KEY = 'agenclis:sidebar-width'
+const DIFF_PANEL_WIDTH_KEY = 'agenclis:diff-panel-width'
+const DEFAULT_SIDEBAR_WIDTH = 288
+const MIN_SIDEBAR_WIDTH = 220
+const MAX_SIDEBAR_WIDTH = 520
+const DEFAULT_DIFF_PANEL_WIDTH = 420
+const MIN_DIFF_PANEL_WIDTH = 320
+const MAX_DIFF_PANEL_WIDTH = 720
+const MIN_DESKTOP_CENTER_PANE_WIDTH = 420
+const RESIZER_KEYBOARD_STEP = 24
+const COMPACT_LAYOUT_MEDIA_QUERY = '(max-width: 980px)'
 type CreateDialogIntent = 'session' | 'project'
 type CreateDialogMode = 'default' | 'project-context'
 
@@ -77,6 +92,23 @@ function readDiffPanelOpenPreference(): boolean {
   return readBooleanPreference(DIFF_PANEL_OPEN_KEY, false)
 }
 
+function readSidebarWidthPreference(): number {
+  return readNumberPreference(
+    SIDEBAR_WIDTH_KEY,
+    DEFAULT_SIDEBAR_WIDTH,
+    MIN_SIDEBAR_WIDTH,
+    MAX_SIDEBAR_WIDTH,
+  )
+}
+
+function readDiffPanelWidthPreference(): number {
+  return readNumberPreference(
+    DIFF_PANEL_WIDTH_KEY,
+    DEFAULT_DIFF_PANEL_WIDTH,
+    MIN_DIFF_PANEL_WIDTH,
+    MAX_DIFF_PANEL_WIDTH,
+  )
+}
 function readBooleanPreference(key: string, defaultValue: boolean): boolean {
   if (typeof window === 'undefined') {
     return defaultValue
@@ -88,6 +120,63 @@ function readBooleanPreference(key: string, defaultValue: boolean): boolean {
   } catch {
     return defaultValue
   }
+}
+
+function readNumberPreference(
+  key: string,
+  defaultValue: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof window === 'undefined') {
+    return defaultValue
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(key)
+    if (storedValue === null) {
+      return defaultValue
+    }
+
+    const parsedValue = Number(storedValue)
+    return Number.isFinite(parsedValue)
+      ? clampNumber(parsedValue, min, max)
+      : defaultValue
+  } catch {
+    return defaultValue
+  }
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function isCompactLayout(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
+  }
+
+  return window.matchMedia(COMPACT_LAYOUT_MEDIA_QUERY).matches
+}
+
+function getSidebarMaxWidth(containerWidth: number): number {
+  return Math.max(
+    MIN_SIDEBAR_WIDTH,
+    Math.min(
+      MAX_SIDEBAR_WIDTH,
+      containerWidth - MIN_DESKTOP_CENTER_PANE_WIDTH,
+    ),
+  )
+}
+
+function getDiffPanelMaxWidth(containerWidth: number): number {
+  return Math.max(
+    MIN_DIFF_PANEL_WIDTH,
+    Math.min(
+      MAX_DIFF_PANEL_WIDTH,
+      containerWidth - MIN_DESKTOP_CENTER_PANE_WIDTH,
+    ),
+  )
 }
 
 function App() {
@@ -109,11 +198,17 @@ function App() {
   const [showProjectPaths, setShowProjectPaths] = useState<boolean>(() =>
     readShowProjectPathsPreference(),
   )
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
+    readSidebarWidthPreference(),
+  )
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
     readSidebarOpenPreference(),
   )
   const [diffPanelOpen, setDiffPanelOpen] = useState<boolean>(() =>
     readDiffPanelOpenPreference(),
+  )
+  const [diffPanelWidth, setDiffPanelWidth] = useState<number>(() =>
+    readDiffPanelWidthPreference(),
   )
   const [windowsCommandPromptSessionIds, setWindowsCommandPromptSessionIds] =
     useState<string[]>([])
@@ -146,7 +241,10 @@ function App() {
   const [skillAiMergeProposal, setSkillAiMergeProposal] =
     useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
+  const appShellRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
+  const workspaceBodyRef = useRef<HTMLElement | null>(null)
+  const paneResizeCleanupRef = useRef<(() => void) | null>(null)
 
   const sessions = flattenSessions(projects)
   const activeProject = findActiveProject(projects, activeSessionId)
@@ -156,6 +254,132 @@ function App() {
   const activeSessionHasWindowsCommandPrompt =
     activeSessionId !== null &&
     windowsCommandPromptSessionIds.includes(activeSessionId)
+  const showDiffPanel = hydrated && diffPanelOpen && Boolean(activeProjectPath)
+
+  const clampSidebarWidth = (nextWidth: number): number => {
+    const containerWidth = appShellRef.current?.getBoundingClientRect().width
+    const maxWidth =
+      containerWidth && !isCompactLayout()
+        ? getSidebarMaxWidth(containerWidth)
+        : MAX_SIDEBAR_WIDTH
+
+    return clampNumber(nextWidth, MIN_SIDEBAR_WIDTH, maxWidth)
+  }
+
+  const clampDiffPanelWidth = (nextWidth: number): number => {
+    const containerWidth = workspaceBodyRef.current?.getBoundingClientRect().width
+    const maxWidth =
+      containerWidth && !isCompactLayout()
+        ? getDiffPanelMaxWidth(containerWidth)
+        : MAX_DIFF_PANEL_WIDTH
+
+    return clampNumber(nextWidth, MIN_DIFF_PANEL_WIDTH, maxWidth)
+  }
+
+  const beginPaneResize = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    resize: (clientX: number) => void,
+  ) => {
+    if (isCompactLayout()) {
+      return
+    }
+
+    event.preventDefault()
+    paneResizeCleanupRef.current?.()
+
+    const originalCursor = document.body.style.cursor
+    const originalUserSelect = document.body.style.userSelect
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      resize(moveEvent.clientX)
+    }
+
+    const stopResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      window.removeEventListener('pointercancel', stopResize)
+      document.body.style.cursor = originalCursor
+      document.body.style.userSelect = originalUserSelect
+      paneResizeCleanupRef.current = null
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+    paneResizeCleanupRef.current = stopResize
+  }
+
+  const handleSidebarResizerPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (!appShellRef.current) {
+      return
+    }
+
+    const shellRect = appShellRef.current.getBoundingClientRect()
+    beginPaneResize(event, (clientX) => {
+      setSidebarWidth(clampSidebarWidth(clientX - shellRect.left))
+    })
+  }
+
+  const handleDiffResizerPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (!workspaceBodyRef.current) {
+      return
+    }
+
+    const bodyRect = workspaceBodyRef.current.getBoundingClientRect()
+    beginPaneResize(event, (clientX) => {
+      setDiffPanelWidth(clampDiffPanelWidth(bodyRect.right - clientX))
+    })
+  }
+
+  const handleSidebarResizerKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ) => {
+    if (isCompactLayout()) {
+      return
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setSidebarWidth((current) =>
+        clampSidebarWidth(current - RESIZER_KEYBOARD_STEP),
+      )
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setSidebarWidth((current) =>
+        clampSidebarWidth(current + RESIZER_KEYBOARD_STEP),
+      )
+    }
+  }
+
+  const handleDiffResizerKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ) => {
+    if (isCompactLayout()) {
+      return
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setDiffPanelWidth((current) =>
+        clampDiffPanelWidth(current - RESIZER_KEYBOARD_STEP),
+      )
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setDiffPanelWidth((current) =>
+        clampDiffPanelWidth(current + RESIZER_KEYBOARD_STEP),
+      )
+    }
+  }
 
   const refreshWorkspace = async () => {
     if (!agentCli) {
@@ -332,6 +556,14 @@ function App() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
+    } catch {
+      // Ignore preference persistence failures and keep the in-memory state.
+    }
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen))
     } catch {
       // Ignore preference persistence failures and keep the in-memory state.
@@ -345,6 +577,43 @@ function App() {
       // Ignore preference persistence failures and keep the in-memory state.
     }
   }, [diffPanelOpen])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DIFF_PANEL_WIDTH_KEY, String(diffPanelWidth))
+    } catch {
+      // Ignore preference persistence failures and keep the in-memory state.
+    }
+  }, [diffPanelWidth])
+
+  useEffect(() => {
+    return () => {
+      paneResizeCleanupRef.current?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    const syncPaneWidths = () => {
+      if (isCompactLayout()) {
+        return
+      }
+
+      if (sidebarOpen && appShellRef.current) {
+        setSidebarWidth((current) => clampSidebarWidth(current))
+      }
+
+      if (showDiffPanel && workspaceBodyRef.current) {
+        setDiffPanelWidth((current) => clampDiffPanelWidth(current))
+      }
+    }
+
+    syncPaneWidths()
+    window.addEventListener('resize', syncPaneWidths)
+
+    return () => {
+      window.removeEventListener('resize', syncPaneWidths)
+    }
+  }, [showDiffPanel, sidebarOpen])
 
   useEffect(() => {
     if (!projectOpenMenuOpen) {
@@ -947,9 +1216,19 @@ function App() {
   const totalProjectChanges =
     (projectGitOverview?.unstagedFiles.length ?? 0) +
     (projectGitOverview?.stagedFiles.length ?? 0)
+  const appShellStyle = {
+    '--sidebar-width': sidebarOpen ? `${sidebarWidth}px` : '0px',
+  } as CSSProperties
+  const workspaceBodyStyle = {
+    '--diff-panel-width': `${diffPanelWidth}px`,
+  } as CSSProperties
 
   return (
-    <div className={`app-shell${sidebarOpen ? '' : ' app-shell--sidebar-collapsed'}`}>
+    <div
+      ref={appShellRef}
+      className={`app-shell${sidebarOpen ? '' : ' app-shell--sidebar-collapsed'}`}
+      style={appShellStyle}
+    >
       <div className="app-shell__background" aria-hidden="true" />
 
       <header className="titlebar">
@@ -1111,11 +1390,23 @@ function App() {
         />
       ) : null}
 
+      {sidebarOpen ? (
+        <button
+          type="button"
+          className="pane-resizer app-shell__sidebar-resizer"
+          aria-label="Resize sidebar"
+          onKeyDown={handleSidebarResizerKeyDown}
+          onPointerDown={handleSidebarResizerPointerDown}
+        />
+      ) : null}
+
       <main className="workspace-shell">
         {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
         <section
-          className={`workspace-shell__body${diffPanelOpen ? ' workspace-shell__body--with-diff' : ''}`}
+          ref={workspaceBodyRef}
+          className={`workspace-shell__body${showDiffPanel ? ' workspace-shell__body--with-diff' : ''}`}
+          style={workspaceBodyStyle}
         >
           {!hydrated ? (
             <div className="workspace-loading">
@@ -1132,7 +1423,16 @@ function App() {
             />
           )}
 
-          {hydrated && diffPanelOpen && activeProjectPath ? (
+          {showDiffPanel ? (
+            <button
+              type="button"
+              className="pane-resizer workspace-shell__resizer"
+              aria-label="Resize diff panel"
+              onKeyDown={handleDiffResizerKeyDown}
+              onPointerDown={handleDiffResizerPointerDown}
+            />
+          ) : null}
+          {showDiffPanel ? (
             <ProjectDiffPanel
               overview={projectGitOverview}
               loading={projectGitLoading}
