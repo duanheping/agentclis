@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -49,6 +50,7 @@ interface DetectedExternalSession {
   timestamp: string
   cwd: string
   startedAt: number
+  summary?: string
 }
 
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
@@ -67,6 +69,19 @@ const FIRST_PROMPT_TITLE_LIMIT = 80
 
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
+
+function isMeaningfulSessionTitleCandidate(title: string): boolean {
+  const normalized = title.trim()
+  if (!normalized) {
+    return false
+  }
+
+  if (/^\/\S*$/u.test(normalized)) {
+    return false
+  }
+
+  return /[\p{L}\p{N}]/u.test(normalized)
+}
 
 interface PersistedSessionState {
   projects: ProjectConfig[]
@@ -121,7 +136,13 @@ export class SessionManager {
       this.runtimes.set(hydratedConfig.id, buildRuntime(hydratedConfig.id))
       this.claimExternalSession(hydratedConfig)
 
-      if (config.projectId !== hydratedConfig.projectId) {
+      if (
+        config.projectId !== hydratedConfig.projectId ||
+        config.title !== hydratedConfig.title ||
+        config.pendingFirstPromptTitle !== hydratedConfig.pendingFirstPromptTitle ||
+        config.cwd !== hydratedConfig.cwd ||
+        config.shell !== hydratedConfig.shell
+      ) {
         shouldPersist = true
       }
     }
@@ -760,6 +781,7 @@ export class SessionManager {
         timestamp: meta.timestamp,
         cwd: meta.cwd,
         startedAt,
+        summary: meta.summary,
       }
     } catch {
       return null
@@ -785,19 +807,44 @@ export class SessionManager {
     }
 
     this.releaseExternalSession(latestConfig)
+    const preferredTitle =
+      detectedSession.summary &&
+      this.shouldPreferExternalSessionTitle(
+        latestConfig,
+        latestConfig.cwd,
+        latestConfig.title,
+      )
+        ? detectedSession.summary
+        : null
+    const titleChanged =
+      preferredTitle !== null && preferredTitle !== latestConfig.title
+    const timestamp = titleChanged
+      ? new Date().toISOString()
+      : latestConfig.updatedAt
     const nextConfig: SessionConfig = {
       ...latestConfig,
+      title: preferredTitle ?? latestConfig.title,
+      pendingFirstPromptTitle: titleChanged
+        ? false
+        : latestConfig.pendingFirstPromptTitle,
       externalSession: {
         provider: detectedSession.provider,
         sessionId: detectedSession.sessionId,
         detectedAt: new Date().toISOString(),
       },
-      updatedAt: latestConfig.updatedAt,
+      updatedAt: timestamp,
     }
 
     this.claimExternalSession(nextConfig)
     this.configs.set(nextConfig.id, nextConfig)
+    if (titleChanged) {
+      this.touchProject(nextConfig.projectId, timestamp)
+    }
     this.persist()
+    this.events.onConfig({
+      sessionId: nextConfig.id,
+      config: nextConfig,
+    })
   }
 
   private claimExternalSession(config: SessionConfig): void {
@@ -838,8 +885,8 @@ export class SessionManager {
 
   private hydrateSessionConfig(config: StoredSessionConfig): SessionConfig {
     const cwd = resolveSessionCwd(config.cwd, os.homedir())
+    const title = this.resolveHydratedSessionTitle(config, cwd)
     const project = this.resolveProjectForHydration(config.projectId, cwd, config)
-    const title = deriveSessionTitle(config.title, config.startupCommand, cwd)
 
     return {
       ...config,
@@ -849,6 +896,59 @@ export class SessionManager {
       cwd,
       shell: resolveShellCommand(config.shell),
     }
+  }
+
+  private resolveHydratedSessionTitle(
+    config: StoredSessionConfig,
+    cwd: string,
+  ): string {
+    const title = deriveSessionTitle(config.title, config.startupCommand, cwd)
+    const externalTitle = this.readStoredExternalSessionTitle(config.externalSession)
+
+    if (!externalTitle) {
+      return title
+    }
+
+    return this.shouldPreferExternalSessionTitle(config, cwd, title)
+      ? externalTitle
+      : title
+  }
+
+  private readStoredExternalSessionTitle(
+    externalSession: SessionConfig['externalSession'] | undefined,
+  ): string | null {
+    if (externalSession?.provider !== 'copilot') {
+      return null
+    }
+
+    const workspaceFilePath = path.join(
+      COPILOT_SESSIONS_ROOT,
+      externalSession.sessionId,
+      'workspace.yaml',
+    )
+
+    try {
+      const content = readFileSync(workspaceFilePath, 'utf8')
+      return extractCopilotSessionMeta(content)?.summary?.trim() || null
+    } catch {
+      return null
+    }
+  }
+
+  private shouldPreferExternalSessionTitle(
+    config: Pick<StoredSessionConfig, 'pendingFirstPromptTitle' | 'startupCommand'>,
+    cwd: string,
+    title: string,
+  ): boolean {
+    if (config.pendingFirstPromptTitle) {
+      return true
+    }
+
+    if (!isMeaningfulSessionTitleCandidate(title)) {
+      return true
+    }
+
+    return title === deriveSessionTitle(undefined, config.startupCommand, cwd)
   }
 
   private shouldCaptureFirstPromptTitle(
@@ -901,7 +1001,7 @@ export class SessionManager {
         const promptTitle = this.normalizeFirstPromptTitle(buffer)
         buffer = ''
 
-        if (promptTitle) {
+        if (promptTitle && isMeaningfulSessionTitleCandidate(promptTitle)) {
           this.pendingFirstPromptBuffers.delete(id)
           this.applyFirstPromptTitle(id, promptTitle)
           return

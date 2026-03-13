@@ -33,6 +33,7 @@ describe('copilotCli', () => {
         [
           'id: 938fdaf9-c35d-42ab-bca3-566ab3d91f79',
           'cwd: C:\\Users\\hduan10\\Documents\\repo\\MSAR43_S32G',
+          'summary: Review ECG2 Callout Analysis',
           'created_at: 2026-03-11T17:15:35.021Z',
         ].join('\n'),
       ),
@@ -40,6 +41,7 @@ describe('copilotCli', () => {
       sessionId: '938fdaf9-c35d-42ab-bca3-566ab3d91f79',
       timestamp: '2026-03-11T17:15:35.021Z',
       cwd: 'C:\\Users\\hduan10\\Documents\\repo\\MSAR43_S32G',
+      summary: 'Review ECG2 Callout Analysis',
     })
   })
 })

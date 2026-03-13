@@ -1,10 +1,14 @@
 // @vitest-environment node
 
+import os from 'node:os'
+import path from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   let persistedState: unknown = null
   let nextPid = 1000
+  const files = new Map<string, string>()
   const createTerminal = () => ({
     pid: nextPid++,
     write: vi.fn(),
@@ -23,13 +27,18 @@ const mocks = vi.hoisted(() => {
   return {
     terminals,
     spawn,
+    getFile: (filePath: string) => files.get(filePath),
     getPersistedState: () => persistedState,
+    setFile: (filePath: string, content: string) => {
+      files.set(filePath, content)
+    },
     setPersistedState: (value: unknown) => {
       persistedState = structuredClone(value)
     },
     reset: () => {
       persistedState = null
       nextPid = 1000
+      files.clear()
       terminals.length = 0
       spawn.mockReset()
       spawn.mockImplementation(() => {
@@ -37,6 +46,21 @@ const mocks = vi.hoisted(() => {
         terminals.push(terminal)
         return terminal
       })
+    },
+  }
+})
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    readFileSync: (filePath: string) => {
+      const content = mocks.getFile(String(filePath))
+      if (content === undefined) {
+        throw new Error(`ENOENT: ${filePath}`)
+      }
+
+      return content
     },
   }
 })
@@ -313,5 +337,123 @@ describe('SessionManager project lifecycle', () => {
     expect(unchangedSession?.config.title).toBe('Manual title')
     expect(unchangedSession?.config.pendingFirstPromptTitle).toBe(false)
     expect(onConfig).not.toHaveBeenCalled()
+  })
+
+  it('ignores low-signal first prompts until a meaningful title is available', async () => {
+    const onConfig = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot',
+    })
+
+    manager.writeToSession(session.config.id, '/')
+    manager.writeToSession(session.config.id, '\r')
+
+    let currentSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )
+
+    expect(currentSession?.config.title).toBe('copilot')
+    expect(currentSession?.config.pendingFirstPromptTitle).toBe(true)
+
+    manager.writeToSession(session.config.id, 'review callout analysis')
+    manager.writeToSession(session.config.id, '\r')
+
+    currentSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )
+
+    expect(currentSession?.config.title).toBe('review callout analysis')
+    expect(currentSession?.config.pendingFirstPromptTitle).toBe(false)
+    expect(onConfig).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      config: expect.objectContaining({
+        id: session.config.id,
+        title: 'review callout analysis',
+        pendingFirstPromptTitle: false,
+      }),
+    })
+  })
+
+  it('hydrates Copilot sessions from workspace summaries when the stored title is low-signal', () => {
+    const externalSessionId = '33301b34-0c7c-4968-aa11-cc87fe2bdea4'
+    const workspaceFilePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      externalSessionId,
+      'workspace.yaml',
+    )
+
+    mocks.setFile(
+      workspaceFilePath,
+      [
+        `id: ${externalSessionId}`,
+        'cwd: C:\\repo',
+        'summary: Review ECG2 Callout Analysis',
+        'created_at: 2026-03-13T13:29:40.918Z',
+      ].join('\n'),
+    )
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-13T13:29:32.043Z',
+          updatedAt: '2026-03-13T13:29:32.043Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: '/',
+          startupCommand: 'copilot',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-13T13:29:32.043Z',
+          updatedAt: '2026-03-13T13:29:55.564Z',
+          externalSession: {
+            provider: 'copilot',
+            sessionId: externalSessionId,
+            detectedAt: '2026-03-13T13:29:41.129Z',
+          },
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const hydratedSession = manager.listSessions().projects[0]?.sessions[0]
+
+    expect(hydratedSession?.config.title).toBe('Review ECG2 Callout Analysis')
+    expect(hydratedSession?.config.pendingFirstPromptTitle).toBe(false)
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{ title: string }>
+        }
+      ).sessions[0]?.title,
+    ).toBe('Review ECG2 Callout Analysis')
   })
 })

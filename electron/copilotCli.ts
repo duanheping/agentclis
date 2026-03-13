@@ -81,6 +81,7 @@ export interface CopilotSessionMeta {
   sessionId: string
   timestamp: string
   cwd: string
+  summary?: string
 }
 
 interface ParsedCopilotCommand {
@@ -114,6 +115,7 @@ export function extractCopilotSessionMeta(content: string): CopilotSessionMeta |
   const cwd = findYamlValue(content, 'cwd')
   const timestamp =
     findYamlValue(content, 'created_at') ?? findYamlValue(content, 'updated_at')
+  const summary = findYamlValue(content, 'summary')?.trim()
 
   if (!sessionId || !cwd || !timestamp) {
     return null
@@ -123,6 +125,7 @@ export function extractCopilotSessionMeta(content: string): CopilotSessionMeta |
     sessionId,
     timestamp,
     cwd,
+    summary: summary || undefined,
   }
 }
 
