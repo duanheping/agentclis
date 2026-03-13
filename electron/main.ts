@@ -12,6 +12,7 @@ import {
 } from 'electron'
 
 import { IPC_CHANNELS } from '../src/shared/ipc'
+import { openFileReferenceTarget } from './fileReferences'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
@@ -218,6 +219,9 @@ function registerIpcHandlers(): void {
       throw new Error(message)
     }
   })
+  ipcMain.handle(IPC_CHANNELS.openFileReference, (_event, target: string) =>
+    openFileReferenceTarget(target, shell),
+  )
   ipcMain.handle(IPC_CHANNELS.listWindowsCommandPrompts, () =>
     windowsCommandPromptManager.listOpenSessionIds(),
   )

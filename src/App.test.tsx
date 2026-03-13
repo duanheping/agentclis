@@ -290,6 +290,7 @@ function createAgentCliMock() {
       .mockResolvedValueOnce('C:\\skills\\codex')
       .mockResolvedValueOnce('C:\\skills\\claude'),
     openPath: vi.fn().mockResolvedValue(undefined),
+    openFileReference: vi.fn().mockResolvedValue(undefined),
     getPathForFile: vi.fn((file: File) => file.name),
     listWindowsCommandPrompts: vi.fn().mockResolvedValue([]),
     openWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),

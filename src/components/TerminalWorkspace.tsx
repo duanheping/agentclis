@@ -8,6 +8,7 @@ import {
   terminalRegistry,
 } from '../lib/terminalRegistry'
 import { getTerminalShortcutInput } from '../lib/terminalKeybindings'
+import { createMarkdownFileLinkProvider } from '../lib/terminalMarkdownLinks'
 import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
 import type { SessionSnapshot } from '../shared/session'
 
@@ -158,6 +159,11 @@ function TerminalSurface({
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(containerRef.current!)
+    const markdownFileLinks = terminal.registerLinkProvider(
+      createMarkdownFileLinkProvider(terminal, (target) => {
+        void window.agentCli.openFileReference(target)
+      }),
+    )
     const detachPasteHandler = attachPlainTextPasteHandler(terminal, {
       resolveFilePath: (file) => window.agentCli.getPathForFile(file),
     })
@@ -205,6 +211,7 @@ function TerminalSurface({
     requestAnimationFrame(fitTerminal)
 
     return () => {
+      markdownFileLinks.dispose()
       detachPasteHandler()
       resizeObserver.disconnect()
       disposable.dispose()
