@@ -54,6 +54,17 @@ const api: AgentCliApi = {
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),
+  openProject: (target, projectPath) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openProject, target, projectPath),
+  getProjectGitOverview: (projectPath) =>
+    ipcRenderer.invoke(IPC_CHANNELS.getProjectGitOverview, projectPath),
+  getProjectGitDiff: (projectPath, filePath, staged) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.getProjectGitDiff,
+      projectPath,
+      filePath,
+      staged,
+    ),
   openFileReference: (target) =>
     ipcRenderer.invoke(IPC_CHANNELS.openFileReference, target),
   getPathForFile: (file) => webUtils.getPathForFile(file),

@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import './App.css'
 import { CreateSessionDialog } from './components/CreateSessionDialog'
+import { ProjectDiffPanel } from './components/ProjectDiffPanel'
 import { SessionSidebar } from './components/SessionSidebar'
 import { TerminalWorkspace } from './components/TerminalWorkspace'
 import {
   buildWindowsCommandPromptTerminalId,
   terminalRegistry,
 } from './lib/terminalRegistry'
+import type {
+  ProjectGitFileChange,
+  ProjectGitOverview,
+  ProjectOpenTarget,
+} from './shared/projectTools'
 import type {
   SkillAiMergeAgent,
   SkillAiMergeProposal,
@@ -27,8 +33,14 @@ import { useSessionsStore } from './store/useSessionsStore'
 
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
 const SIDEBAR_OPEN_KEY = 'agenclis:sidebar-open'
+const DIFF_PANEL_OPEN_KEY = 'agenclis:diff-panel-open'
 type CreateDialogIntent = 'session' | 'project'
 type CreateDialogMode = 'default' | 'project-context'
+
+interface ProjectDiffSelection {
+  path: string
+  staged: boolean
+}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -54,28 +66,27 @@ function findActiveProject(
 }
 
 function readShowProjectPathsPreference(): boolean {
-  if (typeof window === 'undefined') {
-    return true
-  }
-
-  try {
-    const storedValue = window.localStorage.getItem(SHOW_PROJECT_PATHS_KEY)
-    return storedValue === null ? true : storedValue === 'true'
-  } catch {
-    return true
-  }
+  return readBooleanPreference(SHOW_PROJECT_PATHS_KEY, true)
 }
 
 function readSidebarOpenPreference(): boolean {
+  return readBooleanPreference(SIDEBAR_OPEN_KEY, true)
+}
+
+function readDiffPanelOpenPreference(): boolean {
+  return readBooleanPreference(DIFF_PANEL_OPEN_KEY, false)
+}
+
+function readBooleanPreference(key: string, defaultValue: boolean): boolean {
   if (typeof window === 'undefined') {
-    return true
+    return defaultValue
   }
 
   try {
-    const storedValue = window.localStorage.getItem(SIDEBAR_OPEN_KEY)
-    return storedValue === null ? true : storedValue === 'true'
+    const storedValue = window.localStorage.getItem(key)
+    return storedValue === null ? defaultValue : storedValue === 'true'
   } catch {
-    return true
+    return defaultValue
   }
 }
 
@@ -101,13 +112,28 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
     readSidebarOpenPreference(),
   )
+  const [diffPanelOpen, setDiffPanelOpen] = useState<boolean>(() =>
+    readDiffPanelOpenPreference(),
+  )
   const [windowsCommandPromptSessionIds, setWindowsCommandPromptSessionIds] =
     useState<string[]>([])
+  const [projectOpenMenuOpen, setProjectOpenMenuOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(() =>
     agentCli
       ? null
       : 'Agent bridge is unavailable. The preload script did not load.',
   )
+  const [projectGitOverview, setProjectGitOverview] =
+    useState<ProjectGitOverview | null>(null)
+  const [projectGitLoading, setProjectGitLoading] = useState(false)
+  const [projectGitErrorMessage, setProjectGitErrorMessage] =
+    useState<string | null>(null)
+  const [selectedProjectDiff, setSelectedProjectDiff] =
+    useState<ProjectDiffSelection | null>(null)
+  const [projectGitDiffContent, setProjectGitDiffContent] = useState<string | null>(null)
+  const [projectGitDiffLoading, setProjectGitDiffLoading] = useState(false)
+  const [projectGitDiffErrorMessage, setProjectGitDiffErrorMessage] =
+    useState<string | null>(null)
   const [skillLibrarySettings, setSkillLibrarySettings] =
     useState<SkillLibrarySettings | null>(null)
   const [skillSyncStatus, setSkillSyncStatus] = useState<SkillSyncStatus | null>(null)
@@ -120,9 +146,16 @@ function App() {
   const [skillAiMergeProposal, setSkillAiMergeProposal] =
     useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
+  const projectMenuRef = useRef<HTMLDivElement | null>(null)
 
   const sessions = flattenSessions(projects)
   const activeProject = findActiveProject(projects, activeSessionId)
+  const activeProjectPath = activeProject?.config.rootPath ?? null
+  const activeSession =
+    sessions.find((session) => session.config.id === activeSessionId) ?? null
+  const activeSessionHasWindowsCommandPrompt =
+    activeSessionId !== null &&
+    windowsCommandPromptSessionIds.includes(activeSessionId)
 
   const refreshWorkspace = async () => {
     if (!agentCli) {
@@ -145,6 +178,23 @@ function App() {
 
     setSkillLibrarySettings(settings)
     setSkillSyncStatus(status)
+  }
+
+  const refreshProjectGitState = async (projectPath = activeProjectPath) => {
+    if (!agentCli) {
+      throw new Error('Agent bridge is unavailable.')
+    }
+
+    if (!projectPath) {
+      setProjectGitOverview(null)
+      setProjectGitErrorMessage(null)
+      return null
+    }
+
+    const overview = await agentCli.getProjectGitOverview(projectPath)
+    setProjectGitOverview(overview)
+    setProjectGitErrorMessage(null)
+    return overview
   }
 
   const persistSkillSettings = async (settings: SkillLibrarySettings) => {
@@ -289,6 +339,177 @@ function App() {
   }, [sidebarOpen])
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(DIFF_PANEL_OPEN_KEY, String(diffPanelOpen))
+    } catch {
+      // Ignore preference persistence failures and keep the in-memory state.
+    }
+  }, [diffPanelOpen])
+
+  useEffect(() => {
+    if (!projectOpenMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!projectMenuRef.current?.contains(event.target as Node)) {
+        setProjectOpenMenuOpen(false)
+      }
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setProjectOpenMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleEscape)
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [projectOpenMenuOpen])
+
+  useEffect(() => {
+    setProjectOpenMenuOpen(false)
+  }, [activeProjectPath])
+
+  useEffect(() => {
+    if (!agentCli || !activeProjectPath) {
+      setProjectGitOverview(null)
+      setProjectGitLoading(false)
+      setProjectGitErrorMessage(null)
+      setSelectedProjectDiff(null)
+      setProjectGitDiffContent(null)
+      setProjectGitDiffErrorMessage(null)
+      return
+    }
+
+    let cancelled = false
+
+    const loadOverview = async (background = false) => {
+      if (!background) {
+        setProjectGitLoading(true)
+      }
+
+      try {
+        const overview = await agentCli.getProjectGitOverview(activeProjectPath)
+        if (cancelled) {
+          return
+        }
+
+        setProjectGitOverview(overview)
+        setProjectGitErrorMessage(null)
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setProjectGitOverview(null)
+        setProjectGitErrorMessage(getErrorMessage(error))
+      } finally {
+        if (!cancelled) {
+          setProjectGitLoading(false)
+        }
+      }
+    }
+
+    void loadOverview()
+
+    const intervalId = window.setInterval(
+      () => {
+        void loadOverview(true)
+      },
+      diffPanelOpen ? 5000 : 15000,
+    )
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [activeProjectPath, agentCli, diffPanelOpen])
+
+  useEffect(() => {
+    const availableFiles = [
+      ...(projectGitOverview?.unstagedFiles ?? []),
+      ...(projectGitOverview?.stagedFiles ?? []),
+    ]
+
+    if (availableFiles.length === 0) {
+      setSelectedProjectDiff(null)
+      setProjectGitDiffContent(null)
+      setProjectGitDiffErrorMessage(null)
+      return
+    }
+
+    const selectionStillExists = selectedProjectDiff
+      ? availableFiles.some(
+          (file) =>
+            file.path === selectedProjectDiff.path &&
+            file.staged === selectedProjectDiff.staged,
+        )
+      : false
+
+    if (!selectionStillExists) {
+      const nextSelection = availableFiles[0] ?? null
+      setSelectedProjectDiff(
+        nextSelection
+          ? {
+              path: nextSelection.path,
+              staged: nextSelection.staged,
+            }
+          : null,
+      )
+    }
+  }, [projectGitOverview, selectedProjectDiff])
+
+  useEffect(() => {
+    if (!agentCli || !activeProjectPath || !diffPanelOpen || !selectedProjectDiff) {
+      setProjectGitDiffLoading(false)
+      setProjectGitDiffContent(null)
+      setProjectGitDiffErrorMessage(null)
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      setProjectGitDiffLoading(true)
+
+      try {
+        const diff = await agentCli.getProjectGitDiff(
+          activeProjectPath,
+          selectedProjectDiff.path,
+          selectedProjectDiff.staged,
+        )
+        if (cancelled) {
+          return
+        }
+
+        setProjectGitDiffContent(diff.patch)
+        setProjectGitDiffErrorMessage(null)
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setProjectGitDiffContent(null)
+        setProjectGitDiffErrorMessage(getErrorMessage(error))
+      } finally {
+        if (!cancelled) {
+          setProjectGitDiffLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProjectPath, agentCli, diffPanelOpen, selectedProjectDiff])
+
+  useEffect(() => {
     if (!skillAiMergeProposal || !skillSyncStatus) {
       return
     }
@@ -423,6 +644,63 @@ function App() {
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     }
+  }
+
+  const handleOpenProject = async (target: ProjectOpenTarget) => {
+    if (!agentCli || !activeProjectPath) {
+      setErrorMessage('There is no active project to open.')
+      return
+    }
+
+    try {
+      setErrorMessage(null)
+      setProjectOpenMenuOpen(false)
+      await agentCli.openProject(target, activeProjectPath)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleToggleActiveWindowsCommandPrompt = async () => {
+    if (!activeSession) {
+      setErrorMessage('There is no active session.')
+      return
+    }
+
+    await handleToggleWindowsCommandPrompt(activeSession.config.id)
+  }
+
+  const handleToggleDiffPanel = () => {
+    setDiffPanelOpen((current) => !current)
+  }
+
+  const handleRefreshProjectDiff = async () => {
+    if (!agentCli || !activeProjectPath) {
+      return
+    }
+
+    setProjectGitLoading(true)
+
+    try {
+      const overview = await refreshProjectGitState(activeProjectPath)
+      setProjectGitErrorMessage(null)
+
+      if (!diffPanelOpen && overview?.isGitRepository) {
+        setDiffPanelOpen(true)
+      }
+    } catch (error) {
+      setProjectGitOverview(null)
+      setProjectGitErrorMessage(getErrorMessage(error))
+    } finally {
+      setProjectGitLoading(false)
+    }
+  }
+
+  const handleSelectProjectDiffFile = (file: ProjectGitFileChange) => {
+    setSelectedProjectDiff({
+      path: file.path,
+      staged: file.staged,
+    })
   }
 
   const handlePickSkillLibraryRoot = async () => {
@@ -660,6 +938,16 @@ function App() {
     setDialogProjectId(null)
   }
 
+  const totalProjectAdditions =
+    (projectGitOverview?.unstagedTotals.additions ?? 0) +
+    (projectGitOverview?.stagedTotals.additions ?? 0)
+  const totalProjectDeletions =
+    (projectGitOverview?.unstagedTotals.deletions ?? 0) +
+    (projectGitOverview?.stagedTotals.deletions ?? 0)
+  const totalProjectChanges =
+    (projectGitOverview?.unstagedFiles.length ?? 0) +
+    (projectGitOverview?.stagedFiles.length ?? 0)
+
   return (
     <div className={`app-shell${sidebarOpen ? '' : ' app-shell--sidebar-collapsed'}`}>
       <div className="app-shell__background" aria-hidden="true" />
@@ -686,6 +974,94 @@ function App() {
           <span className="titlebar__section">
             {activeProject?.config.title ?? 'Workspace'}
           </span>
+        </div>
+
+        <div className="titlebar__actions">
+          <div className="titlebar-menu" ref={projectMenuRef}>
+            <button
+              type="button"
+              className={`titlebar-action titlebar-action--menu${projectOpenMenuOpen ? ' is-active' : ''}`}
+              aria-label="Open project"
+              aria-expanded={projectOpenMenuOpen}
+              disabled={!activeProjectPath}
+              onClick={() => setProjectOpenMenuOpen((current) => !current)}
+            >
+              <span className="titlebar-action__label">Open</span>
+              <span className="titlebar-action__chevron" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+
+            {projectOpenMenuOpen ? (
+              <div className="titlebar-menu__panel" role="menu" aria-label="Open project">
+                <button
+                  type="button"
+                  className="titlebar-menu__item"
+                  role="menuitem"
+                  onClick={() => void handleOpenProject('vscode')}
+                >
+                  <span className="titlebar-menu__item-title">VS Code</span>
+                  <span className="titlebar-menu__item-meta">
+                    Open the project folder in Visual Studio Code.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="titlebar-menu__item"
+                  role="menuitem"
+                  onClick={() => void handleOpenProject('explorer')}
+                >
+                  <span className="titlebar-menu__item-title">File Explorer</span>
+                  <span className="titlebar-menu__item-meta">
+                    Browse the active project root in Explorer.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="titlebar-menu__item"
+                  role="menuitem"
+                  onClick={() => void handleOpenProject('terminal')}
+                >
+                  <span className="titlebar-menu__item-title">Terminal</span>
+                  <span className="titlebar-menu__item-meta">
+                    Launch a terminal rooted in the active project.
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            className={`titlebar-action${activeSessionHasWindowsCommandPrompt ? ' is-active' : ''}`}
+            aria-label="Toggle cmd"
+            disabled={!activeSession}
+            onClick={() => void handleToggleActiveWindowsCommandPrompt()}
+          >
+            <span className="titlebar-action__label">
+              {activeSessionHasWindowsCommandPrompt ? 'Hide cmd' : 'Toggle cmd'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`titlebar-action${diffPanelOpen ? ' is-active' : ''}`}
+            aria-label="Toggle diff panel"
+            disabled={!activeProjectPath}
+            onClick={handleToggleDiffPanel}
+          >
+            <span className="titlebar-action__label">Diff</span>
+            {totalProjectChanges > 0 ? (
+              <span className="titlebar-action__counts">
+                <span className="titlebar-action__count is-added">
+                  +{totalProjectAdditions}
+                </span>
+                <span className="titlebar-action__count is-removed">
+                  -{totalProjectDeletions}
+                </span>
+              </span>
+            ) : null}
+          </button>
         </div>
       </header>
 
@@ -738,7 +1114,9 @@ function App() {
       <main className="workspace-shell">
         {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
-        <section className="workspace-shell__body">
+        <section
+          className={`workspace-shell__body${diffPanelOpen ? ' workspace-shell__body--with-diff' : ''}`}
+        >
           {!hydrated ? (
             <div className="workspace-loading">
               <div>
@@ -753,6 +1131,20 @@ function App() {
               windowsCommandPromptSessionIds={windowsCommandPromptSessionIds}
             />
           )}
+
+          {hydrated && diffPanelOpen && activeProjectPath ? (
+            <ProjectDiffPanel
+              overview={projectGitOverview}
+              loading={projectGitLoading}
+              errorMessage={projectGitErrorMessage}
+              selectedFile={selectedProjectDiff}
+              diffContent={projectGitDiffContent}
+              diffLoading={projectGitDiffLoading}
+              diffErrorMessage={projectGitDiffErrorMessage}
+              onRefresh={() => void handleRefreshProjectDiff()}
+              onSelectFile={handleSelectProjectDiffFile}
+            />
+          ) : null}
         </section>
       </main>
 

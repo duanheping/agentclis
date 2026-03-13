@@ -12,7 +12,13 @@ import {
 } from 'electron'
 
 import { IPC_CHANNELS } from '../src/shared/ipc'
+import type { ProjectOpenTarget } from '../src/shared/projectTools'
 import { openFileReferenceTarget } from './fileReferences'
+import {
+  getProjectGitDiff,
+  getProjectGitOverview,
+  openProjectInTarget,
+} from './projectTools'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
@@ -219,6 +225,19 @@ function registerIpcHandlers(): void {
       throw new Error(message)
     }
   })
+  ipcMain.handle(
+    IPC_CHANNELS.openProject,
+    (_event, target: ProjectOpenTarget, projectPath: string) =>
+      openProjectInTarget(target, projectPath, shell),
+  )
+  ipcMain.handle(IPC_CHANNELS.getProjectGitOverview, (_event, projectPath: string) =>
+    getProjectGitOverview(projectPath),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.getProjectGitDiff,
+    (_event, projectPath: string, filePath: string, staged: boolean) =>
+      getProjectGitDiff(projectPath, filePath, staged),
+  )
   ipcMain.handle(IPC_CHANNELS.openFileReference, (_event, target: string) =>
     openFileReferenceTarget(target, shell),
   )

@@ -11,6 +11,11 @@ import type {
   SessionSnapshot,
 } from './session'
 import type {
+  ProjectGitDiff,
+  ProjectGitOverview,
+  ProjectOpenTarget,
+} from './projectTools'
+import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
   SkillSyncResult,
@@ -38,6 +43,9 @@ export const IPC_CHANNELS = {
   applySkillAiMerge: 'skills:apply-ai-merge',
   pickDirectory: 'dialog:pick-directory',
   openPath: 'shell:open-path',
+  openProject: 'project:open',
+  getProjectGitOverview: 'project:git-overview',
+  getProjectGitDiff: 'project:git-diff',
   openFileReference: 'shell:open-file-reference',
   listWindowsCommandPrompts: 'shell:list-windows-command-prompts',
   openWindowsCommandPrompt: 'shell:open-windows-command-prompt',
@@ -77,6 +85,13 @@ export interface AgentCliApi {
   applySkillAiMerge(proposal: SkillAiMergeProposal): Promise<SkillSyncResult>
   pickDirectory(defaultPath?: string): Promise<string | null>
   openPath(targetPath: string): Promise<void>
+  openProject(target: ProjectOpenTarget, projectPath: string): Promise<void>
+  getProjectGitOverview(projectPath: string): Promise<ProjectGitOverview>
+  getProjectGitDiff(
+    projectPath: string,
+    filePath: string,
+    staged: boolean,
+  ): Promise<ProjectGitDiff>
   openFileReference(target: string): Promise<void>
   getPathForFile(file: File): string
   listWindowsCommandPrompts(): Promise<string[]>

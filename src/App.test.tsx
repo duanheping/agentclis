@@ -2,7 +2,13 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('./components/TerminalWorkspace', () => ({
+  TerminalWorkspace: () => <div data-testid="terminal-workspace" />,
+}))
+
 import App from './App'
+import type { ProjectGitOverview } from './shared/projectTools'
+import type { ListSessionsResponse } from './shared/session'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -63,7 +69,44 @@ function buildSkillStatus(): SkillSyncStatus {
   }
 }
 
-function createAgentCliMock() {
+function buildWorkspacePayload(): ListSessionsResponse {
+  return {
+    projects: [],
+    activeSessionId: null,
+  }
+}
+
+function buildProjectGitOverview(): ProjectGitOverview {
+  return {
+    projectPath: 'C:\\repo\\agenclis',
+    isGitRepository: true,
+    repoRoot: 'C:\\repo\\agenclis',
+    branch: 'feature/topbar-actions',
+    stagedFiles: [],
+    unstagedFiles: [
+      {
+        path: 'src/App.tsx',
+        status: 'modified',
+        additions: 23,
+        deletions: 7,
+        staged: false,
+      },
+    ],
+    stagedTotals: {
+      additions: 0,
+      deletions: 0,
+    },
+    unstagedTotals: {
+      additions: 23,
+      deletions: 7,
+    },
+  }
+}
+
+function createAgentCliMock(
+  workspacePayload: ListSessionsResponse = buildWorkspacePayload(),
+  gitOverview: ProjectGitOverview = buildProjectGitOverview(),
+) {
   let currentSkillSettings = buildSkillSettings()
   let currentSkillStatus = buildSkillStatus()
 
@@ -167,14 +210,8 @@ function createAgentCliMock() {
   }
 
   const agentCli = {
-    restoreSessions: vi.fn().mockResolvedValue({
-      projects: [],
-      activeSessionId: null,
-    }),
-    listSessions: vi.fn().mockResolvedValue({
-      projects: [],
-      activeSessionId: null,
-    }),
+    restoreSessions: vi.fn().mockResolvedValue(workspacePayload),
+    listSessions: vi.fn().mockResolvedValue(workspacePayload),
     createProject: vi.fn().mockResolvedValue(undefined),
     createSession: vi.fn().mockResolvedValue(undefined),
     renameSession: vi.fn().mockResolvedValue(undefined),
@@ -290,6 +327,13 @@ function createAgentCliMock() {
       .mockResolvedValueOnce('C:\\skills\\codex')
       .mockResolvedValueOnce('C:\\skills\\claude'),
     openPath: vi.fn().mockResolvedValue(undefined),
+    openProject: vi.fn().mockResolvedValue(undefined),
+    getProjectGitOverview: vi.fn().mockResolvedValue(gitOverview),
+    getProjectGitDiff: vi.fn().mockResolvedValue({
+      filePath: 'src/App.tsx',
+      staged: false,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n+new line\n-old line',
+    }),
     openFileReference: vi.fn().mockResolvedValue(undefined),
     getPathForFile: vi.fn((file: File) => file.name),
     listWindowsCommandPrompts: vi.fn().mockResolvedValue([]),
@@ -437,5 +481,78 @@ describe('App skills settings', () => {
 
     expect(agentCli.generateSkillAiMerge).toHaveBeenCalledWith('document-topic-search')
     expect(agentCli.applySkillAiMerge).toHaveBeenCalledWith(mergeProposal)
+  })
+
+  it('opens projects from the top bar and toggles cmd and diff controls', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'Open project' })
+
+    await user.click(screen.getByRole('button', { name: 'Open project' }))
+    await user.click(screen.getByRole('menuitem', { name: /VS Code/i }))
+
+    expect(agentCli.openProject).toHaveBeenCalledWith('vscode', 'C:\\repo\\agenclis')
+
+    await user.click(screen.getByRole('button', { name: 'Toggle cmd' }))
+
+    expect(agentCli.openWindowsCommandPrompt).toHaveBeenCalledWith(
+      'session-1',
+      'C:\\repo\\agenclis',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Changes')).toBeInTheDocument()
+      expect(screen.getAllByText('src/App.tsx')).toHaveLength(2)
+      expect(screen.getByText(/diff --git a\/src\/App.tsx/i)).toBeInTheDocument()
+    })
+
+    expect(agentCli.getProjectGitOverview).toHaveBeenCalledWith('C:\\repo\\agenclis')
+    expect(agentCli.getProjectGitDiff).toHaveBeenCalledWith(
+      'C:\\repo\\agenclis',
+      'src/App.tsx',
+      false,
+    )
   })
 })

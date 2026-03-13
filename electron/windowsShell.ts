@@ -14,7 +14,7 @@ export function parseWhereOutput(output: string): string | null {
   return firstLine ?? null
 }
 
-function resolveExecutable(command: string): string | null {
+export function resolveExecutable(command: string): string | null {
   const result = spawnSync('where.exe', [command], {
     encoding: 'utf8',
     windowsHide: true,
