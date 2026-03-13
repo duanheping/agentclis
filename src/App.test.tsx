@@ -132,7 +132,6 @@ function mockElementRect(
     }),
   })
 }
-
 function createAgentCliMock(
   workspacePayload: ListSessionsResponse = buildWorkspacePayload(),
   gitOverview: ProjectGitOverview = buildProjectGitOverview(),

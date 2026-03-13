@@ -109,7 +109,6 @@ function readDiffPanelWidthPreference(): number {
     MAX_DIFF_PANEL_WIDTH,
   )
 }
-
 function readBooleanPreference(key: string, defaultValue: boolean): boolean {
   if (typeof window === 'undefined') {
     return defaultValue
@@ -1433,7 +1432,6 @@ function App() {
               onPointerDown={handleDiffResizerPointerDown}
             />
           ) : null}
-
           {showDiffPanel ? (
             <ProjectDiffPanel
               overview={projectGitOverview}
