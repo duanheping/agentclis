@@ -54,6 +54,8 @@ const api: AgentCliApi = {
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),
+  openFileReference: (target) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openFileReference, target),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   listWindowsCommandPrompts: () =>
     ipcRenderer.invoke(IPC_CHANNELS.listWindowsCommandPrompts),

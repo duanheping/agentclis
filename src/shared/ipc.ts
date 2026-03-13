@@ -38,6 +38,7 @@ export const IPC_CHANNELS = {
   applySkillAiMerge: 'skills:apply-ai-merge',
   pickDirectory: 'dialog:pick-directory',
   openPath: 'shell:open-path',
+  openFileReference: 'shell:open-file-reference',
   listWindowsCommandPrompts: 'shell:list-windows-command-prompts',
   openWindowsCommandPrompt: 'shell:open-windows-command-prompt',
   closeWindowsCommandPrompt: 'shell:close-windows-command-prompt',
@@ -76,6 +77,7 @@ export interface AgentCliApi {
   applySkillAiMerge(proposal: SkillAiMergeProposal): Promise<SkillSyncResult>
   pickDirectory(defaultPath?: string): Promise<string | null>
   openPath(targetPath: string): Promise<void>
+  openFileReference(target: string): Promise<void>
   getPathForFile(file: File): string
   listWindowsCommandPrompts(): Promise<string[]>
   openWindowsCommandPrompt(sessionId: string, cwd: string): Promise<void>
