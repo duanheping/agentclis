@@ -47,14 +47,6 @@ function buildProject(): ProjectSnapshot {
 function buildSkillLibrarySettings(): SkillLibrarySettings {
   return {
     libraryRoot: 'C:\\skills\\library',
-    providers: {
-      codex: {
-        targetRoot: 'C:\\Users\\hduan10\\.codex\\skills',
-      },
-      claude: {
-        targetRoot: 'C:\\Users\\hduan10\\.claude\\skills',
-      },
-    },
     autoSyncOnAppStart: false,
     primaryMergeAgent: 'codex',
     reviewMergeAgent: 'claude',
@@ -67,18 +59,21 @@ function buildSkillSyncStatus(): SkillSyncStatus {
     conflicts: [
       {
         skillName: 'document-topic-search',
-        recommendedRoot: 'codex',
+        recommendedRoot: 'discovered',
+        recommendedRootLabel: 'C:\\Users\\hduan10\\.codex\\skills',
         differingFiles: ['SKILL.md', 'notes.txt'],
         roots: [
           {
-            root: 'codex',
-            rootPath: 'C:\\Users\\hduan10\\.codex\\skills',
+            root: 'library',
+            label: 'Library',
+            rootPath: 'C:\\skills\\library',
             modifiedAt: '2026-03-12T12:00:00.000Z',
             fileCount: 2,
           },
           {
-            root: 'claude',
-            rootPath: 'C:\\Users\\hduan10\\.claude\\skills',
+            root: 'discovered',
+            label: 'C:\\Users\\hduan10\\.codex\\skills',
+            rootPath: 'C:\\Users\\hduan10',
             modifiedAt: '2026-03-12T11:00:00.000Z',
             fileCount: 2,
           },
@@ -88,21 +83,19 @@ function buildSkillSyncStatus(): SkillSyncStatus {
     roots: [
       {
         root: 'library',
+        label: 'Library',
         configured: true,
         rootPath: 'C:\\skills\\library',
         skillNames: ['document-topic-search'],
       },
       {
-        root: 'codex',
+        root: 'discovered',
+        label: 'Discovered folders',
         configured: true,
-        rootPath: 'C:\\Users\\hduan10\\.codex\\skills',
+        rootPath: 'C:\\Users\\hduan10',
         skillNames: ['document-topic-search'],
-      },
-      {
-        root: 'claude',
-        configured: true,
-        rootPath: 'C:\\Users\\hduan10\\.claude\\skills',
-        skillNames: ['document-topic-search'],
+        folderCount: 2,
+        message: 'Automatically scanned 2 folders under C:\\Users\\hduan10.',
       },
     ],
     lastSyncResult: null,
@@ -117,7 +110,7 @@ function buildSkillAiMergeProposal(): SkillAiMergeProposal {
     summary: 'Merged the clearer instructions and kept the useful helper notes.',
     rationale: 'Used the Codex SKILL.md structure and kept the extra notes file.',
     warnings: ['Double-check the notes wording before applying.'],
-    sourceRoots: ['codex', 'claude'],
+    sourceRoots: ['library', 'discovered'],
     files: [
       {
         path: 'SKILL.md',
@@ -145,7 +138,6 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       projects={[buildProject()]}
       activeSessionId="session-1"
       showProjectPaths
-      onToggleSidebar={() => {}}
       onCreateSession={() => {}}
       onCreateProject={() => {}}
       onCreateForProject={() => {}}
@@ -171,9 +163,6 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       onToggleSkillAutoSync={vi.fn().mockResolvedValue(undefined)}
       onSetPrimaryMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSetReviewMergeAgent={vi.fn().mockResolvedValue(undefined)}
-      onPickSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
-      onClearSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
-      onOpenSkillTargetRoot={vi.fn().mockResolvedValue(undefined)}
       onSyncSkills={vi.fn().mockResolvedValue(undefined)}
       onResolveSkillConflict={vi.fn().mockResolvedValue(undefined)}
       onGenerateSkillAiMerge={vi.fn().mockResolvedValue(undefined)}
@@ -216,14 +205,16 @@ describe('SessionSidebar', () => {
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
     expect(screen.getByText('Conflicts')).toBeInTheDocument()
-    expect(screen.getByText('Prefer Codex')).toBeInTheDocument()
+    expect(screen.getByText('Prefer C:\\Users\\hduan10\\.codex\\skills')).toBeInTheDocument()
     expect(screen.getByText('SKILL.md, notes.txt')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Use Codex' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Use C:\\Users\\hduan10\\.codex\\skills' }),
+    )
 
     expect(onResolveSkillConflict).toHaveBeenCalledWith(
       'document-topic-search',
-      'codex',
+      'discovered',
     )
   })
 
@@ -267,10 +258,10 @@ describe('SessionSidebar', () => {
 
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
-    expect(screen.getAllByRole('option', { name: 'Copilot' })).toHaveLength(2)
-
-    await user.selectOptions(screen.getByLabelText('Primary merge agent'), 'copilot')
-    await user.selectOptions(screen.getByLabelText('Review agent'), 'copilot')
+    await user.click(screen.getByRole('button', { name: 'Primary agent' }))
+    await user.click(screen.getByRole('option', { name: 'Copilot' }))
+    await user.click(screen.getByRole('button', { name: 'Secondary agent' }))
+    await user.click(screen.getByRole('option', { name: 'Copilot' }))
 
     expect(onSetPrimaryMergeAgent).toHaveBeenCalledWith('copilot')
     expect(onSetReviewMergeAgent).toHaveBeenCalledWith('copilot')

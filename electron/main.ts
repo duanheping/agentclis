@@ -117,15 +117,15 @@ async function createMainWindow(): Promise<void> {
     height: 960,
     minWidth: 1180,
     minHeight: 760,
-    backgroundColor: '#03070f',
+    backgroundColor: '#111111',
     title: 'Agent CLIs',
     autoHideMenuBar: true,
     titleBarStyle: useCustomTitleBar ? 'hidden' : 'default',
     titleBarOverlay: useCustomTitleBar
       ? {
-          color: '#07111f',
-          symbolColor: '#d7e2f1',
-          height: 46,
+          color: '#1b2026',
+          symbolColor: '#f4f4f5',
+          height: 54,
         }
       : false,
     webPreferences: {

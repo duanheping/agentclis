@@ -24,7 +24,6 @@ import type {
   SkillAiReviewAgent,
   SkillLibrarySettings,
   SkillSyncRoot,
-  SkillTargetProvider,
   SkillSyncStatus,
 } from './shared/skills'
 import type {
@@ -49,6 +48,7 @@ const MAX_DIFF_PANEL_WIDTH = 720
 const MIN_DESKTOP_CENTER_PANE_WIDTH = 420
 const RESIZER_KEYBOARD_STEP = 24
 const COMPACT_LAYOUT_MEDIA_QUERY = '(max-width: 980px)'
+const APP_BRAND_NAME = 'agentclis'
 type CreateDialogIntent = 'session' | 'project'
 type CreateDialogMode = 'default' | 'project-context'
 
@@ -179,6 +179,20 @@ function getDiffPanelMaxWidth(containerWidth: number): number {
   )
 }
 
+function formatCountLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function getTitlebarSectionLabel(project: ProjectSnapshot | null): string {
+  if (!project) {
+    return 'Local agent workspace'
+  }
+
+  return project.config.title.trim().toLowerCase() === APP_BRAND_NAME
+    ? 'Current project'
+    : project.config.title
+}
+
 function App() {
   const agentCli = window.agentCli
   const projects = useSessionsStore((state) => state.projects)
@@ -255,6 +269,8 @@ function App() {
     activeSessionId !== null &&
     windowsCommandPromptSessionIds.includes(activeSessionId)
   const showDiffPanel = hydrated && diffPanelOpen && Boolean(activeProjectPath)
+  const featuredProject = activeProject ?? projects[0] ?? null
+  const showWelcomeWorkspace = hydrated && sessions.length === 0
 
   const clampSidebarWidth = (nextWidth: number): number => {
     const containerWidth = appShellRef.current?.getBoundingClientRect().width
@@ -1040,63 +1056,6 @@ function App() {
     }))
   }
 
-  const handlePickSkillTargetRoot = async (provider: SkillTargetProvider) => {
-    if (!agentCli || !skillLibrarySettings) {
-      setSkillsErrorMessage('Skill settings are unavailable.')
-      return
-    }
-
-    try {
-      setSkillsErrorMessage(null)
-      const selectedPath = await agentCli.pickDirectory(
-        skillLibrarySettings.providers[provider].targetRoot ||
-          skillLibrarySettings.libraryRoot ||
-          undefined,
-      )
-
-      if (!selectedPath) {
-        return
-      }
-
-      await mutateSkillSettings((current) => ({
-        ...current,
-        providers: {
-          ...current.providers,
-          [provider]: {
-            targetRoot: selectedPath,
-          },
-        },
-      }))
-    } catch (error) {
-      setSkillsErrorMessage(getErrorMessage(error))
-    }
-  }
-
-  const handleClearSkillTargetRoot = async (provider: SkillTargetProvider) => {
-    await mutateSkillSettings((current) => ({
-      ...current,
-      providers: {
-        ...current.providers,
-        [provider]: {
-          targetRoot: '',
-        },
-      },
-    }))
-  }
-
-  const handleOpenSkillTargetRoot = async (provider: SkillTargetProvider) => {
-    if (!agentCli || !skillLibrarySettings?.providers[provider].targetRoot.trim()) {
-      return
-    }
-
-    try {
-      setSkillsErrorMessage(null)
-      await agentCli.openPath(skillLibrarySettings.providers[provider].targetRoot)
-    } catch (error) {
-      setSkillsErrorMessage(getErrorMessage(error))
-    }
-  }
-
   const handleSyncSkills = async () => {
     if (!agentCli) {
       setSkillsErrorMessage('Agent bridge is unavailable.')
@@ -1207,6 +1166,15 @@ function App() {
     setDialogProjectId(null)
   }
 
+  const openFeaturedSessionDialog = () => {
+    if (featuredProject) {
+      openCreateSessionDialog(featuredProject.config.id, 'project-context')
+      return
+    }
+
+    openCreateSessionDialog()
+  }
+
   const totalProjectAdditions =
     (projectGitOverview?.unstagedTotals.additions ?? 0) +
     (projectGitOverview?.stagedTotals.additions ?? 0)
@@ -1232,27 +1200,23 @@ function App() {
       <div className="app-shell__background" aria-hidden="true" />
 
       <header className="titlebar">
-        {!sidebarOpen ? (
-          <button
-            type="button"
-            className="titlebar__sidebar-toggle"
-            aria-label="Expand sidebar"
-            aria-expanded={sidebarOpen}
-            onClick={() => setSidebarOpen(true)}
-          >
-            <span className="titlebar__sidebar-toggle-icon" aria-hidden="true" />
-            <span className="titlebar__sidebar-toggle-label">Show sidebar</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="titlebar__sidebar-toggle"
+          aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+          aria-expanded={sidebarOpen}
+          onClick={() => setSidebarOpen((current) => !current)}
+        >
+          <span className="titlebar__sidebar-toggle-icon" aria-hidden="true" />
+        </button>
 
         <div className="titlebar__brand">
-          <span className="titlebar__name">Agent CLIs</span>
-          <span className="titlebar__separator" aria-hidden="true">
-            /
-          </span>
-          <span className="titlebar__section">
-            {activeProject?.config.title ?? 'Workspace'}
-          </span>
+          <div className="titlebar__brand-copy">
+            <span className="titlebar__name">{APP_BRAND_NAME}</span>
+            <span className="titlebar__section">
+              {getTitlebarSectionLabel(activeProject)}
+            </span>
+          </div>
         </div>
 
         <div className="titlebar__actions">
@@ -1267,7 +1231,7 @@ function App() {
             >
               <span className="titlebar-action__label">Open</span>
               <span className="titlebar-action__chevron" aria-hidden="true">
-                ▾
+                v
               </span>
             </button>
 
@@ -1318,7 +1282,7 @@ function App() {
             onClick={() => void handleToggleActiveWindowsCommandPrompt()}
           >
             <span className="titlebar-action__label">
-              {activeSessionHasWindowsCommandPrompt ? 'Hide cmd' : 'Toggle cmd'}
+              {activeSessionHasWindowsCommandPrompt ? 'Console on' : 'Console'}
             </span>
           </button>
 
@@ -1349,7 +1313,6 @@ function App() {
           projects={projects}
           activeSessionId={activeSessionId}
           showProjectPaths={showProjectPaths}
-          onToggleSidebar={() => setSidebarOpen(false)}
           onCreateSession={() => openCreateSessionDialog()}
           onCreateProject={openCreateProjectDialog}
           onCreateForProject={(projectId) =>
@@ -1379,9 +1342,6 @@ function App() {
           onToggleSkillAutoSync={handleToggleSkillAutoSync}
           onSetPrimaryMergeAgent={handleSetPrimaryMergeAgent}
           onSetReviewMergeAgent={handleSetReviewMergeAgent}
-          onPickSkillTargetRoot={handlePickSkillTargetRoot}
-          onClearSkillTargetRoot={handleClearSkillTargetRoot}
-          onOpenSkillTargetRoot={handleOpenSkillTargetRoot}
           onSyncSkills={handleSyncSkills}
           onResolveSkillConflict={handleResolveSkillConflict}
           onGenerateSkillAiMerge={handleGenerateSkillAiMerge}
@@ -1413,6 +1373,127 @@ function App() {
               <div>
                 <p className="eyebrow">Restoring</p>
                 <h2>Restoring previously opened sessions…</h2>
+              </div>
+            </div>
+          ) : showWelcomeWorkspace ? (
+            <div className="workspace-home">
+              <div className="workspace-home__header">
+                <div>
+                  <p className="workspace-home__eyebrow">New thread</p>
+                  <h1 className="workspace-home__title">Ready to build locally</h1>
+                </div>
+                <div className="workspace-home__stats" aria-label="Workspace summary">
+                  <div className="workspace-home__stat">
+                    <span>Projects</span>
+                    <strong>{formatCountLabel(projects.length, 'repo', 'repos')}</strong>
+                  </div>
+                  <div className="workspace-home__stat">
+                    <span>Sessions</span>
+                    <strong>{formatCountLabel(sessions.length, 'session', 'sessions')}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="workspace-home__hero">
+                <div className="workspace-home__logo" aria-hidden="true">
+                  <span className="workspace-home__logo-core" />
+                </div>
+                <div className="workspace-home__hero-copy">
+                  <h2>Let&apos;s build</h2>
+                  <button
+                    type="button"
+                    className="workspace-home__repo-button"
+                    onClick={featuredProject ? openFeaturedSessionDialog : openCreateProjectDialog}
+                  >
+                    {featuredProject?.config.title ?? 'agentclis'}
+                  </button>
+                  <p>
+                    Launch a local agent CLI, keep projects grouped in one rail,
+                    and inspect diffs without leaving the app.
+                  </p>
+                </div>
+              </div>
+
+              <div className="workspace-home__suggestions">
+                <button
+                  type="button"
+                  className="workspace-home__suggestion"
+                  onClick={openFeaturedSessionDialog}
+                >
+                  <span
+                    className="workspace-home__suggestion-icon workspace-home__suggestion-icon--terminal"
+                    aria-hidden="true"
+                  />
+                  <span className="workspace-home__suggestion-title">
+                    Start a Codex or Copilot session
+                  </span>
+                  <span className="workspace-home__suggestion-copy">
+                    Open the session flow and launch an agent inside your current repo.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-home__suggestion"
+                  onClick={openCreateProjectDialog}
+                >
+                  <span
+                    className="workspace-home__suggestion-icon workspace-home__suggestion-icon--folder"
+                    aria-hidden="true"
+                  />
+                  <span className="workspace-home__suggestion-title">
+                    Create a project from a local folder
+                  </span>
+                  <span className="workspace-home__suggestion-copy">
+                    Group future sessions under a repo root the way Codex threads do.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-home__suggestion"
+                  onClick={() => openCreateSessionDialog()}
+                >
+                  <span
+                    className="workspace-home__suggestion-icon workspace-home__suggestion-icon--spark"
+                    aria-hidden="true"
+                  />
+                  <span className="workspace-home__suggestion-title">
+                    Add a custom startup command
+                  </span>
+                  <span className="workspace-home__suggestion-copy">
+                    Bring in any agent CLI command when you need a non-default workflow.
+                  </span>
+                </button>
+              </div>
+
+              <div className="workspace-home__composer">
+                <button
+                  type="button"
+                  className="workspace-home__composer-main"
+                  onClick={openFeaturedSessionDialog}
+                >
+                  {featuredProject
+                    ? `Launch a session in ${featuredProject.config.title}`
+                    : 'Create your first local agent session'}
+                </button>
+                <div className="workspace-home__composer-footer">
+                  <span className="workspace-home__composer-chip">
+                    {featuredProject?.config.rootPath ?? 'Choose a repo root'}
+                  </span>
+                  <button
+                    type="button"
+                    className="workspace-home__composer-action"
+                    onClick={openCreateProjectDialog}
+                  >
+                    New project
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-home__composer-action"
+                    onClick={() => openCreateSessionDialog()}
+                  >
+                    New session
+                  </button>
+                </div>
               </div>
             </div>
           ) : (

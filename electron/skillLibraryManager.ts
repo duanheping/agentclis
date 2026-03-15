@@ -27,7 +27,6 @@ import {
   type SkillSyncRootResult,
   type SkillSyncRootStatus,
   type SkillSyncStatus,
-  type SkillTargetProvider,
 } from '../src/shared/skills'
 import { generateSkillMerge, reviewSkillMerge } from './skillMergeAgent'
 
@@ -38,6 +37,7 @@ interface PersistedSkillLibraryState {
 
 interface SkillSnapshot {
   root: SkillSyncRoot
+  label: string
   rootPath: string
   skillName: string
   files: Map<string, Buffer>
@@ -50,18 +50,19 @@ interface SkillSnapshot {
 
 interface ScannedRoot {
   root: SkillSyncRoot
+  label: string
   configured: boolean
   rootPath: string
   skillNames: string[]
   syncable: boolean
   skipMessage?: string
+  folderCount?: number
   snapshots: Map<string, SkillSnapshot>
 }
 
 interface PlannedSkillSync {
   skillName: string
   source: SkillSnapshot
-  targetRoots: SkillSyncRoot[]
 }
 
 interface SkillInspection {
@@ -79,22 +80,31 @@ interface DirectoryFiles {
   directories: string[]
 }
 
-const DEFAULT_TARGET_ROOTS: Record<SkillTargetProvider, string> = {
-  codex: path.join(os.homedir(), '.codex', 'skills'),
-  claude: path.join(os.homedir(), '.claude', 'skills'),
+interface DiscoveredSkillDirectory {
+  rootDirectory: string
+  skillDirectory: string
+  skillName: string
 }
+
+const HOME_SKILL_SCAN_ROOT = os.homedir()
+const SKILL_SCAN_MAX_DEPTH = 8
+const SKILL_SCAN_IGNORED_DIRECTORIES = new Set([
+  '.git',
+  'node_modules',
+  '__pycache__',
+  '.venv',
+  'venv',
+  'AppData',
+])
+const KNOWN_SKILL_ROOT_SEGMENTS = [
+  ['.codex', 'skills'],
+  ['.claude', 'skills'],
+  ['.copilot', 'skills'],
+] as const
 
 function buildDefaultSettings(): SkillLibrarySettings {
   return {
     libraryRoot: '',
-    providers: {
-      codex: {
-        targetRoot: DEFAULT_TARGET_ROOTS.codex,
-      },
-      claude: {
-        targetRoot: DEFAULT_TARGET_ROOTS.claude,
-      },
-    },
     autoSyncOnAppStart: false,
     primaryMergeAgent: 'codex',
     reviewMergeAgent: 'none',
@@ -130,20 +140,6 @@ function normalizeSettings(
   return {
     libraryRoot:
       typeof settings.libraryRoot === 'string' ? settings.libraryRoot.trim() : '',
-    providers: {
-      codex: {
-        targetRoot:
-          typeof settings.providers?.codex?.targetRoot === 'string'
-            ? settings.providers.codex.targetRoot.trim()
-            : DEFAULT_TARGET_ROOTS.codex,
-      },
-      claude: {
-        targetRoot:
-          typeof settings.providers?.claude?.targetRoot === 'string'
-            ? settings.providers.claude.targetRoot.trim()
-            : DEFAULT_TARGET_ROOTS.claude,
-      },
-    },
     autoSyncOnAppStart: Boolean(settings.autoSyncOnAppStart),
     primaryMergeAgent,
     reviewMergeAgent: normalizeReviewMergeAgent(
@@ -193,17 +189,16 @@ function rootLabel(root: SkillSyncRoot): string {
     return 'Library'
   }
 
-  return root === 'codex' ? 'Codex' : 'Claude'
+  return 'Discovered folders'
 }
 
-function buildRootPathMap(
-  settings: SkillLibrarySettings,
-): Record<SkillSyncRoot, string> {
-  return {
-    library: settings.libraryRoot,
-    codex: settings.providers.codex.targetRoot,
-    claude: settings.providers.claude.targetRoot,
-  }
+function getSkillScanRoot(): string {
+  const override = process.env.AGENCLIS_SKILL_SCAN_ROOT?.trim()
+  return override || HOME_SKILL_SCAN_ROOT
+}
+
+function getKnownSkillRoots(scanRoot: string): string[] {
+  return KNOWN_SKILL_ROOT_SEGMENTS.map((segments) => path.join(scanRoot, ...segments))
 }
 
 function sortIssues(issues: SkillSyncIssue[]): SkillSyncIssue[] {
@@ -238,9 +233,12 @@ function toPublicStatus(
 ): SkillSyncRootStatus {
   return {
     root: scannedRoot.root,
+    label: scannedRoot.label,
     configured: scannedRoot.configured,
     rootPath: scannedRoot.rootPath,
     skillNames: sortStrings(scannedRoot.skillNames),
+    folderCount: scannedRoot.folderCount,
+    message: scannedRoot.skipMessage,
   }
 }
 
@@ -268,6 +266,67 @@ async function listSkillDirectories(rootPath: string): Promise<string[]> {
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right))
+}
+
+function toDisplayPath(targetPath: string): string {
+  const homePath = getSkillScanRoot().replace(/[\\/]+$/, '')
+  const normalizedTarget = targetPath.replace(/[\\/]+$/, '')
+
+  if (normalizedTarget === homePath) {
+    return homePath
+  }
+
+  if (normalizedTarget.startsWith(`${homePath}${path.sep}`)) {
+    return `~${normalizedTarget.slice(homePath.length)}`
+  }
+
+  return targetPath
+}
+
+async function discoverSkillDirectories(
+  rootPath: string,
+): Promise<DiscoveredSkillDirectory[]> {
+  const discovered = new Map<string, DiscoveredSkillDirectory>()
+
+  async function visit(currentPath: string, depth: number): Promise<void> {
+    if (depth > SKILL_SCAN_MAX_DEPTH) {
+      return
+    }
+
+    const entries = await readdir(currentPath, { withFileTypes: true }).catch(() => [])
+    const hasSkillMd = entries.some(
+      (entry) => entry.isFile() && entry.name === 'SKILL.md',
+    )
+
+    if (hasSkillMd) {
+      const skillName = path.basename(currentPath)
+      const rootDirectory = path.dirname(currentPath)
+      discovered.set(currentPath, {
+        rootDirectory,
+        skillDirectory: currentPath,
+        skillName,
+      })
+      return
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue
+      }
+
+      if (SKILL_SCAN_IGNORED_DIRECTORIES.has(entry.name)) {
+        continue
+      }
+
+      await visit(path.join(currentPath, entry.name), depth + 1)
+    }
+  }
+
+  await visit(rootPath, 0)
+
+  return [...discovered.values()].sort((left, right) =>
+    left.skillDirectory.localeCompare(right.skillDirectory),
+  )
 }
 
 async function listFilesRecursive(rootPath: string): Promise<DirectoryFiles> {
@@ -345,14 +404,20 @@ function buildConflict(
   snapshots: SkillSnapshot[],
 ): SkillConflict {
   const differingFiles = collectDifferingFiles(snapshots)
+  const recommendedRoot = recommendRoot(snapshots)
+  const recommendedSnapshot = recommendedRoot
+    ? snapshots.find((snapshot) => snapshot.root === recommendedRoot) ?? null
+    : null
 
   return {
     skillName,
-    recommendedRoot: recommendRoot(snapshots),
+    recommendedRoot,
+    recommendedRootLabel: recommendedSnapshot?.label ?? null,
     differingFiles,
     roots: snapshots
       .map<SkillConflictRootVersion>((snapshot) => ({
         root: snapshot.root,
+        label: snapshot.label,
         rootPath: snapshot.rootPath,
         modifiedAt: snapshot.modifiedAt,
         fileCount: snapshot.fileCount,
@@ -432,9 +497,10 @@ function recommendRoot(
 async function readSkillSnapshot(
   root: SkillSyncRoot,
   rootPath: string,
+  label: string,
   skillName: string,
+  skillRoot = path.join(rootPath, skillName),
 ): Promise<{ issues: SkillSyncIssue[]; snapshot: SkillSnapshot | null }> {
-  const skillRoot = path.join(rootPath, skillName)
   const skillMdPath = path.join(skillRoot, 'SKILL.md')
 
   if (!(await pathExists(skillMdPath))) {
@@ -443,8 +509,9 @@ async function readSkillSnapshot(
         {
           severity: 'warning',
           code: 'missing-skill-md',
-          message: `${rootLabel(root)} copy is missing SKILL.md.`,
+          message: `${label} is missing SKILL.md for "${skillName}".`,
           root,
+          rootLabel: label,
           skillName,
         },
       ],
@@ -479,6 +546,7 @@ async function readSkillSnapshot(
               ? `Failed to read ${skillName}: ${error.message}`
               : `Failed to read ${skillName}.`,
           root,
+          rootLabel: label,
           skillName,
         },
       ],
@@ -490,6 +558,7 @@ async function readSkillSnapshot(
     issues: [],
     snapshot: {
       root,
+      label,
       rootPath,
       skillName,
       files,
@@ -558,22 +627,20 @@ export class SkillLibraryManager {
     const changedSkillsByRoot = this.initializeChangedSkillMap()
 
     if (!inspection.blockSync) {
+      const libraryRoot = inspection.scannedRoots.get('library')
+
       for (const plan of inspection.plans) {
-        for (const root of plan.targetRoots) {
-          const scannedRoot = inspection.scannedRoots.get(root)
+        if (!libraryRoot?.syncable || !libraryRoot.rootPath) {
+          continue
+        }
 
-          if (!scannedRoot?.syncable || !scannedRoot.rootPath) {
-            continue
-          }
+        const changed = await this.syncSkillDirectory(
+          path.join(libraryRoot.rootPath, plan.skillName),
+          plan.source.files,
+        )
 
-          const changed = await this.syncSkillDirectory(
-            path.join(scannedRoot.rootPath, plan.skillName),
-            plan.source.files,
-          )
-
-          if (changed) {
-            changedSkillsByRoot.get(root)?.add(plan.skillName)
-          }
+        if (changed) {
+          changedSkillsByRoot.get('library')?.add(plan.skillName)
         }
       }
     }
@@ -622,19 +689,16 @@ export class SkillLibraryManager {
     }
 
     const changedSkillsByRoot = this.initializeChangedSkillMap()
+    const libraryRoot = inspection.scannedRoots.get('library')
 
-    for (const scannedRoot of inspection.scannedRoots.values()) {
-      if (!scannedRoot.configured || !scannedRoot.syncable || !scannedRoot.rootPath) {
-        continue
-      }
-
+    if (sourceRoot !== 'library' && libraryRoot?.syncable && libraryRoot.rootPath) {
       const changed = await this.syncSkillDirectory(
-        path.join(scannedRoot.rootPath, skillName),
+        path.join(libraryRoot.rootPath, skillName),
         snapshot.files,
       )
 
       if (changed) {
-        changedSkillsByRoot.get(scannedRoot.root)?.add(skillName)
+        changedSkillsByRoot.get('library')?.add(skillName)
       }
     }
 
@@ -687,19 +751,16 @@ export class SkillLibraryManager {
     const inspection = await this.inspectRoots()
     const changedSkillsByRoot = this.initializeChangedSkillMap()
     const desiredFiles = this.buildDesiredFilesFromProposal(proposal)
+    const libraryRoot = inspection.scannedRoots.get('library')
 
-    for (const scannedRoot of inspection.scannedRoots.values()) {
-      if (!scannedRoot.configured || !scannedRoot.syncable || !scannedRoot.rootPath) {
-        continue
-      }
-
+    if (libraryRoot?.syncable && libraryRoot.rootPath) {
       const changed = await this.syncSkillDirectory(
-        path.join(scannedRoot.rootPath, proposal.skillName),
+        path.join(libraryRoot.rootPath, proposal.skillName),
         desiredFiles,
       )
 
       if (changed) {
-        changedSkillsByRoot.get(scannedRoot.root)?.add(proposal.skillName)
+        changedSkillsByRoot.get('library')?.add(proposal.skillName)
       }
     }
 
@@ -807,34 +868,56 @@ export class SkillLibraryManager {
     if (!scannedRoot?.configured) {
       return {
         root,
+        label: scannedRoot?.label ?? rootLabel(root),
         rootPath: scannedRoot?.rootPath ?? '',
         synchronizedSkills: [],
         changedSkills: [],
         changed: false,
         skipped: true,
-        message: 'Root is not configured.',
+        message: scannedRoot?.skipMessage ?? 'Root is not configured.',
+        folderCount: scannedRoot?.folderCount,
       }
     }
 
     if (!scannedRoot.syncable) {
       return {
         root,
+        label: scannedRoot.label,
         rootPath: scannedRoot.rootPath,
         synchronizedSkills: [],
         changedSkills: [],
         changed: false,
         skipped: true,
         message: scannedRoot.skipMessage ?? 'Root is unavailable.',
+        folderCount: scannedRoot.folderCount,
+      }
+    }
+
+    if (root === 'discovered') {
+      return {
+        root,
+        label: scannedRoot.label,
+        rootPath: scannedRoot.rootPath,
+        synchronizedSkills: [],
+        changedSkills: [],
+        changed: false,
+        skipped: true,
+        message:
+          scannedRoot.skipMessage ??
+          `Automatically scanned ${scannedRoot.folderCount ?? 0} known skill folders.`,
+        folderCount: scannedRoot.folderCount,
       }
     }
 
     return {
       root,
+      label: scannedRoot.label,
       rootPath: scannedRoot.rootPath,
       synchronizedSkills,
       changedSkills: sortStrings(changedSkills),
       changed: changedSkills.size > 0,
       skipped: false,
+      folderCount: scannedRoot.folderCount,
     }
   }
 
@@ -842,7 +925,6 @@ export class SkillLibraryManager {
     const settings = this.getSettings()
     const issues: SkillSyncIssue[] = []
     const scannedRoots = new Map<SkillSyncRoot, ScannedRoot>()
-    const rootPathMap = buildRootPathMap(settings)
 
     if (!settings.libraryRoot) {
       issues.push({
@@ -853,21 +935,14 @@ export class SkillLibraryManager {
       })
     }
 
-    const scanned = await Promise.all(
-      SKILL_SYNC_ROOTS.map((root) => this.scanRoot(root, rootPathMap[root])),
-    )
+    const scanned = await Promise.all([
+      this.scanLibraryRoot(settings.libraryRoot),
+      this.scanDiscoveredRoot(getSkillScanRoot(), settings.libraryRoot),
+    ])
 
     for (const scannedRoot of scanned) {
       scannedRoots.set(scannedRoot.root.root, scannedRoot.root)
       issues.push(...scannedRoot.issues)
-    }
-
-    if (SKILL_SYNC_ROOTS.every((root) => !scannedRoots.get(root)?.configured)) {
-      issues.push({
-        severity: 'error',
-        code: 'no-configured-roots',
-        message: 'Configure at least one skill root before syncing.',
-      })
     }
 
     const snapshotsBySkill = new Map<string, Map<SkillSyncRoot, SkillSnapshot>>()
@@ -887,10 +962,6 @@ export class SkillLibraryManager {
 
     const plans: PlannedSkillSync[] = []
     const conflicts: SkillConflict[] = []
-    const targetRoots = SKILL_SYNC_ROOTS.filter((root) => {
-      const scannedRoot = scannedRoots.get(root)
-      return Boolean(scannedRoot?.configured && scannedRoot.syncable)
-    })
 
     for (const skillName of sortStrings(allSkillNames)) {
       const validSnapshots = [...(snapshotsBySkill.get(skillName)?.values() ?? [])]
@@ -913,12 +984,14 @@ export class SkillLibraryManager {
         const source = validSnapshots
           .slice()
           .sort((left, right) => right.modifiedTimestamp - left.modifiedTimestamp)[0]!
+        const librarySnapshot = snapshotsBySkill.get(skillName)?.get('library') ?? null
 
-        plans.push({
-          skillName,
-          source,
-          targetRoots,
-        })
+        if (!librarySnapshot || librarySnapshot.fingerprint !== source.fingerprint) {
+          plans.push({
+            skillName,
+            source,
+          })
+        }
         continue
       }
 
@@ -928,7 +1001,6 @@ export class SkillLibraryManager {
     const libraryRoot = scannedRoots.get('library')
     const blockingIssueCodes = new Set([
       'missing-library-root',
-      'no-configured-roots',
       'root-not-directory',
       'root-read-failed',
     ])
@@ -948,6 +1020,7 @@ export class SkillLibraryManager {
         toPublicStatus(
           scannedRoots.get(root) ?? {
             root,
+            label: rootLabel(root),
             configured: false,
             rootPath: '',
             skillNames: [],
@@ -962,13 +1035,13 @@ export class SkillLibraryManager {
     }
   }
 
-  private async scanRoot(
-    root: SkillSyncRoot,
+  private async scanLibraryRoot(
     rootPath: string,
   ): Promise<{ issues: SkillSyncIssue[]; root: ScannedRoot }> {
     const configured = Boolean(rootPath)
     const scannedRoot: ScannedRoot = {
-      root,
+      root: 'library',
+      label: rootLabel('library'),
       configured,
       rootPath,
       skillNames: [],
@@ -993,8 +1066,8 @@ export class SkillLibraryManager {
       issues.push({
         severity: 'error',
         code: 'root-not-directory',
-        message: `${rootLabel(root)} root must point to a directory.`,
-        root,
+        message: 'Library root must point to a directory.',
+        root: 'library',
       })
       return {
         issues,
@@ -1020,9 +1093,9 @@ export class SkillLibraryManager {
         code: 'root-read-failed',
         message:
           error instanceof Error
-            ? `Failed to read ${rootLabel(root)} root: ${error.message}`
-            : `Failed to read ${rootLabel(root)} root.`,
-        root,
+            ? `Failed to read Library root: ${error.message}`
+            : 'Failed to read Library root.',
+        root: 'library',
       })
       return {
         issues,
@@ -1033,11 +1106,112 @@ export class SkillLibraryManager {
     scannedRoot.skillNames = skillNames
 
     for (const skillName of skillNames) {
-      const snapshot = await readSkillSnapshot(root, rootPath, skillName)
+      const snapshot = await readSkillSnapshot(
+        'library',
+        rootPath,
+        rootLabel('library'),
+        skillName,
+      )
       issues.push(...snapshot.issues)
 
       if (snapshot.snapshot) {
         scannedRoot.snapshots.set(skillName, snapshot.snapshot)
+      }
+    }
+
+    return {
+      issues,
+      root: scannedRoot,
+    }
+  }
+
+  private async scanDiscoveredRoot(
+    rootPath: string,
+    libraryRootPath: string,
+  ): Promise<{ issues: SkillSyncIssue[]; root: ScannedRoot }> {
+    const normalizedLibraryRoot = libraryRootPath.replace(/[\\/]+$/, '')
+    const discoveredSkillRoots = getKnownSkillRoots(rootPath)
+    const discoveredDirectories = (
+      await Promise.all(
+        discoveredSkillRoots.map((skillRoot) => discoverSkillDirectories(skillRoot)),
+      )
+    ).flat()
+    const discovered = discoveredDirectories.filter((entry) => {
+      const normalizedSkillRoot = entry.skillDirectory.replace(/[\\/]+$/, '')
+      const normalizedRootDirectory = entry.rootDirectory.replace(/[\\/]+$/, '')
+
+      if (!normalizedLibraryRoot) {
+        return true
+      }
+
+      return (
+        normalizedSkillRoot !== normalizedLibraryRoot &&
+        !normalizedSkillRoot.startsWith(`${normalizedLibraryRoot}${path.sep}`) &&
+        normalizedRootDirectory !== normalizedLibraryRoot &&
+        !normalizedRootDirectory.startsWith(`${normalizedLibraryRoot}${path.sep}`)
+      )
+    })
+    const groupedBySkill = new Map<string, DiscoveredSkillDirectory[]>()
+
+    for (const entry of discovered) {
+      const group = groupedBySkill.get(entry.skillName) ?? []
+      group.push(entry)
+      groupedBySkill.set(entry.skillName, group)
+    }
+
+    const uniqueRootDirectories = new Set(
+      discovered.map((entry) => entry.rootDirectory),
+    )
+    const scannedRoot: ScannedRoot = {
+      root: 'discovered',
+      label: rootLabel('discovered'),
+      configured: discovered.length > 0,
+      rootPath,
+      skillNames: sortStrings(groupedBySkill.keys()),
+      syncable: discovered.length > 0,
+      skipMessage:
+        discovered.length > 0
+          ? `Automatically scanned ${uniqueRootDirectories.size} known skill folders.`
+          : 'No skill folders were found in .codex/skills, .claude/skills, or .copilot/skills.',
+      folderCount: uniqueRootDirectories.size,
+      snapshots: new Map<string, SkillSnapshot>(),
+    }
+    const issues: SkillSyncIssue[] = []
+
+    for (const [skillName, directories] of groupedBySkill.entries()) {
+      const candidates: SkillSnapshot[] = []
+
+      for (const directory of directories) {
+        const snapshot = await readSkillSnapshot(
+          'discovered',
+          directory.rootDirectory,
+          toDisplayPath(directory.rootDirectory),
+          skillName,
+          directory.skillDirectory,
+        )
+        issues.push(...snapshot.issues)
+
+        if (snapshot.snapshot) {
+          candidates.push(snapshot.snapshot)
+        }
+      }
+
+      if (candidates.length === 0) {
+        continue
+      }
+
+      candidates.sort((left, right) => right.modifiedTimestamp - left.modifiedTimestamp)
+      scannedRoot.snapshots.set(skillName, candidates[0]!)
+
+      if (candidates.length > 1) {
+        issues.push({
+          severity: 'warning',
+          code: 'duplicate-discovered-skill',
+          message: `Detected ${candidates.length} copies of "${skillName}" across .codex/skills, .claude/skills, or .copilot/skills. Using the newest copy from ${candidates[0]!.label}.`,
+          skillName,
+          root: 'discovered',
+          rootLabel: rootLabel('discovered'),
+        })
       }
     }
 

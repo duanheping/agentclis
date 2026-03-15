@@ -146,13 +146,13 @@ describe('skillMergeAgent', () => {
   it('generates and reviews a Claude merge proposal', async () => {
     const proposal = await generateSkillMerge('claude', 'document-topic-search', [
       {
-        root: 'codex',
+        root: 'library',
         files: new Map([
           ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
         ]),
       },
       {
-        root: 'claude',
+        root: 'discovered',
         files: new Map([
           ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
         ]),
@@ -161,13 +161,13 @@ describe('skillMergeAgent', () => {
 
     const review = await reviewSkillMerge('claude', proposal, [
       {
-        root: 'codex',
+        root: 'library',
         files: new Map([
           ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
         ]),
       },
       {
-        root: 'claude',
+        root: 'discovered',
         files: new Map([
           ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
         ]),
@@ -201,13 +201,13 @@ describe('skillMergeAgent', () => {
   it('generates and reviews a Copilot merge proposal', async () => {
     const proposal = await generateSkillMerge('copilot', 'document-topic-search', [
       {
-        root: 'codex',
+        root: 'library',
         files: new Map([
           ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
         ]),
       },
       {
-        root: 'claude',
+        root: 'discovered',
         files: new Map([
           ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
         ]),
@@ -216,13 +216,13 @@ describe('skillMergeAgent', () => {
 
     const review = await reviewSkillMerge('copilot', proposal, [
       {
-        root: 'codex',
+        root: 'library',
         files: new Map([
           ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
         ]),
       },
       {
-        root: 'claude',
+        root: 'discovered',
         files: new Map([
           ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
         ]),

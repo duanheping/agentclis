@@ -20,14 +20,6 @@ import { useSessionsStore } from './store/useSessionsStore'
 function buildSkillSettings(): SkillLibrarySettings {
   return {
     libraryRoot: '',
-    providers: {
-      codex: {
-        targetRoot: 'C:\\Users\\hduan10\\.codex\\skills',
-      },
-      claude: {
-        targetRoot: 'C:\\Users\\hduan10\\.claude\\skills',
-      },
-    },
     autoSyncOnAppStart: false,
     primaryMergeAgent: 'codex',
     reviewMergeAgent: 'none',
@@ -48,21 +40,19 @@ function buildSkillStatus(): SkillSyncStatus {
     roots: [
       {
         root: 'library',
+        label: 'Library',
         configured: false,
         rootPath: '',
         skillNames: [],
       },
       {
-        root: 'codex',
+        root: 'discovered',
+        label: 'Discovered folders',
         configured: true,
-        rootPath: 'C:\\Users\\hduan10\\.codex\\skills',
+        rootPath: 'C:\\Users\\hduan10',
         skillNames: [],
-      },
-      {
-        root: 'claude',
-        configured: true,
-        rootPath: 'C:\\Users\\hduan10\\.claude\\skills',
-        skillNames: [],
+        folderCount: 2,
+        message: 'Automatically scanned 2 folders under C:\\Users\\hduan10.',
       },
     ],
     lastSyncResult: null,
@@ -149,6 +139,7 @@ function createAgentCliMock(
     roots: [
       {
         root: 'library',
+        label: 'Library',
         rootPath: 'C:\\repo\\agentclis-skills',
         synchronizedSkills: ['document-topic-search'],
         changedSkills: ['document-topic-search'],
@@ -156,20 +147,15 @@ function createAgentCliMock(
         skipped: false,
       },
       {
-        root: 'codex',
-        rootPath: 'C:\\skills\\codex',
-        synchronizedSkills: ['document-topic-search'],
-        changedSkills: ['document-topic-search'],
-        changed: true,
-        skipped: false,
-      },
-      {
-        root: 'claude',
-        rootPath: 'C:\\skills\\claude',
-        synchronizedSkills: ['document-topic-search'],
-        changedSkills: ['document-topic-search'],
-        changed: true,
-        skipped: false,
+        root: 'discovered',
+        label: 'Discovered folders',
+        rootPath: 'C:\\Users\\hduan10',
+        synchronizedSkills: [],
+        changedSkills: [],
+        changed: false,
+        skipped: true,
+        folderCount: 2,
+        message: 'Automatically scanned 2 folders under C:\\Users\\hduan10.',
       },
     ],
   }
@@ -184,6 +170,7 @@ function createAgentCliMock(
     roots: [
       {
         root: 'library',
+        label: 'Library',
         rootPath: 'C:\\repo\\agentclis-skills',
         synchronizedSkills: ['document-topic-search'],
         changedSkills: ['document-topic-search'],
@@ -191,20 +178,15 @@ function createAgentCliMock(
         skipped: false,
       },
       {
-        root: 'codex',
-        rootPath: 'C:\\skills\\codex',
-        synchronizedSkills: ['document-topic-search'],
-        changedSkills: ['document-topic-search'],
-        changed: true,
-        skipped: false,
-      },
-      {
-        root: 'claude',
-        rootPath: 'C:\\skills\\claude',
-        synchronizedSkills: ['document-topic-search'],
-        changedSkills: ['document-topic-search'],
-        changed: true,
-        skipped: false,
+        root: 'discovered',
+        label: 'Discovered folders',
+        rootPath: 'C:\\Users\\hduan10',
+        synchronizedSkills: [],
+        changedSkills: [],
+        changed: false,
+        skipped: true,
+        folderCount: 2,
+        message: 'Automatically scanned 2 folders under C:\\Users\\hduan10.',
       },
     ],
   }
@@ -217,7 +199,7 @@ function createAgentCliMock(
     rationale:
       'Kept the clearer SKILL.md structure, retained both useful helper scripts, and removed duplicate wording.',
     warnings: ['Review the merged notes.txt wording before final apply.'],
-    sourceRoots: ['codex', 'claude'],
+    sourceRoots: ['library', 'discovered'],
     files: [
       {
         path: 'SKILL.md',
@@ -269,18 +251,21 @@ function createAgentCliMock(
           ? [
               {
                 skillName: 'document-topic-search',
-                recommendedRoot: 'codex',
+                recommendedRoot: 'discovered',
+                recommendedRootLabel: 'C:\\Users\\hduan10\\.codex\\skills',
                 differingFiles: ['SKILL.md'],
                 roots: [
                   {
-                    root: 'codex',
-                    rootPath: currentSkillSettings.providers.codex.targetRoot,
+                    root: 'library',
+                    label: 'Library',
+                    rootPath: currentSkillSettings.libraryRoot,
                     modifiedAt: '2026-03-12T18:00:00.000Z',
                     fileCount: 1,
                   },
                   {
-                    root: 'claude',
-                    rootPath: currentSkillSettings.providers.claude.targetRoot,
+                    root: 'discovered',
+                    label: 'C:\\Users\\hduan10\\.codex\\skills',
+                    rootPath: 'C:\\Users\\hduan10',
                     modifiedAt: '2026-03-12T17:59:00.000Z',
                     fileCount: 1,
                   },
@@ -291,6 +276,7 @@ function createAgentCliMock(
         roots: [
           {
             root: 'library',
+            label: 'Library',
             configured: Boolean(currentSkillSettings.libraryRoot),
             rootPath: currentSkillSettings.libraryRoot,
             skillNames: currentSkillSettings.libraryRoot
@@ -298,20 +284,15 @@ function createAgentCliMock(
               : [],
           },
           {
-            root: 'codex',
-            configured: Boolean(currentSkillSettings.providers.codex.targetRoot),
-            rootPath: currentSkillSettings.providers.codex.targetRoot,
+            root: 'discovered',
+            label: 'Discovered folders',
+            configured: true,
+            rootPath: 'C:\\Users\\hduan10',
             skillNames: currentSkillSettings.libraryRoot
               ? ['document-topic-search']
               : [],
-          },
-          {
-            root: 'claude',
-            configured: Boolean(currentSkillSettings.providers.claude.targetRoot),
-            rootPath: currentSkillSettings.providers.claude.targetRoot,
-            skillNames: currentSkillSettings.libraryRoot
-              ? ['document-topic-search']
-              : [],
+            folderCount: 2,
+            message: 'Automatically scanned 2 folders under C:\\Users\\hduan10.',
           },
         ],
         lastSyncResult: currentSkillStatus.lastSyncResult,
@@ -352,9 +333,7 @@ function createAgentCliMock(
     }),
     pickDirectory: vi
       .fn()
-      .mockResolvedValueOnce('C:\\repo\\agentclis-skills')
-      .mockResolvedValueOnce('C:\\skills\\codex')
-      .mockResolvedValueOnce('C:\\skills\\claude'),
+      .mockResolvedValueOnce('C:\\repo\\agentclis-skills'),
     openPath: vi.fn().mockResolvedValue(undefined),
     openProject: vi.fn().mockResolvedValue(undefined),
     getProjectGitOverview: vi.fn().mockResolvedValue(gitOverview),
@@ -427,20 +406,16 @@ describe('App skills settings', () => {
       screen.getByText('Library: Library root is not configured.'),
     ).toBeInTheDocument()
 
-    const chooseButtons = screen.getAllByRole('button', { name: 'Choose' })
-    await user.click(chooseButtons[0]!)
-    await user.click(chooseButtons[1]!)
-    await user.click(chooseButtons[2]!)
+    await user.click(screen.getByRole('button', { name: 'Choose' }))
 
     await waitFor(() => {
       expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
     })
 
-    await user.selectOptions(
-      screen.getByLabelText('Primary merge agent'),
-      'claude',
-    )
-    await user.selectOptions(screen.getByLabelText('Review agent'), 'copilot')
+    await user.click(screen.getByRole('button', { name: 'Primary agent' }))
+    await user.click(screen.getByRole('option', { name: 'Claude' }))
+    await user.click(screen.getByRole('button', { name: 'Secondary agent' }))
+    await user.click(screen.getByRole('option', { name: 'Copilot' }))
 
     await user.click(screen.getByRole('button', { name: 'Sync now' }))
 
@@ -470,14 +445,15 @@ describe('App skills settings', () => {
     await screen.findByText('Create a project or session to get started.')
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
-    const chooseButtons = screen.getAllByRole('button', { name: 'Choose' })
-    await user.click(chooseButtons[0]!)
+    await user.click(screen.getByRole('button', { name: 'Choose' }))
 
     await waitFor(() => {
       expect(screen.getByText('Conflicts')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Use Codex' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Use C:\\Users\\hduan10\\.codex\\skills' }),
+    )
 
     await waitFor(() => {
       expect(screen.queryByText('Conflicts')).not.toBeInTheDocument()
@@ -485,7 +461,7 @@ describe('App skills settings', () => {
 
     expect(agentCli.resolveSkillConflict).toHaveBeenCalledWith(
       'document-topic-search',
-      'codex',
+      'discovered',
     )
   })
 
@@ -500,8 +476,7 @@ describe('App skills settings', () => {
     await screen.findByText('Create a project or session to get started.')
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
-    const chooseButtons = screen.getAllByRole('button', { name: 'Choose' })
-    await user.click(chooseButtons[0]!)
+    await user.click(screen.getByRole('button', { name: 'Choose' }))
 
     await waitFor(() => {
       expect(screen.getByText('Conflicts')).toBeInTheDocument()

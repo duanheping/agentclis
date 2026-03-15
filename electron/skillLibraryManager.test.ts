@@ -5,7 +5,6 @@ import {
   mkdir,
   readFile,
   rm,
-  utimes,
   writeFile,
 } from 'node:fs/promises'
 import os from 'node:os'
@@ -71,38 +70,34 @@ async function writeFiles(
 
 describe('SkillLibraryManager', () => {
   let tempRoot: string
+  let previousScanRoot: string | undefined
 
   beforeEach(async () => {
     mocks.reset()
     tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-skills-'))
+    previousScanRoot = process.env.AGENCLIS_SKILL_SCAN_ROOT
+    process.env.AGENCLIS_SKILL_SCAN_ROOT = tempRoot
   })
 
   afterEach(async () => {
+    if (previousScanRoot === undefined) {
+      delete process.env.AGENCLIS_SKILL_SCAN_ROOT
+    } else {
+      process.env.AGENCLIS_SKILL_SCAN_ROOT = previousScanRoot
+    }
+
     await rm(tempRoot, { recursive: true, force: true })
   })
 
   async function createManager(): Promise<{
     manager: SkillLibraryManager
     libraryRoot: string
-    codexRoot: string
-    claudeRoot: string
   }> {
     const libraryRoot = path.join(tempRoot, 'library')
-    const codexRoot = path.join(tempRoot, 'codex')
-    const claudeRoot = path.join(tempRoot, 'claude')
     const manager = new SkillLibraryManager()
 
     manager.updateSettings({
-      ...manager.getSettings(),
       libraryRoot,
-      providers: {
-        codex: {
-          targetRoot: codexRoot,
-        },
-        claude: {
-          targetRoot: claudeRoot,
-        },
-      },
       autoSyncOnAppStart: false,
       primaryMergeAgent: 'codex',
       reviewMergeAgent: 'none',
@@ -111,20 +106,20 @@ describe('SkillLibraryManager', () => {
     return {
       manager,
       libraryRoot,
-      codexRoot,
-      claudeRoot,
     }
   }
 
-  it('auto-syncs a single valid skill version to the other roots', async () => {
-    const { manager, libraryRoot, codexRoot, claudeRoot } = await createManager()
+  function knownSkillRoot(provider: 'codex' | 'claude' | 'copilot'): string {
+    return path.join(tempRoot, `.${provider}`, 'skills')
+  }
 
-    await writeFiles(libraryRoot, {
+  it('syncs discovered skills into the configured library root', async () => {
+    const { manager, libraryRoot } = await createManager()
+    const discoveredRoot = knownSkillRoot('codex')
+
+    await writeFiles(discoveredRoot, {
       'document-topic-search/SKILL.md': '# skill\n',
       'document-topic-search/references/readme.md': 'shared\n',
-    })
-    await writeFiles(codexRoot, {
-      'document-topic-search/scripts/tool.py': 'print("broken")\n',
     })
 
     const result = await manager.sync()
@@ -135,75 +130,54 @@ describe('SkillLibraryManager', () => {
     expect(status.issues).toEqual([])
     await expect(
       readFile(
-        path.join(codexRoot, 'document-topic-search', 'SKILL.md'),
-        'utf8',
-      ),
-    ).resolves.toBe('# skill\n')
-    await expect(
-      readFile(
-        path.join(claudeRoot, 'document-topic-search', 'SKILL.md'),
+        path.join(libraryRoot, 'document-topic-search', 'SKILL.md'),
         'utf8',
       ),
     ).resolves.toBe('# skill\n')
   })
 
-  it('detects conflicting copies and recommends the newest one', async () => {
-    const { manager, codexRoot, claudeRoot } = await createManager()
+  it('detects a library conflict against the newest discovered copy', async () => {
+    const { manager, libraryRoot } = await createManager()
+    const discoveredRoot = knownSkillRoot('codex')
 
-    await writeFiles(codexRoot, {
-      'document-topic-search/SKILL.md': '# codex\n',
-      'document-topic-search/notes.txt': 'codex\n',
+    await writeFiles(libraryRoot, {
+      'document-topic-search/SKILL.md': '# library\n',
     })
-    await writeFiles(claudeRoot, {
-      'document-topic-search/SKILL.md': '# claude\n',
-      'document-topic-search/notes.txt': 'claude\n',
+    await writeFiles(discoveredRoot, {
+      'document-topic-search/SKILL.md': '# discovered\n',
+      'document-topic-search/notes.txt': 'discovered\n',
     })
-
-    await utimes(
-      path.join(codexRoot, 'document-topic-search', 'SKILL.md'),
-      new Date('2026-03-12T10:00:00.000Z'),
-      new Date('2026-03-12T10:00:00.000Z'),
-    )
-    await utimes(
-      path.join(codexRoot, 'document-topic-search', 'notes.txt'),
-      new Date('2026-03-12T10:00:00.000Z'),
-      new Date('2026-03-12T10:00:00.000Z'),
-    )
-    await utimes(
-      path.join(claudeRoot, 'document-topic-search', 'SKILL.md'),
-      new Date('2026-03-12T11:00:00.000Z'),
-      new Date('2026-03-12T11:00:00.000Z'),
-    )
-    await utimes(
-      path.join(claudeRoot, 'document-topic-search', 'notes.txt'),
-      new Date('2026-03-12T11:00:00.000Z'),
-      new Date('2026-03-12T11:00:00.000Z'),
-    )
 
     const status = await manager.getStatus()
 
-    expect(status.conflicts).toEqual([
-      expect.objectContaining({
-        skillName: 'document-topic-search',
-        recommendedRoot: 'claude',
-      }),
-    ])
+    expect(status.conflicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          skillName: 'document-topic-search',
+          roots: expect.arrayContaining([
+            expect.objectContaining({
+              root: 'discovered',
+              label: expect.stringContaining('.codex\\skills'),
+            }),
+          ]),
+        }),
+      ]),
+    )
     expect(status.conflicts[0]?.differingFiles).toEqual(
       expect.arrayContaining(['SKILL.md', 'notes.txt']),
     )
   })
 
   it('syncs clear winners while leaving true conflicts unresolved', async () => {
-    const { manager, libraryRoot, codexRoot, claudeRoot } = await createManager()
+    const { manager, libraryRoot } = await createManager()
+    const discoveredRoot = knownSkillRoot('codex')
 
     await writeFiles(libraryRoot, {
+      'document-topic-search/SKILL.md': '# library\n',
+    })
+    await writeFiles(discoveredRoot, {
+      'document-topic-search/SKILL.md': '# discovered\n',
       'vectorcfgcli/SKILL.md': '# vector\n',
-    })
-    await writeFiles(codexRoot, {
-      'document-topic-search/SKILL.md': '# codex\n',
-    })
-    await writeFiles(claudeRoot, {
-      'document-topic-search/SKILL.md': '# claude\n',
     })
 
     const result = await manager.sync()
@@ -218,31 +192,26 @@ describe('SkillLibraryManager', () => {
       ]),
     )
     await expect(
-      readFile(path.join(codexRoot, 'vectorcfgcli', 'SKILL.md'), 'utf8'),
-    ).resolves.toBe('# vector\n')
-    await expect(
-      readFile(path.join(claudeRoot, 'vectorcfgcli', 'SKILL.md'), 'utf8'),
+      readFile(path.join(libraryRoot, 'vectorcfgcli', 'SKILL.md'), 'utf8'),
     ).resolves.toBe('# vector\n')
     expect(status.conflicts).toHaveLength(1)
   })
 
-  it('resolves a chosen conflict root into all configured roots', async () => {
-    const { manager, libraryRoot, codexRoot, claudeRoot } = await createManager()
+  it('resolves a chosen discovered conflict into the library root', async () => {
+    const { manager, libraryRoot } = await createManager()
+    const discoveredRoot = knownSkillRoot('codex')
 
     await writeFiles(libraryRoot, {
       'document-topic-search/SKILL.md': '# library\n',
     })
-    await writeFiles(codexRoot, {
-      'document-topic-search/SKILL.md': '# codex\n',
-    })
-    await writeFiles(claudeRoot, {
-      'document-topic-search/SKILL.md': '# claude\n',
+    await writeFiles(discoveredRoot, {
+      'document-topic-search/SKILL.md': '# discovered\n',
       'document-topic-search/notes.txt': 'preferred\n',
     })
 
     const result = await manager.resolveConflict(
       'document-topic-search',
-      'claude',
+      'discovered',
     )
     const status = await manager.getStatus()
 
@@ -251,28 +220,29 @@ describe('SkillLibraryManager', () => {
     expect(status.conflicts).toEqual([])
     await expect(
       readFile(path.join(libraryRoot, 'document-topic-search', 'SKILL.md'), 'utf8'),
-    ).resolves.toBe('# claude\n')
+    ).resolves.toBe('# discovered\n')
     await expect(
-      readFile(path.join(codexRoot, 'document-topic-search', 'notes.txt'), 'utf8'),
+      readFile(path.join(libraryRoot, 'document-topic-search', 'notes.txt'), 'utf8'),
     ).resolves.toBe('preferred\n')
   })
 
-  it('ignores dot-prefixed root folders when scanning skills', async () => {
-    const { manager, codexRoot } = await createManager()
+  it('ignores dot-prefixed folders inside the library root when scanning canonical skills', async () => {
+    const { manager, libraryRoot } = await createManager()
 
-    await writeFiles(codexRoot, {
+    await writeFiles(libraryRoot, {
       '.system/keep.txt': 'keep\n',
-      'document-topic-search/SKILL.md': '# codex\n',
+      'document-topic-search/SKILL.md': '# library\n',
     })
 
     const status = await manager.getStatus()
-    const codexStatus = status.roots.find((entry) => entry.root === 'codex')
+    const libraryStatus = status.roots.find((entry) => entry.root === 'library')
 
-    expect(codexStatus?.skillNames).toEqual(['document-topic-search'])
+    expect(libraryStatus?.skillNames).toEqual(['document-topic-search'])
   })
 
-  it('uses the configured primary merge agent and optional reviewer', async () => {
-    const { manager, codexRoot, claudeRoot } = await createManager()
+  it('uses the configured primary agent and optional reviewer', async () => {
+    const { manager, libraryRoot } = await createManager()
+    const discoveredRoot = knownSkillRoot('codex')
 
     manager.updateSettings({
       ...manager.getSettings(),
@@ -280,11 +250,11 @@ describe('SkillLibraryManager', () => {
       reviewMergeAgent: 'copilot',
     })
 
-    await writeFiles(codexRoot, {
-      'document-topic-search/SKILL.md': '# codex\n',
+    await writeFiles(libraryRoot, {
+      'document-topic-search/SKILL.md': '# library\n',
     })
-    await writeFiles(claudeRoot, {
-      'document-topic-search/SKILL.md': '# claude\n',
+    await writeFiles(discoveredRoot, {
+      'document-topic-search/SKILL.md': '# discovered\n',
     })
 
     mocks.generateSkillMerge.mockResolvedValue({
@@ -294,7 +264,7 @@ describe('SkillLibraryManager', () => {
       summary: 'Merged by Claude.',
       rationale: 'Chose the stronger combined instructions.',
       warnings: [],
-      sourceRoots: ['codex', 'claude'],
+      sourceRoots: ['library', 'discovered'],
       files: [
         {
           path: 'SKILL.md',
@@ -318,8 +288,8 @@ describe('SkillLibraryManager', () => {
       'claude',
       'document-topic-search',
       expect.arrayContaining([
-        expect.objectContaining({ root: 'codex' }),
-        expect.objectContaining({ root: 'claude' }),
+        expect.objectContaining({ root: 'library' }),
+        expect.objectContaining({ root: 'discovered' }),
       ]),
     )
     expect(mocks.reviewSkillMerge).toHaveBeenCalledWith(
@@ -329,8 +299,8 @@ describe('SkillLibraryManager', () => {
         mergeAgent: 'claude',
       }),
       expect.arrayContaining([
-        expect.objectContaining({ root: 'codex' }),
-        expect.objectContaining({ root: 'claude' }),
+        expect.objectContaining({ root: 'library' }),
+        expect.objectContaining({ root: 'discovered' }),
       ]),
     )
     expect(proposal.review).toEqual(
@@ -341,7 +311,7 @@ describe('SkillLibraryManager', () => {
     )
   })
 
-  it('drops legacy provider-based sync results from persisted state', async () => {
+  it('drops legacy provider-based settings and sync results from persisted state', async () => {
     mocks.setPersistedState({
       settings: {
         libraryRoot: 'C:\\legacy\\skills',
@@ -378,14 +348,6 @@ describe('SkillLibraryManager', () => {
 
     expect(manager.getSettings()).toEqual({
       libraryRoot: 'C:\\legacy\\skills',
-      providers: {
-        codex: {
-          targetRoot: 'C:\\legacy\\.codex\\skills',
-        },
-        claude: {
-          targetRoot: 'C:\\legacy\\.claude\\skills',
-        },
-      },
       autoSyncOnAppStart: true,
       primaryMergeAgent: 'codex',
       reviewMergeAgent: 'none',

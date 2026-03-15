@@ -1,7 +1,3 @@
-export const SKILL_TARGET_PROVIDERS = ['codex', 'claude'] as const
-
-export type SkillTargetProvider = (typeof SKILL_TARGET_PROVIDERS)[number]
-
 export const SKILL_AI_MERGE_AGENTS = ['codex', 'claude', 'copilot'] as const
 
 export type SkillAiMergeAgent = (typeof SKILL_AI_MERGE_AGENTS)[number]
@@ -10,17 +6,12 @@ export const SKILL_AI_REVIEW_AGENTS = ['none', ...SKILL_AI_MERGE_AGENTS] as cons
 
 export type SkillAiReviewAgent = (typeof SKILL_AI_REVIEW_AGENTS)[number]
 
-export const SKILL_SYNC_ROOTS = ['library', 'codex', 'claude'] as const
+export const SKILL_SYNC_ROOTS = ['library', 'discovered'] as const
 
 export type SkillSyncRoot = (typeof SKILL_SYNC_ROOTS)[number]
 
-export interface SkillLibraryProviderSettings {
-  targetRoot: string
-}
-
 export interface SkillLibrarySettings {
   libraryRoot: string
-  providers: Record<SkillTargetProvider, SkillLibraryProviderSettings>
   autoSyncOnAppStart: boolean
   primaryMergeAgent: SkillAiMergeAgent
   reviewMergeAgent: SkillAiReviewAgent
@@ -34,10 +25,12 @@ export interface SkillSyncIssue {
   message: string
   skillName?: string
   root?: SkillSyncRoot
+  rootLabel?: string
 }
 
 export interface SkillConflictRootVersion {
   root: SkillSyncRoot
+  label: string
   rootPath: string
   modifiedAt: string
   fileCount: number
@@ -46,6 +39,7 @@ export interface SkillConflictRootVersion {
 export interface SkillConflict {
   skillName: string
   recommendedRoot: SkillSyncRoot | null
+  recommendedRootLabel: string | null
   differingFiles: string[]
   roots: SkillConflictRootVersion[]
 }
@@ -83,19 +77,24 @@ export interface SkillAiMergeProposal {
 
 export interface SkillSyncRootStatus {
   root: SkillSyncRoot
+  label: string
   configured: boolean
   rootPath: string
   skillNames: string[]
+  folderCount?: number
+  message?: string
 }
 
 export interface SkillSyncRootResult {
   root: SkillSyncRoot
+  label: string
   rootPath: string
   synchronizedSkills: string[]
   changedSkills: string[]
   changed: boolean
   skipped: boolean
   message?: string
+  folderCount?: number
 }
 
 export interface SkillSyncResult {

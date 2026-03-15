@@ -76,13 +76,13 @@ describe('generateCodexSkillMerge', () => {
   it('returns a structured merge proposal from codex output files', async () => {
     const proposal = await generateCodexSkillMerge('document-topic-search', [
       {
-        root: 'codex',
+        root: 'library',
         files: new Map([
           ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
         ]),
       },
       {
-        root: 'claude',
+        root: 'discovered',
         files: new Map([
           ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
         ]),
@@ -96,7 +96,7 @@ describe('generateCodexSkillMerge', () => {
         mergeAgent: 'codex',
         summary: 'Merged the stronger instructions.',
         warnings: ['Review notes.txt manually.'],
-        sourceRoots: ['codex', 'claude'],
+        sourceRoots: ['library', 'discovered'],
         review: null,
       }),
     )

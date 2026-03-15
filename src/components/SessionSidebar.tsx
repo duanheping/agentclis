@@ -6,14 +6,11 @@ import {
   type SkillAiReviewAgent,
   type SkillAiMergeReviewStatus,
   SKILL_AI_MERGE_AGENTS,
-  SKILL_SYNC_ROOTS,
-  SKILL_TARGET_PROVIDERS,
   type SkillConflict,
   type SkillLibrarySettings,
   type SkillSyncIssue,
   type SkillSyncRoot,
   type SkillSyncStatus,
-  type SkillTargetProvider,
 } from '../shared/skills'
 import { type ProjectSnapshot, type SessionSnapshot } from '../shared/session'
 
@@ -21,7 +18,6 @@ interface SessionSidebarProps {
   projects: ProjectSnapshot[]
   activeSessionId: string | null
   showProjectPaths: boolean
-  onToggleSidebar: () => void
   onCreateSession: () => void
   onCreateProject: () => void
   onCreateForProject: (projectId: string) => void
@@ -47,9 +43,6 @@ interface SessionSidebarProps {
   onToggleSkillAutoSync: () => Promise<void>
   onSetPrimaryMergeAgent: (agent: SkillAiMergeAgent) => Promise<void>
   onSetReviewMergeAgent: (agent: SkillAiReviewAgent) => Promise<void>
-  onPickSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
-  onClearSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
-  onOpenSkillTargetRoot: (provider: SkillTargetProvider) => Promise<void>
   onSyncSkills: () => Promise<void>
   onResolveSkillConflict: (
     skillName: string,
@@ -79,6 +72,19 @@ interface ContextMenuPosition {
   y: number
 }
 
+interface SkillAgentOption<T extends string> {
+  label: string
+  value: T
+}
+
+interface SkillAgentSelectProps<T extends string> {
+  label: string
+  value: T
+  options: SkillAgentOption<T>[]
+  disabled: boolean
+  onChange: (value: T) => void
+}
+
 function findActiveProjectId(
   projects: ProjectSnapshot[],
   activeSessionId: string | null,
@@ -88,10 +94,6 @@ function findActiveProjectId(
       project.sessions.some((session) => session.config.id === activeSessionId),
     )?.config.id ?? null
   )
-}
-
-function formatProviderLabel(provider: SkillTargetProvider): string {
-  return provider === 'codex' ? 'Codex' : 'Claude'
 }
 
 function formatMergeAgentLabel(agent: SkillAiMergeAgent): string {
@@ -111,7 +113,11 @@ function formatRootLabel(root: SkillSyncRoot): string {
     return 'Library'
   }
 
-  return root === 'codex' ? 'Codex' : 'Claude'
+  return 'Discovered folders'
+}
+
+function formatRootVersionLabel(conflictRoot: SkillConflict['roots'][number]): string {
+  return conflictRoot.label || formatRootLabel(conflictRoot.root)
 }
 
 function formatTimestamp(value: string): string {
@@ -125,7 +131,7 @@ function formatTimestamp(value: string): string {
 
 function formatIssueLabel(issue: SkillSyncIssue): string {
   const prefixParts = [
-    issue.root ? formatRootLabel(issue.root) : null,
+    issue.rootLabel ?? (issue.root ? formatRootLabel(issue.root) : null),
     issue.skillName ?? null,
   ].filter(Boolean)
 
@@ -172,6 +178,24 @@ function summarizeDifferingFiles(conflict: SkillConflict): string {
   return `${conflict.differingFiles.slice(0, 3).join(', ')} +${conflict.differingFiles.length - 3} more`
 }
 
+function formatSessionStatus(status: SessionSnapshot['runtime']['status']): string {
+  switch (status) {
+    case 'starting':
+      return 'Starting'
+    case 'running':
+      return 'Running'
+    case 'exited':
+      return 'Exited'
+    case 'error':
+      return 'Error'
+  }
+}
+
+function summarizeSessionCommand(command: string): string {
+  const normalized = command.trim().replace(/\s+/g, ' ')
+  return normalized || 'Manual startup command'
+}
+
 function findSkillFile(
   proposal: SkillAiMergeProposal,
   relativePath: string,
@@ -179,11 +203,109 @@ function findSkillFile(
   return proposal.files.find((file) => file.path === relativePath) ?? null
 }
 
+function SkillAgentSelect<T extends string>({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: SkillAgentSelectProps<T>) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const selectId = label.toLowerCase().replace(/\s+/g, '-')
+  const selectedOption =
+    options.find((option) => option.value === value) ?? options[0] ?? null
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const closeMenu = () => setOpen(false)
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const onWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('blur', closeMenu)
+    window.addEventListener('resize', closeMenu)
+    window.addEventListener('keydown', onWindowKeyDown)
+
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('blur', closeMenu)
+      window.removeEventListener('resize', closeMenu)
+      window.removeEventListener('keydown', onWindowKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className="sidebar-settings__select-group">
+      <span id={`${selectId}-label`} className="sidebar-settings__field-label">
+        {label}
+      </span>
+      <div ref={rootRef} className="sidebar-settings__select-wrapper">
+        <button
+          type="button"
+          className={`sidebar-settings__select-trigger${open ? ' is-open' : ''}`}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-labelledby={`${selectId}-label`}
+          aria-label={label}
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span className="sidebar-settings__select-value">
+            {selectedOption?.label ?? value}
+          </span>
+          <span className="sidebar-settings__select-chevron" aria-hidden="true">
+            {open ? '^' : 'v'}
+          </span>
+        </button>
+
+        {open ? (
+          <div
+            className="sidebar-settings__select-menu"
+            role="listbox"
+            aria-label={label}
+          >
+            {options.map((option) => {
+              const selected = option.value === value
+
+              return (
+                <button
+                  key={`${selectId}-${option.value}`}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className={`sidebar-settings__select-option${selected ? ' is-selected' : ''}`}
+                  onClick={() => {
+                    onChange(option.value)
+                    setOpen(false)
+                  }}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function SessionSidebar({
   projects,
   activeSessionId,
   showProjectPaths,
-  onToggleSidebar,
   onCreateSession,
   onCreateProject,
   onCreateForProject,
@@ -209,9 +331,6 @@ export function SessionSidebar({
   onToggleSkillAutoSync,
   onSetPrimaryMergeAgent,
   onSetReviewMergeAgent,
-  onPickSkillTargetRoot,
-  onClearSkillTargetRoot,
-  onOpenSkillTargetRoot,
   onSyncSkills,
   onResolveSkillConflict,
   onGenerateSkillAiMerge,
@@ -353,12 +472,6 @@ export function SessionSidebar({
   }
 
   const libraryStatus = skillSyncStatus?.roots.find((entry) => entry.root === 'library')
-  const providerStatuses = Object.fromEntries(
-    SKILL_TARGET_PROVIDERS.map((provider) => [
-      provider,
-      skillSyncStatus?.roots.find((entry) => entry.root === provider) ?? null,
-    ]),
-  ) as Record<SkillTargetProvider, SkillSyncStatus['roots'][number] | null>
   const lastSyncRootResults =
     skillSyncStatus?.lastSyncResult && Array.isArray(skillSyncStatus.lastSyncResult.roots)
       ? skillSyncStatus.lastSyncResult.roots
@@ -368,29 +481,22 @@ export function SessionSidebar({
     <>
       <aside className="sidebar">
         <div className="sidebar__header">
-          <div className="sidebar__topbar">
-            <button
-              type="button"
-              className="sidebar__toggle-button"
-              aria-label="Collapse sidebar"
-              onClick={onToggleSidebar}
-            >
-              <span className="sidebar__toggle-icon" aria-hidden="true" />
-              <span className="sidebar__toggle-label">Hide sidebar</span>
-            </button>
-          </div>
-
           <div className="sidebar__actions">
             <button
               type="button"
-              className="sidebar__quick-action"
+              className="sidebar__quick-action is-primary"
               onClick={onCreateSession}
             >
               <span
                 className="sidebar__quick-action-icon sidebar__quick-action-icon--session"
                 aria-hidden="true"
               />
-              New session
+              <span className="sidebar__quick-action-copy">
+                <span className="sidebar__quick-action-title">New session</span>
+                <span className="sidebar__quick-action-meta">
+                  Start a Codex or Copilot CLI session
+                </span>
+              </span>
             </button>
             <button
               type="button"
@@ -401,7 +507,12 @@ export function SessionSidebar({
                 className="sidebar__quick-action-icon sidebar__quick-action-icon--project"
                 aria-hidden="true"
               />
-              New project
+              <span className="sidebar__quick-action-copy">
+                <span className="sidebar__quick-action-title">New project</span>
+                <span className="sidebar__quick-action-meta">
+                  Group sessions under a repo root
+                </span>
+              </span>
             </button>
           </div>
         </div>
@@ -446,7 +557,7 @@ export function SessionSidebar({
                       {project.sessions.length}
                     </span>
                     <span className="project-group__toggle" aria-hidden="true">
-                      {projectCollapsed ? '▸' : '▾'}
+                      {projectCollapsed ? '>' : 'v'}
                     </span>
                   </div>
                 </button>
@@ -515,8 +626,22 @@ export function SessionSidebar({
                               </div>
                             </form>
                           ) : (
-                            <div className="session-item__title">
-                              {session.config.title}
+                            <div className="session-item__body">
+                              <div className="session-item__title">
+                                {session.config.title}
+                              </div>
+                              <div className="session-item__meta">
+                                <span
+                                  className={`session-item__status is-${session.runtime.status}`}
+                                >
+                                  {formatSessionStatus(session.runtime.status)}
+                                </span>
+                                <span className="session-item__command">
+                                  {summarizeSessionCommand(
+                                    session.config.startupCommand,
+                                  )}
+                                </span>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -663,133 +788,48 @@ export function SessionSidebar({
                       </label>
 
                       <div className="sidebar-settings__agent-grid">
-                        <label className="sidebar-settings__select-group">
-                          <span className="sidebar-settings__field-label">
-                            Primary merge agent
-                          </span>
-                          <select
-                            className="sidebar-settings__select"
-                            value={skillLibrarySettings.primaryMergeAgent}
-                            disabled={
-                              skillsBusy ||
-                              skillsGeneratingMerge !== null ||
-                              skillsApplyingMerge
-                            }
-                            onChange={(event) => {
-                              void onSetPrimaryMergeAgent(
-                                event.target.value as SkillAiMergeAgent,
-                              )
-                            }}
-                          >
-                            {SKILL_AI_MERGE_AGENTS.map((agent) => (
-                              <option key={`primary-${agent}`} value={agent}>
-                                {formatMergeAgentLabel(agent)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                        <SkillAgentSelect
+                          label="Primary agent"
+                          value={skillLibrarySettings.primaryMergeAgent}
+                          options={SKILL_AI_MERGE_AGENTS.map((agent) => ({
+                            value: agent,
+                            label: formatMergeAgentLabel(agent),
+                          }))}
+                          disabled={
+                            skillsBusy ||
+                            skillsGeneratingMerge !== null ||
+                            skillsApplyingMerge
+                          }
+                          onChange={(agent) => {
+                            void onSetPrimaryMergeAgent(agent)
+                          }}
+                        />
 
-                        <label className="sidebar-settings__select-group">
-                          <span className="sidebar-settings__field-label">
-                            Review agent
-                          </span>
-                          <select
-                            className="sidebar-settings__select"
-                            value={skillLibrarySettings.reviewMergeAgent}
-                            disabled={
-                              skillsBusy ||
-                              skillsGeneratingMerge !== null ||
-                              skillsApplyingMerge
-                            }
-                            onChange={(event) => {
-                              void onSetReviewMergeAgent(
-                                event.target.value as SkillAiReviewAgent,
-                              )
-                            }}
-                          >
-                            <option value="none">None</option>
-                            {SKILL_AI_MERGE_AGENTS.filter(
+                        <SkillAgentSelect
+                          label="Secondary agent"
+                          value={skillLibrarySettings.reviewMergeAgent}
+                          options={[
+                            {
+                              value: 'none',
+                              label: 'None',
+                            },
+                            ...SKILL_AI_MERGE_AGENTS.filter(
                               (agent) =>
                                 agent !== skillLibrarySettings.primaryMergeAgent,
-                            ).map((agent) => (
-                              <option key={`review-${agent}`} value={agent}>
-                                {formatMergeAgentLabel(agent)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-
-                      <div className="sidebar-settings__provider-list">
-                        {SKILL_TARGET_PROVIDERS.map((provider) => {
-                          const providerStatus = providerStatuses[provider]
-                          const targetRoot =
-                            skillLibrarySettings.providers[provider].targetRoot
-
-                          return (
-                            <div key={provider} className="sidebar-settings__group">
-                              <div className="sidebar-settings__group-header">
-                                <span className="sidebar-settings__field-label">
-                                  {formatProviderLabel(provider)} target root
-                                </span>
-                                <span className="sidebar-settings__pill">
-                                  {providerStatus?.skillNames.length ?? 0} skills
-                                </span>
-                              </div>
-                              <button
-                                type="button"
-                                className="sidebar-settings__path-card"
-                                disabled={skillsBusy}
-                                onClick={() => {
-                                  void onPickSkillTargetRoot(provider)
-                                }}
-                              >
-                                <span
-                                  className={`sidebar-settings__path-text${targetRoot ? '' : ' is-placeholder'}`}
-                                >
-                                  {targetRoot || `Choose the ${formatProviderLabel(provider)} skills folder`}
-                                </span>
-                              </button>
-                              <div className="sidebar-settings__actions">
-                                <button
-                                  type="button"
-                                  className="ghost-button sidebar-settings__action"
-                                  disabled={skillsBusy}
-                                  onClick={() => {
-                                    void onPickSkillTargetRoot(provider)
-                                  }}
-                                >
-                                  Choose
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ghost-button sidebar-settings__action"
-                                  disabled={!targetRoot}
-                                  onClick={() => {
-                                    void onOpenSkillTargetRoot(provider)
-                                  }}
-                                >
-                                  Open
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ghost-button sidebar-settings__action"
-                                  disabled={!targetRoot || skillsBusy}
-                                  onClick={() => {
-                                    void onClearSkillTargetRoot(provider)
-                                  }}
-                                >
-                                  Clear
-                                </button>
-                              </div>
-                              <p className="sidebar-settings__caption">
-                                {providerStatus
-                                  ? summarizeSkills(providerStatus.skillNames)
-                                  : 'Provider status unavailable.'}
-                              </p>
-                            </div>
-                          )
-                        })}
+                            ).map((agent) => ({
+                              value: agent,
+                              label: formatMergeAgentLabel(agent),
+                            })),
+                          ]}
+                          disabled={
+                            skillsBusy ||
+                            skillsGeneratingMerge !== null ||
+                            skillsApplyingMerge
+                          }
+                          onChange={(agent) => {
+                            void onSetReviewMergeAgent(agent as SkillAiReviewAgent)
+                          }}
+                        />
                       </div>
 
                       {skillSyncStatus ? (
@@ -823,9 +863,6 @@ export function SessionSidebar({
                               </div>
                               <div className="sidebar-settings__conflict-list">
                                 {skillSyncStatus.conflicts.map((conflict) => {
-                                  const availableRoots = new Set(
-                                    conflict.roots.map((entry) => entry.root),
-                                  )
                                   const mergePreview =
                                     skillAiMergeProposal?.skillName === conflict.skillName
                                       ? skillAiMergeProposal
@@ -844,8 +881,8 @@ export function SessionSidebar({
                                           {conflict.skillName}
                                         </span>
                                         <span className="sidebar-settings__pill">
-                                          {conflict.recommendedRoot
-                                            ? `Prefer ${formatRootLabel(conflict.recommendedRoot)}`
+                                          {conflict.recommendedRootLabel
+                                            ? `Prefer ${conflict.recommendedRootLabel}`
                                             : 'Choose a source'}
                                         </span>
                                       </div>
@@ -871,13 +908,12 @@ export function SessionSidebar({
                                             ? 'Merging…'
                                             : 'AI Merge'}
                                         </button>
-                                        {SKILL_SYNC_ROOTS.map((root) => (
+                                        {conflict.roots.map((rootVersion) => (
                                           <button
-                                            key={`${conflict.skillName}-${root}`}
+                                            key={`${conflict.skillName}-${rootVersion.root}-${rootVersion.rootPath}`}
                                             type="button"
                                             className="ghost-button sidebar-settings__action"
                                             disabled={
-                                              !availableRoots.has(root) ||
                                               skillsSyncing ||
                                               skillsBusy ||
                                               skillsResolving !== null ||
@@ -887,13 +923,13 @@ export function SessionSidebar({
                                             onClick={() => {
                                               void onResolveSkillConflict(
                                                 conflict.skillName,
-                                                root,
+                                                rootVersion.root,
                                               )
                                             }}
                                           >
                                             {skillsResolving === conflict.skillName
                                               ? 'Applying…'
-                                              : `Use ${formatRootLabel(root)}`}
+                                              : `Use ${formatRootVersionLabel(rootVersion)}`}
                                           </button>
                                         ))}
                                       </div>
@@ -1042,10 +1078,10 @@ export function SessionSidebar({
                               </div>
                               {lastSyncRootResults.map((rootResult) => (
                                 <div
-                                  key={`last-sync-${rootResult.root}`}
+                                  key={`last-sync-${rootResult.root}-${rootResult.rootPath}`}
                                   className="sidebar-settings__status-row"
                                 >
-                                  <span>{formatRootLabel(rootResult.root)}</span>
+                                  <span>{rootResult.label || formatRootLabel(rootResult.root)}</span>
                                   <strong>
                                     {rootResult.skipped
                                       ? 'Skipped'
