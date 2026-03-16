@@ -404,9 +404,8 @@ describe('App skills settings', () => {
     await screen.findByText('Create a project or session to get started.')
     await user.click(screen.getByRole('button', { name: 'Settings' }))
 
-    expect(
-      screen.getByText('Library: Library root is not configured.'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('Library root is not configured.')).toBeInTheDocument()
+    expect(screen.queryByText('Validation')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Choose' }))
 
@@ -422,12 +421,13 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Sync now' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Last sync')).toBeInTheDocument()
-      expect(screen.getByText('Succeeded')).toBeInTheDocument()
+      expect(agentCli.syncSkills).toHaveBeenCalledTimes(1)
     })
 
+    expect(screen.queryByText('Last sync')).not.toBeInTheDocument()
+    expect(screen.queryByText('Succeeded')).not.toBeInTheDocument()
+
     expect(agentCli.updateSkillLibrarySettings).toHaveBeenCalled()
-    expect(agentCli.syncSkills).toHaveBeenCalledTimes(1)
     const lastSettingsCall =
       agentCli.updateSkillLibrarySettings.mock.calls.at(-1)?.[0] as
         | SkillLibrarySettings

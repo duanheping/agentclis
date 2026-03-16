@@ -218,6 +218,81 @@ describe('SessionSidebar', () => {
     )
   })
 
+  it('keeps library setup feedback inline while hiding sync diagnostics', async () => {
+    const user = userEvent.setup()
+
+    renderSidebar({
+      skillLibrarySettings: {
+        ...buildSkillLibrarySettings(),
+        libraryRoot: '',
+      },
+      skillSyncStatus: {
+        issues: [
+          {
+            severity: 'error',
+            code: 'missing-library-root',
+            message: 'Library root is not configured.',
+            root: 'library',
+          },
+          {
+            severity: 'warning',
+            code: 'duplicate-discovered-skill',
+            message:
+              'Detected 2 copies of "document-topic-search" across .codex/skills, .claude/skills, or .copilot/skills. Using the newest copy from C:\\Users\\hduan10\\.codex\\skills.',
+            skillName: 'document-topic-search',
+            root: 'discovered',
+            rootLabel: 'Discovered folders',
+          },
+        ],
+        conflicts: [],
+        roots: [
+          {
+            root: 'library',
+            label: 'Library',
+            configured: false,
+            rootPath: '',
+            skillNames: [],
+          },
+          {
+            root: 'discovered',
+            label: 'Discovered folders',
+            configured: true,
+            rootPath: 'C:\\Users\\hduan10',
+            skillNames: ['document-topic-search'],
+            folderCount: 2,
+          },
+        ],
+        lastSyncResult: {
+          startedAt: '2026-03-12T18:00:00.000Z',
+          completedAt: '2026-03-12T18:00:02.000Z',
+          success: false,
+          issues: [],
+          conflicts: [],
+          synchronizedSkills: [],
+          roots: [
+            {
+              root: 'library',
+              label: 'Library',
+              rootPath: '',
+              synchronizedSkills: [],
+              changedSkills: [],
+              changed: false,
+              skipped: true,
+            },
+          ],
+        },
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.getByText('Library root is not configured.')).toBeInTheDocument()
+    expect(screen.queryByText('Validation')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Detected 2 copies of "document-topic-search"/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Last sync')).not.toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+  })
+
   it('shows an AI merge preview and forwards apply/dismiss actions', async () => {
     const user = userEvent.setup()
     const onGenerateSkillAiMerge = vi.fn().mockResolvedValue(undefined)
