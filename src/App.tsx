@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -397,14 +397,31 @@ function App() {
     }
   }
 
-  const refreshWorkspace = async () => {
+  const refreshWorkspace = useCallback(async () => {
     if (!agentCli) {
       throw new Error('Agent bridge is unavailable.')
     }
 
     const payload = await agentCli.listSessions()
     setInitialData(payload)
-  }
+  }, [agentCli, setInitialData])
+
+  const closeSessionInWorkspace = useCallback(
+    async (id: string) => {
+      if (!agentCli) {
+        throw new Error('Agent bridge is unavailable.')
+      }
+
+      await agentCli.closeSession(id)
+      terminalRegistry.forget(id)
+      terminalRegistry.forget(buildWindowsCommandPromptTerminalId(id))
+      setWindowsCommandPromptSessionIds((current) =>
+        current.filter((sessionId) => sessionId !== id),
+      )
+      await refreshWorkspace()
+    },
+    [agentCli, refreshWorkspace],
+  )
 
   const refreshSkillState = async () => {
     if (!agentCli) {
@@ -501,6 +518,12 @@ function App() {
       updateRuntime(runtime)
     })
 
+    const unsubscribeExit = agentCli.onSessionExit(({ sessionId }) => {
+      void closeSessionInWorkspace(sessionId).catch((error) => {
+        setErrorMessage(getErrorMessage(error))
+      })
+    })
+
     const unsubscribeWindowsCommandPromptExit = agentCli.onWindowsCommandPromptExit(
       ({ sessionId }) => {
         terminalRegistry.forget(buildWindowsCommandPromptTerminalId(sessionId))
@@ -555,9 +578,10 @@ function App() {
       unsubscribeConfig()
       unsubscribeWindowsCommandPromptData()
       unsubscribeRuntime()
+      unsubscribeExit()
       unsubscribeWindowsCommandPromptExit()
     }
-  }, [agentCli, setInitialData, updateConfig, updateRuntime])
+  }, [agentCli, closeSessionInWorkspace, setInitialData, updateConfig, updateRuntime])
 
   useEffect(() => {
     try {
@@ -883,13 +907,7 @@ function App() {
 
     try {
       setErrorMessage(null)
-      await agentCli.closeSession(id)
-      terminalRegistry.forget(id)
-      terminalRegistry.forget(buildWindowsCommandPromptTerminalId(id))
-      setWindowsCommandPromptSessionIds((current) =>
-        current.filter((sessionId) => sessionId !== id),
-      )
-      await refreshWorkspace()
+      await closeSessionInWorkspace(id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     }

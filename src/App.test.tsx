@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,7 +8,7 @@ vi.mock('./components/TerminalWorkspace', () => ({
 
 import App from './App'
 import type { ProjectGitOverview } from './shared/projectTools'
-import type { ListSessionsResponse } from './shared/session'
+import type { ListSessionsResponse, SessionExitMeta } from './shared/session'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -352,7 +352,9 @@ function createAgentCliMock(
     onSessionData: vi.fn(() => vi.fn()),
     onSessionConfig: vi.fn(() => vi.fn()),
     onSessionRuntime: vi.fn(() => vi.fn()),
-    onSessionExit: vi.fn(() => vi.fn()),
+    onSessionExit: vi.fn<(listener: (event: SessionExitMeta) => void) => () => void>(
+      () => vi.fn(),
+    ),
     onWindowsCommandPromptData: vi.fn(() => vi.fn()),
     onWindowsCommandPromptExit: vi.fn(() => vi.fn()),
   }
@@ -572,6 +574,85 @@ describe('App skills settings', () => {
       'src/App.tsx',
       false,
     )
+  })
+
+  it('closes a session immediately when the agent CLI exits on its own', async () => {
+    let exitListener: ((event: { sessionId: string; exitCode: number }) => void) | null = null
+    let workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Copilot',
+                startupCommand: 'copilot',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+    agentCli.listSessions.mockImplementation(async () => structuredClone(workspacePayload))
+    agentCli.restoreSessions.mockImplementation(async () => structuredClone(workspacePayload))
+    agentCli.onSessionExit.mockImplementation((listener) => {
+      exitListener = listener
+      return vi.fn()
+    })
+    agentCli.closeSession.mockImplementation(async (sessionId: string) => {
+      workspacePayload = {
+        projects: workspacePayload.projects.map((project) => ({
+          ...project,
+          sessions: project.sessions.filter((session) => session.config.id !== sessionId),
+        })),
+        activeSessionId: null,
+      }
+
+      return {
+        closedSessionId: sessionId,
+        activeSessionId: null,
+      }
+    })
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'Toggle cmd' })
+
+    expect(exitListener).not.toBeNull()
+
+    await act(async () => {
+      exitListener?.({ sessionId: 'session-1', exitCode: 0 })
+    })
+
+    await waitFor(() => {
+      expect(agentCli.closeSession).toHaveBeenCalledWith('session-1')
+      expect(screen.getByText('Ready to build locally')).toBeInTheDocument()
+      expect(useSessionsStore.getState().activeSessionId).toBeNull()
+      expect(useSessionsStore.getState().projects[0]?.sessions).toHaveLength(0)
+    })
   })
 
   it('lets the user drag the sidebar and diff splitters to resize panes', async () => {
