@@ -2338,6 +2338,230 @@
   margin: 0;
 }
 
+.sync-window {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  color: var(--text-base);
+}
+
+.sync-window__background {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(240, 180, 41, 0.12), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(101, 163, 255, 0.1), transparent 32%),
+    linear-gradient(180deg, rgba(17, 17, 17, 0.98), rgba(9, 11, 14, 1));
+}
+
+.sync-window__shell {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 64px 24px 28px;
+}
+
+.sync-window__card {
+  width: min(1120px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  padding: 28px;
+  background: rgba(22, 22, 22, 0.9);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.38);
+}
+
+.sync-window__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.sync-window__title {
+  margin: 0;
+  font-size: clamp(2rem, 2.4vw, 2.7rem);
+  line-height: 1.05;
+}
+
+.sync-window__caption {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.sync-window__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.sync-window__status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.sync-window__status-pill {
+  min-width: 148px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sync-window__status-pill span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sync-window__status-pill strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.sync-window__summary {
+  margin: 18px 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.sync-window__grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 26px;
+}
+
+.sync-window__panel {
+  min-height: 420px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.sync-window__panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.sync-window__panel-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.sync-window__panel-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.sync-window__steps {
+  gap: 10px;
+}
+
+.sync-window__step-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sync-window__step-detail {
+  margin-left: 0;
+}
+
+.sync-window__activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 520px;
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+}
+
+.sync-log {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.88rem;
+}
+
+.sync-log__time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sync-log__message {
+  min-width: 0;
+}
+
+.sync-log.is-success {
+  border-color: rgba(52, 211, 153, 0.18);
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.sync-log.is-warning {
+  border-color: rgba(251, 191, 36, 0.18);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.sync-log.is-error {
+  border-color: rgba(248, 113, 113, 0.18);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.sync-window__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+@media (max-width: 920px) {
+  .sync-window__shell {
+    padding: 56px 16px 20px;
+  }
+
+  .sync-window__card {
+    padding: 22px;
+  }
+
+  .sync-window__header {
+    flex-direction: column;
+  }
+
+  .sync-window__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-window__panel {
+    min-height: 0;
+  }
+
+  .sync-window__activity {
+    max-height: 320px;
+  }
+
+  .sync-log {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 .context-menu {
   position: fixed;
   z-index: 40;

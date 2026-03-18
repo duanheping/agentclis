@@ -9,6 +9,7 @@ import { IPC_CHANNELS, type AgentCliApi } from '../src/shared/ipc'
 import type {
   FullSyncDone,
   FullSyncProgress,
+  FullSyncState,
 } from '../src/shared/skills'
 import type {
   SessionConfigEvent,
@@ -55,7 +56,11 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.generateSkillAiMerge, skillName),
   applySkillAiMerge: (proposal) =>
     ipcRenderer.invoke(IPC_CHANNELS.applySkillAiMerge, proposal),
+  openSkillSyncWindow: (startSync) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openSkillSyncWindow, startSync),
   startFullSync: () => ipcRenderer.invoke(IPC_CHANNELS.startFullSync),
+  getFullSyncState: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getFullSyncState) as Promise<FullSyncState>,
   onFullSyncProgress: (listener) =>
     createListener<FullSyncProgress>(IPC_CHANNELS.fullSyncProgress, listener),
   onFullSyncDone: (listener) =>

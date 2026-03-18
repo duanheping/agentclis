@@ -13,6 +13,11 @@ import {
 
 import { IPC_CHANNELS } from '../src/shared/ipc'
 import type { ProjectOpenTarget } from '../src/shared/projectTools'
+import type {
+  FullSyncDone,
+  FullSyncProgress,
+  FullSyncState,
+} from '../src/shared/skills'
 import { openFileReferenceTarget } from './fileReferences'
 import {
   getProjectGitDiff,
@@ -28,7 +33,14 @@ const __dirname = path.dirname(__filename)
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 let mainWindow: BrowserWindow | null = null
+let skillSyncWindow: BrowserWindow | null = null
 let securityHeadersRegistered = false
+let fullSyncRun: Promise<FullSyncDone> | null = null
+let fullSyncState: FullSyncState = {
+  running: false,
+  progress: null,
+  result: null,
+}
 
 const skillLibraryManager = new SkillLibraryManager()
 const sessionManager = new SessionManager({
@@ -57,6 +69,135 @@ const windowsCommandPromptManager = new WindowsCommandPromptManager({
 
 function getPreloadPath(): string {
   return path.join(__dirname, 'preload.mjs')
+}
+
+function cloneFullSyncState(): FullSyncState {
+  return structuredClone(fullSyncState)
+}
+
+function broadcastToAllWindows(channel: string, payload: unknown): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) {
+      continue
+    }
+
+    window.webContents.send(channel, payload)
+  }
+}
+
+async function loadRendererWindow(
+  window: BrowserWindow,
+  view: 'main' | 'skill-sync',
+): Promise<void> {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    const url = new URL(process.env.VITE_DEV_SERVER_URL)
+
+    if (view === 'skill-sync') {
+      url.searchParams.set('view', 'skill-sync')
+    }
+
+    await window.loadURL(url.toString())
+    return
+  }
+
+  await window.loadFile(path.join(__dirname, '../dist/index.html'), {
+    search: view === 'skill-sync' ? '?view=skill-sync' : '',
+  })
+}
+
+function createWindowOptions(title: string, width: number, height: number) {
+  const useCustomTitleBar = process.platform === 'win32'
+
+  return {
+    width,
+    height,
+    backgroundColor: '#111111',
+    title,
+    autoHideMenuBar: true,
+    titleBarStyle: useCustomTitleBar ? 'hidden' : 'default',
+    titleBarOverlay: useCustomTitleBar
+      ? {
+          color: '#1b2026',
+          symbolColor: '#f4f4f5',
+          height: 38,
+        }
+      : false,
+    webPreferences: {
+      preload: getPreloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  } as const
+}
+
+async function createSkillSyncWindow(): Promise<BrowserWindow> {
+  if (skillSyncWindow && !skillSyncWindow.isDestroyed()) {
+    return skillSyncWindow
+  }
+
+  skillSyncWindow = new BrowserWindow({
+    ...createWindowOptions('Skill Sync', 860, 720),
+    minWidth: 700,
+    minHeight: 560,
+  })
+  skillSyncWindow.removeMenu()
+  await loadRendererWindow(skillSyncWindow, 'skill-sync')
+  skillSyncWindow.on('closed', () => {
+    skillSyncWindow = null
+  })
+
+  return skillSyncWindow
+}
+
+function startFullSyncIfNeeded(): FullSyncState {
+  if (fullSyncRun) {
+    return cloneFullSyncState()
+  }
+
+  fullSyncState = {
+    running: true,
+    progress: null,
+    result: null,
+  }
+
+  fullSyncRun = skillLibraryManager
+    .fullSync((progress: FullSyncProgress) => {
+      fullSyncState = {
+        running: !progress.done,
+        progress: structuredClone(progress),
+        result: null,
+      }
+      broadcastToAllWindows(IPC_CHANNELS.fullSyncProgress, progress)
+    })
+    .then((result) => {
+      fullSyncState = {
+        running: false,
+        progress: fullSyncState.progress,
+        result: structuredClone(result),
+      }
+      broadcastToAllWindows(IPC_CHANNELS.fullSyncDone, result)
+      return result
+    })
+    .finally(() => {
+      fullSyncRun = null
+    })
+
+  return cloneFullSyncState()
+}
+
+async function openSkillSyncWindow(startSync = false): Promise<void> {
+  if (startSync) {
+    startFullSyncIfNeeded()
+  }
+
+  const window = await createSkillSyncWindow()
+
+  if (window.isMinimized()) {
+    window.restore()
+  }
+
+  window.show()
+  window.focus()
 }
 
 function buildContentSecurityPolicy(): string {
@@ -110,37 +251,13 @@ function registerSecurityHeaders(): void {
 }
 
 async function createMainWindow(): Promise<void> {
-  const useCustomTitleBar = process.platform === 'win32'
-
   mainWindow = new BrowserWindow({
-    width: 1480,
-    height: 960,
+    ...createWindowOptions('Agent CLIs', 1480, 960),
     minWidth: 1180,
     minHeight: 760,
-    backgroundColor: '#111111',
-    title: 'Agent CLIs',
-    autoHideMenuBar: true,
-    titleBarStyle: useCustomTitleBar ? 'hidden' : 'default',
-    titleBarOverlay: useCustomTitleBar
-      ? {
-          color: '#1b2026',
-          symbolColor: '#f4f4f5',
-          height: 38,
-        }
-      : false,
-    webPreferences: {
-      preload: getPreloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
   })
   mainWindow.removeMenu()
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
-  }
+  await loadRendererWindow(mainWindow, 'main')
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -197,13 +314,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.applySkillAiMerge, (_event, proposal) =>
     skillLibraryManager.applyAiMerge(proposal),
   )
-  ipcMain.handle(IPC_CHANNELS.startFullSync, async () => {
-    await skillLibraryManager.fullSync((progress) => {
-      mainWindow?.webContents.send(IPC_CHANNELS.fullSyncProgress, progress)
-    }).then((result) => {
-      mainWindow?.webContents.send(IPC_CHANNELS.fullSyncDone, result)
-    })
-  })
+  ipcMain.handle(IPC_CHANNELS.openSkillSyncWindow, (_event, startSync = false) =>
+    openSkillSyncWindow(Boolean(startSync)),
+  )
+  ipcMain.handle(IPC_CHANNELS.startFullSync, () => startFullSyncIfNeeded())
+  ipcMain.handle(IPC_CHANNELS.getFullSyncState, () => cloneFullSyncState())
   ipcMain.handle(IPC_CHANNELS.pickDirectory, async (_event, defaultPath?: string) => {
     const options: OpenDialogOptions = {
       title: 'Select project folder',
