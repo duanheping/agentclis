@@ -8,7 +8,6 @@ import './App.css'
 import { CreateSessionDialog } from './components/CreateSessionDialog'
 import { ProjectDiffPanel } from './components/ProjectDiffPanel'
 import { SessionSidebar } from './components/SessionSidebar'
-import { SkillSyncDialog } from './components/SkillSyncDialog'
 import { TerminalWorkspace } from './components/TerminalWorkspace'
 import {
   buildWindowsCommandPromptTerminalId,
@@ -245,7 +244,7 @@ function App() {
   const [skillAiMergeProposal, setSkillAiMergeProposal] =
     useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
-  const [skillSyncDialogOpen, setSkillSyncDialogOpen] = useState(false)
+  const [skillsSyncing, setSkillsSyncing] = useState(false)
   const appShellRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
   const workspaceBodyRef = useRef<HTMLElement | null>(null)
@@ -414,7 +413,7 @@ function App() {
     [agentCli, refreshWorkspace],
   )
 
-  const refreshSkillState = async () => {
+  const refreshSkillState = useCallback(async () => {
     if (!agentCli) {
       throw new Error('Agent bridge is unavailable.')
     }
@@ -426,7 +425,7 @@ function App() {
 
     setSkillLibrarySettings(settings)
     setSkillSyncStatus(status)
-  }
+  }, [agentCli])
 
   const refreshProjectGitState = async (projectPath = activeProjectPath) => {
     if (!agentCli) {
@@ -524,6 +523,17 @@ function App() {
       },
     )
 
+    const unsubscribeFullSyncProgress = agentCli.onFullSyncProgress((event) => {
+      setSkillsSyncing(!event.done)
+    })
+
+    const unsubscribeFullSyncDone = agentCli.onFullSyncDone(() => {
+      setSkillsSyncing(false)
+      void refreshSkillState().catch((error) => {
+        setSkillsErrorMessage(getErrorMessage(error))
+      })
+    })
+
     void (async () => {
       try {
         const payload = await agentCli.listSessions()
@@ -548,16 +558,19 @@ function App() {
       setSkillsLoading(true)
 
       try {
-        const [settings, status] = await Promise.all([
+        const [settings, status, fullSyncState] = await Promise.all([
           agentCli.getSkillLibrarySettings(),
           agentCli.getSkillSyncStatus(),
+          agentCli.getFullSyncState(),
         ])
         setSkillLibrarySettings(settings)
         setSkillSyncStatus(status)
+        setSkillsSyncing(fullSyncState.running)
         setSkillsErrorMessage(null)
       } catch (error) {
         setSkillLibrarySettings(null)
         setSkillSyncStatus(null)
+        setSkillsSyncing(false)
         setSkillsErrorMessage(getErrorMessage(error))
       } finally {
         setSkillsLoading(false)
@@ -571,8 +584,17 @@ function App() {
       unsubscribeRuntime()
       unsubscribeExit()
       unsubscribeWindowsCommandPromptExit()
+      unsubscribeFullSyncProgress()
+      unsubscribeFullSyncDone()
     }
-  }, [agentCli, closeSessionInWorkspace, setInitialData, updateConfig, updateRuntime])
+  }, [
+    agentCli,
+    closeSessionInWorkspace,
+    refreshSkillState,
+    setInitialData,
+    updateConfig,
+    updateRuntime,
+  ])
 
   useEffect(() => {
     try {
@@ -1066,12 +1088,20 @@ function App() {
   }
 
   const handleSyncSkills = async () => {
-    setSkillSyncDialogOpen(true)
-  }
+    if (!agentCli) {
+      setSkillsErrorMessage('Agent bridge is unavailable.')
+      return
+    }
 
-  const handleCloseSkillSyncDialog = () => {
-    setSkillSyncDialogOpen(false)
-    void refreshSkillState()
+    setSkillsErrorMessage(null)
+    setSkillsSyncing(true)
+
+    try {
+      await agentCli.openSkillSyncWindow(true)
+    } catch (error) {
+      setSkillsSyncing(false)
+      setSkillsErrorMessage(getErrorMessage(error))
+    }
   }
 
   const handleResolveSkillConflict = async (
@@ -1316,7 +1346,7 @@ function App() {
           skillSyncStatus={skillSyncStatus}
           skillsLoading={skillsLoading}
           skillsBusy={skillsBusy}
-          skillsSyncing={skillSyncDialogOpen}
+          skillsSyncing={skillsSyncing}
           skillsResolving={skillsResolving}
           skillsGeneratingMerge={skillsGeneratingMerge}
           skillsApplyingMerge={skillsApplyingMerge}
@@ -1529,11 +1559,6 @@ function App() {
         onClose={closeCreateSessionDialog}
         onCreateProject={handleCreateProject}
         onCreateSession={handleCreateSession}
-      />
-
-      <SkillSyncDialog
-        open={skillSyncDialogOpen}
-        onClose={handleCloseSkillSyncDialog}
       />
     </div>
   )

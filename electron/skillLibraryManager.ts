@@ -31,6 +31,8 @@ import {
   type FullSyncStepId,
   type FullSyncProgress,
   type FullSyncDone,
+  type FullSyncLogEntry,
+  type FullSyncLogLevel,
 } from '../src/shared/skills'
 import { generateSkillMerge, refineSkillMerge, reviewSkillMerge } from './skillMergeAgent'
 
@@ -82,6 +84,13 @@ interface SkillInspection {
 interface DirectoryFiles {
   files: Map<string, string>
   directories: string[]
+}
+
+interface SyncDirectoryResult {
+  changed: boolean
+  writtenFiles: number
+  removedFiles: number
+  unchangedFiles: number
 }
 
 interface DiscoveredSkillDirectory {
@@ -643,7 +652,7 @@ export class SkillLibraryManager {
           plan.source.files,
         )
 
-        if (changed) {
+        if (changed.changed) {
           changedSkillsByRoot.get('library')?.add(plan.skillName)
         }
       }
@@ -701,7 +710,7 @@ export class SkillLibraryManager {
         snapshot.files,
       )
 
-      if (changed) {
+      if (changed.changed) {
         changedSkillsByRoot.get('library')?.add(skillName)
       }
     }
@@ -763,7 +772,7 @@ export class SkillLibraryManager {
         desiredFiles,
       )
 
-      if (changed) {
+      if (changed.changed) {
         changedSkillsByRoot.get('library')?.add(proposal.skillName)
       }
     }
@@ -800,9 +809,17 @@ export class SkillLibraryManager {
       { id: 'sync-back', label: 'Sync back to .codex/skills and .claude/skills', status: 'pending' },
       { id: 'backup', label: 'Backup skills to library root', status: 'pending' },
     ]
+    const logs: FullSyncLogEntry[] = []
+    let logSequence = 0
 
     const emit = (currentStepId: FullSyncStepId | null, done = false, error?: string) => {
-      onProgress({ steps: structuredClone(steps), currentStepId, done, error })
+      onProgress({
+        steps: structuredClone(steps),
+        currentStepId,
+        done,
+        logs: structuredClone(logs),
+        error,
+      })
     }
 
     const setStep = (id: FullSyncStepId, status: FullSyncStep['status'], detail?: string) => {
@@ -813,40 +830,112 @@ export class SkillLibraryManager {
       }
     }
 
+    const addLog = (
+      message: string,
+      stepId: FullSyncStepId | null = null,
+      level: FullSyncLogLevel = 'info',
+    ) => {
+      logs.push({
+        id: `log-${++logSequence}`,
+        timestamp: new Date().toISOString(),
+        stepId,
+        level,
+        message,
+      })
+    }
+
+    const describeSyncDirectoryResult = (result: SyncDirectoryResult): string => {
+      const details = []
+
+      if (result.writtenFiles > 0) {
+        details.push(`${result.writtenFiles} file${result.writtenFiles === 1 ? '' : 's'} written`)
+      }
+
+      if (result.removedFiles > 0) {
+        details.push(`${result.removedFiles} file${result.removedFiles === 1 ? '' : 's'} removed`)
+      }
+
+      if (result.unchangedFiles > 0) {
+        details.push(`${result.unchangedFiles} unchanged`)
+      }
+
+      return details.join(', ') || 'already up to date'
+    }
+
+    addLog('Started full skill sync.', null, 'info')
+    emit(null)
+
     try {
       const settings = this.getSettings()
       const scanRoot = getSkillScanRoot()
 
       // Step 1: Scan .codex/skills
       setStep('scan-codex', 'running')
+      addLog('Scanning .codex/skills for available skills.', 'scan-codex')
       emit('scan-codex')
       const codexRoot = path.join(scanRoot, '.codex', 'skills')
       const codexExists = await pathExists(codexRoot)
       const codexSkills = codexExists ? await listSkillDirectories(codexRoot) : []
       const codexSnapshots = new Map<string, SkillSnapshot>()
+
+       if (!codexExists) {
+        addLog(`No .codex skills directory found at ${codexRoot}.`, 'scan-codex', 'warning')
+        emit('scan-codex')
+      }
+
       for (const skillName of codexSkills) {
         const result = await readSkillSnapshot('discovered', codexRoot, '.codex/skills', skillName)
-        if (result.snapshot) codexSnapshots.set(skillName, result.snapshot)
+        if (result.snapshot) {
+          codexSnapshots.set(skillName, result.snapshot)
+          addLog(
+            `Loaded ${skillName} from .codex/skills (${result.snapshot.fileCount} files).`,
+            'scan-codex',
+            'success',
+          )
+        } else {
+          addLog(`Skipped ${skillName} in .codex/skills because it could not be read.`, 'scan-codex', 'warning')
+        }
+        emit('scan-codex')
       }
       setStep('scan-codex', 'done', `Found ${codexSkills.length} skills`)
+      addLog(`Finished scanning .codex/skills. Found ${codexSkills.length} skills.`, 'scan-codex', 'success')
       emit('scan-codex')
 
       // Step 2: Scan .claude/skills
       setStep('scan-claude', 'running')
+      addLog('Scanning .claude/skills for available skills.', 'scan-claude')
       emit('scan-claude')
       const claudeRoot = path.join(scanRoot, '.claude', 'skills')
       const claudeExists = await pathExists(claudeRoot)
       const claudeSkills = claudeExists ? await listSkillDirectories(claudeRoot) : []
       const claudeSnapshots = new Map<string, SkillSnapshot>()
+
+      if (!claudeExists) {
+        addLog(`No .claude skills directory found at ${claudeRoot}.`, 'scan-claude', 'warning')
+        emit('scan-claude')
+      }
+
       for (const skillName of claudeSkills) {
         const result = await readSkillSnapshot('discovered', claudeRoot, '.claude/skills', skillName)
-        if (result.snapshot) claudeSnapshots.set(skillName, result.snapshot)
+        if (result.snapshot) {
+          claudeSnapshots.set(skillName, result.snapshot)
+          addLog(
+            `Loaded ${skillName} from .claude/skills (${result.snapshot.fileCount} files).`,
+            'scan-claude',
+            'success',
+          )
+        } else {
+          addLog(`Skipped ${skillName} in .claude/skills because it could not be read.`, 'scan-claude', 'warning')
+        }
+        emit('scan-claude')
       }
       setStep('scan-claude', 'done', `Found ${claudeSkills.length} skills`)
+      addLog(`Finished scanning .claude/skills. Found ${claudeSkills.length} skills.`, 'scan-claude', 'success')
       emit('scan-claude')
 
       // Step 3: Compare
       setStep('compare', 'running')
+      addLog('Comparing skill versions across .codex and .claude.', 'compare')
       emit('compare')
       const allSkillNames = sortStrings(new Set([...codexSkills, ...claudeSkills]))
       const identical: string[] = []
@@ -862,11 +951,17 @@ export class SkillLibraryManager {
             identical.push(name)
           } else {
             conflicting.push(name)
+            addLog(`Conflict detected for ${name}; both roots have different contents.`, 'compare', 'warning')
+            emit('compare')
           }
         } else if (codex && !claude) {
           codexOnly.push(name)
+          addLog(`${name} exists only in .codex/skills.`, 'compare')
+          emit('compare')
         } else {
           claudeOnly.push(name)
+          addLog(`${name} exists only in .claude/skills.`, 'compare')
+          emit('compare')
         }
       }
 
@@ -877,16 +972,22 @@ export class SkillLibraryManager {
         `${conflicting.length} conflicting`,
       ].join(', ')
       setStep('compare', 'done', compareDetail)
+      addLog(`Comparison complete: ${compareDetail}.`, 'compare', 'success')
       emit('compare')
 
       // Step 4: AI merge conflicts
       if (conflicting.length > 0) {
         setStep('ai-merge', 'running')
+        addLog(
+          `Sending ${conflicting.length} conflicting skill${conflicting.length === 1 ? '' : 's'} to ${settings.primaryMergeAgent} for merge.`,
+          'ai-merge',
+        )
         emit('ai-merge')
 
         const mergedFiles = new Map<string, Map<string, Buffer>>()
         const proposals = new Map<string, import('../src/shared/skills').SkillAiMergeProposal>()
         const sourcesBySkill = new Map<string, Array<{ root: SkillSyncRoot; files: Map<string, Buffer> }>>()
+        let mergeFallbacks = 0
 
         for (const skillName of conflicting) {
           const codex = codexSnapshots.get(skillName)
@@ -899,26 +1000,58 @@ export class SkillLibraryManager {
           sourcesBySkill.set(skillName, sources)
 
           try {
+            addLog(`Generating merge proposal for ${skillName}.`, 'ai-merge')
+            emit('ai-merge')
             const proposal = await generateSkillMerge(
               settings.primaryMergeAgent,
               skillName,
               sources,
             )
             proposals.set(skillName, proposal)
+            addLog(
+              `Created merge proposal for ${skillName} with ${proposal.files.length} file${proposal.files.length === 1 ? '' : 's'}.`,
+              'ai-merge',
+              'success',
+            )
           } catch (error) {
             // If AI merge fails for a skill, fall back to the newer version
             const codexTs = codex?.modifiedTimestamp ?? 0
             const claudeTs = claude?.modifiedTimestamp ?? 0
-            mergedFiles.set(skillName, codexTs >= claudeTs ? codex!.files : claude!.files)
+            const useCodex = codexTs >= claudeTs
+            mergedFiles.set(skillName, useCodex ? codex!.files : claude!.files)
+            mergeFallbacks++
+            addLog(
+              `AI merge failed for ${skillName}; kept the newer ${useCodex ? '.codex/skills' : '.claude/skills'} copy (${error instanceof Error ? error.message : 'unknown error'}).`,
+              'ai-merge',
+              'warning',
+            )
           }
+
+          emit('ai-merge')
         }
 
-        setStep('ai-merge', 'done', `Primary agent merged ${proposals.size} skills`)
+        setStep(
+          'ai-merge',
+          'done',
+          [
+            `${proposals.size} merged`,
+            mergeFallbacks > 0 ? `${mergeFallbacks} fallback${mergeFallbacks === 1 ? '' : 's'}` : null,
+          ].filter(Boolean).join(', '),
+        )
+        addLog(
+          `Primary merge step finished with ${proposals.size} proposal${proposals.size === 1 ? '' : 's'} and ${mergeFallbacks} fallback${mergeFallbacks === 1 ? '' : 's'}.`,
+          'ai-merge',
+          'success',
+        )
         emit('ai-merge')
 
         // Step 5: Secondary agent reviews merge proposals
         if (settings.reviewMergeAgent !== 'none' && proposals.size > 0) {
           setStep('review', 'running')
+          addLog(
+            `Reviewing ${proposals.size} merge proposal${proposals.size === 1 ? '' : 's'} with ${settings.reviewMergeAgent}.`,
+            'review',
+          )
           emit('review')
 
           let approved = 0
@@ -928,6 +1061,8 @@ export class SkillLibraryManager {
             const sources = sourcesBySkill.get(skillName) ?? []
 
             try {
+              addLog(`Requesting review for ${skillName}.`, 'review')
+              emit('review')
               const review = await reviewSkillMerge(
                 settings.reviewMergeAgent,
                 proposal,
@@ -938,6 +1073,8 @@ export class SkillLibraryManager {
               if (review.status === 'changes-requested') {
                 // Secondary agent rejected — feed suggestions back to primary for a refined merge
                 try {
+                  addLog(`Reviewer requested changes for ${skillName}; refining the proposal.`, 'review', 'warning')
+                  emit('review')
                   const refinedProposal = await refineSkillMerge(
                     settings.primaryMergeAgent,
                     proposal,
@@ -946,18 +1083,28 @@ export class SkillLibraryManager {
                   )
                   proposals.set(skillName, refinedProposal)
                   refined++
+                  addLog(`Refined the ${skillName} proposal after review feedback.`, 'review', 'success')
                 } catch {
                   // If refinement fails, keep the original proposal
                   approved++
+                  addLog(`Refinement failed for ${skillName}; keeping the original proposal.`, 'review', 'warning')
                 }
               } else {
                 // Approved or approved-with-warnings — use the proposal as-is
                 approved++
+                addLog(
+                  `${skillName} review completed with status ${review.status}.`,
+                  'review',
+                  review.status === 'approved-with-warnings' ? 'warning' : 'success',
+                )
               }
             } catch {
               // If review fails, use the proposal as-is
               approved++
+              addLog(`Review failed for ${skillName}; using the original proposal.`, 'review', 'warning')
             }
+
+            emit('review')
           }
 
           const reviewDetail = [
@@ -965,12 +1112,15 @@ export class SkillLibraryManager {
             refined > 0 ? `${refined} refined after feedback` : null,
           ].filter(Boolean).join(', ')
           setStep('review', 'done', reviewDetail)
+          addLog(`Review step complete: ${reviewDetail}.`, 'review', 'success')
           emit('review')
         } else if (proposals.size > 0) {
           setStep('review', 'skipped', 'No secondary agent configured')
+          addLog('Skipped secondary review because no review agent is configured.', 'review')
           emit('review')
         } else {
           setStep('review', 'skipped', 'No proposals to review')
+          addLog('Skipped secondary review because there were no merge proposals to review.', 'review')
           emit('review')
         }
 
@@ -985,24 +1135,40 @@ export class SkillLibraryManager {
 
         // Step 6: Apply merged skills — write to both roots
         setStep('apply-merge', 'running')
+        addLog(`Applying merged skills to .codex/skills and .claude/skills.`, 'apply-merge')
         emit('apply-merge')
 
         for (const [skillName, files] of mergedFiles.entries()) {
-          await this.syncSkillDirectory(path.join(codexRoot, skillName), files)
-          await this.syncSkillDirectory(path.join(claudeRoot, skillName), files)
+          const codexResult = await this.syncSkillDirectory(path.join(codexRoot, skillName), files)
+          addLog(
+            `Applied ${skillName} to .codex/skills: ${describeSyncDirectoryResult(codexResult)}.`,
+            'apply-merge',
+            codexResult.changed ? 'success' : 'info',
+          )
+          emit('apply-merge')
+          const claudeResult = await this.syncSkillDirectory(path.join(claudeRoot, skillName), files)
+          addLog(
+            `Applied ${skillName} to .claude/skills: ${describeSyncDirectoryResult(claudeResult)}.`,
+            'apply-merge',
+            claudeResult.changed ? 'success' : 'info',
+          )
+          emit('apply-merge')
         }
 
         setStep('apply-merge', 'done', `Applied ${mergedFiles.size} merged skills`)
+        addLog(`Finished applying ${mergedFiles.size} merged skill${mergedFiles.size === 1 ? '' : 's'}.`, 'apply-merge', 'success')
         emit('apply-merge')
       } else {
         setStep('ai-merge', 'skipped', 'No conflicts to merge')
         setStep('review', 'skipped', 'No conflicts to review')
         setStep('apply-merge', 'skipped', 'No merges to apply')
+        addLog('No conflicts were found, so AI merge, review, and apply steps were skipped.', 'ai-merge')
         emit('ai-merge')
       }
 
       // Step 6: Sync back — copy skills only in one root to the other root
       setStep('sync-back', 'running')
+      addLog('Syncing one-sided skills back across .codex/skills and .claude/skills.', 'sync-back')
       emit('sync-back')
 
       await mkdir(codexRoot, { recursive: true })
@@ -1011,46 +1177,77 @@ export class SkillLibraryManager {
       for (const skillName of codexOnly) {
         const snapshot = codexSnapshots.get(skillName)
         if (snapshot) {
-          await this.syncSkillDirectory(path.join(claudeRoot, skillName), snapshot.files)
+          const result = await this.syncSkillDirectory(path.join(claudeRoot, skillName), snapshot.files)
+          addLog(
+            `Copied ${skillName} from .codex/skills to .claude/skills: ${describeSyncDirectoryResult(result)}.`,
+            'sync-back',
+            result.changed ? 'success' : 'info',
+          )
+          emit('sync-back')
         }
       }
       for (const skillName of claudeOnly) {
         const snapshot = claudeSnapshots.get(skillName)
         if (snapshot) {
-          await this.syncSkillDirectory(path.join(codexRoot, skillName), snapshot.files)
+          const result = await this.syncSkillDirectory(path.join(codexRoot, skillName), snapshot.files)
+          addLog(
+            `Copied ${skillName} from .claude/skills to .codex/skills: ${describeSyncDirectoryResult(result)}.`,
+            'sync-back',
+            result.changed ? 'success' : 'info',
+          )
+          emit('sync-back')
         }
       }
 
       setStep('sync-back', 'done', `Synced ${codexOnly.length + claudeOnly.length} skills across roots`)
+      addLog(
+        `Sync-back step finished after reconciling ${codexOnly.length + claudeOnly.length} one-sided skill${codexOnly.length + claudeOnly.length === 1 ? '' : 's'}.`,
+        'sync-back',
+        'success',
+      )
       emit('sync-back')
 
       // Step 7: Backup to library root
       setStep('backup', 'running')
+      addLog('Backing up synchronized skills to the library root.', 'backup')
       emit('backup')
 
       if (settings.libraryRoot) {
         const librarySkillsRoot = path.join(settings.libraryRoot, 'skills')
         await mkdir(librarySkillsRoot, { recursive: true })
+        addLog(`Library backup target: ${librarySkillsRoot}.`, 'backup')
+        emit('backup')
 
         // Re-scan the now-synchronized codex root to get the authoritative set
         const finalSkills = await listSkillDirectories(codexRoot)
         for (const skillName of finalSkills) {
           const result = await readSkillSnapshot('discovered', codexRoot, '.codex/skills', skillName)
           if (result.snapshot) {
-            await this.syncSkillDirectory(
+            const backupResult = await this.syncSkillDirectory(
               path.join(librarySkillsRoot, skillName),
               result.snapshot.files,
             )
+            addLog(
+              `Backed up ${skillName} to the library root: ${describeSyncDirectoryResult(backupResult)}.`,
+              'backup',
+              backupResult.changed ? 'success' : 'info',
+            )
+          } else {
+            addLog(`Skipped backing up ${skillName} because the synchronized snapshot could not be read.`, 'backup', 'warning')
           }
+          emit('backup')
         }
 
         setStep('backup', 'done', `Backed up ${finalSkills.length} skills to library root`)
+        addLog(`Library backup complete for ${finalSkills.length} skill${finalSkills.length === 1 ? '' : 's'}.`, 'backup', 'success')
       } else {
         setStep('backup', 'skipped', 'Library root not configured')
+        addLog('Skipped library backup because the library root is not configured.', 'backup', 'warning')
       }
       emit('backup')
 
       // Emit done
+      addLog('Full skill sync completed successfully.', null, 'success')
       emit(null, true)
 
       const summary = [
@@ -1065,9 +1262,11 @@ export class SkillLibraryManager {
         success: true,
         summary,
         steps: structuredClone(steps),
+        logs: structuredClone(logs),
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
+      const runningStep = steps.find((step) => step.status === 'running')?.id ?? null
       // Mark current running step as error
       for (const step of steps) {
         if (step.status === 'running') {
@@ -1075,12 +1274,14 @@ export class SkillLibraryManager {
           step.detail = message
         }
       }
+      addLog(`Full skill sync failed: ${message}`, runningStep, 'error')
       emit(null, true, message)
 
       return {
         success: false,
         summary: `Sync failed: ${message}`,
         steps: structuredClone(steps),
+        logs: structuredClone(logs),
       }
     }
   }
@@ -1526,7 +1727,7 @@ export class SkillLibraryManager {
   private async syncSkillDirectory(
     targetDirectory: string,
     desiredFiles: Map<string, Buffer>,
-  ): Promise<boolean> {
+  ): Promise<SyncDirectoryResult> {
     await mkdir(targetDirectory, { recursive: true })
 
     const existingFiles = (await pathExists(targetDirectory))
@@ -1536,17 +1737,22 @@ export class SkillLibraryManager {
           directories: [],
         }
     let changed = false
+    let writtenFiles = 0
+    let removedFiles = 0
+    let unchangedFiles = 0
 
     for (const [relativePath, content] of desiredFiles.entries()) {
       const targetPath = path.join(targetDirectory, ...relativePath.split('/'))
 
       if (await compareFileContents(content, targetPath)) {
+        unchangedFiles++
         continue
       }
 
       await mkdir(path.dirname(targetPath), { recursive: true })
       await writeFile(targetPath, content)
       changed = true
+      writtenFiles++
     }
 
     for (const [relativePath, existingPath] of existingFiles.files.entries()) {
@@ -1556,12 +1762,18 @@ export class SkillLibraryManager {
 
       await rm(existingPath, { force: true })
       changed = true
+      removedFiles++
     }
 
     if (changed || existingFiles.directories.length > 0) {
       await removeEmptyDirectories(targetDirectory)
     }
 
-    return changed
+    return {
+      changed,
+      writtenFiles,
+      removedFiles,
+      unchangedFiles,
+    }
   }
 }

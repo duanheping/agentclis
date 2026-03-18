@@ -133,10 +133,21 @@ export interface FullSyncStep {
   detail?: string
 }
 
+export type FullSyncLogLevel = 'info' | 'success' | 'warning' | 'error'
+
+export interface FullSyncLogEntry {
+  id: string
+  timestamp: string
+  stepId: FullSyncStepId | null
+  level: FullSyncLogLevel
+  message: string
+}
+
 export interface FullSyncProgress {
   steps: FullSyncStep[]
   currentStepId: FullSyncStepId | null
   done: boolean
+  logs: FullSyncLogEntry[]
   error?: string
 }
 
@@ -144,4 +155,11 @@ export interface FullSyncDone {
   success: boolean
   summary: string
   steps: FullSyncStep[]
+  logs: FullSyncLogEntry[]
+}
+
+export interface FullSyncState {
+  running: boolean
+  progress: FullSyncProgress | null
+  result: FullSyncDone | null
 }

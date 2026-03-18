@@ -18,6 +18,7 @@ import type {
 import type {
   FullSyncDone,
   FullSyncProgress,
+  FullSyncState,
   SkillAiMergeProposal,
   SkillLibrarySettings,
   SkillSyncResult,
@@ -43,7 +44,9 @@ export const IPC_CHANNELS = {
   resolveSkillConflict: 'skills:resolve-conflict',
   generateSkillAiMerge: 'skills:generate-ai-merge',
   applySkillAiMerge: 'skills:apply-ai-merge',
+  openSkillSyncWindow: 'skills:open-sync-window',
   startFullSync: 'skills:start-full-sync',
+  getFullSyncState: 'skills:get-full-sync-state',
   fullSyncProgress: 'skills:full-sync-progress',
   fullSyncDone: 'skills:full-sync-done',
   pickDirectory: 'dialog:pick-directory',
@@ -88,7 +91,9 @@ export interface AgentCliApi {
   ): Promise<SkillSyncResult>
   generateSkillAiMerge(skillName: string): Promise<SkillAiMergeProposal>
   applySkillAiMerge(proposal: SkillAiMergeProposal): Promise<SkillSyncResult>
-  startFullSync(): Promise<void>
+  openSkillSyncWindow(startSync?: boolean): Promise<void>
+  startFullSync(): Promise<FullSyncState>
+  getFullSyncState(): Promise<FullSyncState>
   onFullSyncProgress(listener: (event: FullSyncProgress) => void): () => void
   onFullSyncDone(listener: (event: FullSyncDone) => void): () => void
   pickDirectory(defaultPath?: string): Promise<string | null>

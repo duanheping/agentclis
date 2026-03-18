@@ -357,7 +357,17 @@ function createAgentCliMock(
     ),
     onWindowsCommandPromptData: vi.fn(() => vi.fn()),
     onWindowsCommandPromptExit: vi.fn(() => vi.fn()),
-    startFullSync: vi.fn().mockResolvedValue(undefined),
+    openSkillSyncWindow: vi.fn().mockResolvedValue(undefined),
+    startFullSync: vi.fn().mockResolvedValue({
+      running: true,
+      progress: null,
+      result: null,
+    }),
+    getFullSyncState: vi.fn().mockResolvedValue({
+      running: false,
+      progress: null,
+      result: null,
+    }),
     onFullSyncProgress: vi.fn(() => vi.fn()),
     onFullSyncDone: vi.fn(() => vi.fn()),
   }
@@ -424,7 +434,7 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Sync now' }))
 
     await waitFor(() => {
-      expect(agentCli.startFullSync).toHaveBeenCalledTimes(1)
+      expect(agentCli.openSkillSyncWindow).toHaveBeenCalledWith(true)
     })
 
     expect(screen.queryByText('Last sync')).not.toBeInTheDocument()
