@@ -113,3 +113,34 @@ export interface SkillSyncStatus {
   roots: SkillSyncRootStatus[]
   lastSyncResult: SkillSyncResult | null
 }
+
+export type FullSyncStepId =
+  | 'scan-codex'
+  | 'scan-claude'
+  | 'compare'
+  | 'ai-merge'
+  | 'apply-merge'
+  | 'sync-back'
+  | 'backup'
+
+export type FullSyncStepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'error'
+
+export interface FullSyncStep {
+  id: FullSyncStepId
+  label: string
+  status: FullSyncStepStatus
+  detail?: string
+}
+
+export interface FullSyncProgress {
+  steps: FullSyncStep[]
+  currentStepId: FullSyncStepId | null
+  done: boolean
+  error?: string
+}
+
+export interface FullSyncDone {
+  success: boolean
+  summary: string
+  steps: FullSyncStep[]
+}

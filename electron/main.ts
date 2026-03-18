@@ -197,6 +197,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.applySkillAiMerge, (_event, proposal) =>
     skillLibraryManager.applyAiMerge(proposal),
   )
+  ipcMain.handle(IPC_CHANNELS.startFullSync, async () => {
+    await skillLibraryManager.fullSync((progress) => {
+      mainWindow?.webContents.send(IPC_CHANNELS.fullSyncProgress, progress)
+    }).then((result) => {
+      mainWindow?.webContents.send(IPC_CHANNELS.fullSyncDone, result)
+    })
+  })
   ipcMain.handle(IPC_CHANNELS.pickDirectory, async (_event, defaultPath?: string) => {
     const options: OpenDialogOptions = {
       title: 'Select project folder',

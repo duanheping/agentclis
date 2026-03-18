@@ -27,6 +27,10 @@ import {
   type SkillSyncRootResult,
   type SkillSyncRootStatus,
   type SkillSyncStatus,
+  type FullSyncStep,
+  type FullSyncStepId,
+  type FullSyncProgress,
+  type FullSyncDone,
 } from '../src/shared/skills'
 import { generateSkillMerge, reviewSkillMerge } from './skillMergeAgent'
 
@@ -781,6 +785,244 @@ export class SkillLibraryManager {
     }
 
     return this.sync()
+  }
+
+  async fullSync(
+    onProgress: (progress: FullSyncProgress) => void,
+  ): Promise<FullSyncDone> {
+    const steps: FullSyncStep[] = [
+      { id: 'scan-codex', label: 'Scan .codex/skills', status: 'pending' },
+      { id: 'scan-claude', label: 'Scan .claude/skills', status: 'pending' },
+      { id: 'compare', label: 'Compare skill versions', status: 'pending' },
+      { id: 'ai-merge', label: 'AI merge conflicting skills', status: 'pending' },
+      { id: 'apply-merge', label: 'Apply merged skills to all roots', status: 'pending' },
+      { id: 'sync-back', label: 'Sync back to .codex/skills and .claude/skills', status: 'pending' },
+      { id: 'backup', label: 'Backup skills to library root', status: 'pending' },
+    ]
+
+    const emit = (currentStepId: FullSyncStepId | null, done = false, error?: string) => {
+      onProgress({ steps: structuredClone(steps), currentStepId, done, error })
+    }
+
+    const setStep = (id: FullSyncStepId, status: FullSyncStep['status'], detail?: string) => {
+      const step = steps.find((s) => s.id === id)
+      if (step) {
+        step.status = status
+        if (detail !== undefined) step.detail = detail
+      }
+    }
+
+    try {
+      const settings = this.getSettings()
+      const scanRoot = getSkillScanRoot()
+
+      // Step 1: Scan .codex/skills
+      setStep('scan-codex', 'running')
+      emit('scan-codex')
+      const codexRoot = path.join(scanRoot, '.codex', 'skills')
+      const codexExists = await pathExists(codexRoot)
+      const codexSkills = codexExists ? await listSkillDirectories(codexRoot) : []
+      const codexSnapshots = new Map<string, SkillSnapshot>()
+      for (const skillName of codexSkills) {
+        const result = await readSkillSnapshot('discovered', codexRoot, '.codex/skills', skillName)
+        if (result.snapshot) codexSnapshots.set(skillName, result.snapshot)
+      }
+      setStep('scan-codex', 'done', `Found ${codexSkills.length} skills`)
+      emit('scan-codex')
+
+      // Step 2: Scan .claude/skills
+      setStep('scan-claude', 'running')
+      emit('scan-claude')
+      const claudeRoot = path.join(scanRoot, '.claude', 'skills')
+      const claudeExists = await pathExists(claudeRoot)
+      const claudeSkills = claudeExists ? await listSkillDirectories(claudeRoot) : []
+      const claudeSnapshots = new Map<string, SkillSnapshot>()
+      for (const skillName of claudeSkills) {
+        const result = await readSkillSnapshot('discovered', claudeRoot, '.claude/skills', skillName)
+        if (result.snapshot) claudeSnapshots.set(skillName, result.snapshot)
+      }
+      setStep('scan-claude', 'done', `Found ${claudeSkills.length} skills`)
+      emit('scan-claude')
+
+      // Step 3: Compare
+      setStep('compare', 'running')
+      emit('compare')
+      const allSkillNames = sortStrings(new Set([...codexSkills, ...claudeSkills]))
+      const identical: string[] = []
+      const codexOnly: string[] = []
+      const claudeOnly: string[] = []
+      const conflicting: string[] = []
+
+      for (const name of allSkillNames) {
+        const codex = codexSnapshots.get(name)
+        const claude = claudeSnapshots.get(name)
+        if (codex && claude) {
+          if (codex.fingerprint === claude.fingerprint) {
+            identical.push(name)
+          } else {
+            conflicting.push(name)
+          }
+        } else if (codex && !claude) {
+          codexOnly.push(name)
+        } else {
+          claudeOnly.push(name)
+        }
+      }
+
+      const compareDetail = [
+        `${identical.length} identical`,
+        `${codexOnly.length} codex-only`,
+        `${claudeOnly.length} claude-only`,
+        `${conflicting.length} conflicting`,
+      ].join(', ')
+      setStep('compare', 'done', compareDetail)
+      emit('compare')
+
+      // Step 4: AI merge conflicts
+      if (conflicting.length > 0) {
+        setStep('ai-merge', 'running')
+        emit('ai-merge')
+
+        const mergedFiles = new Map<string, Map<string, Buffer>>()
+
+        for (const skillName of conflicting) {
+          const codex = codexSnapshots.get(skillName)
+          const claude = claudeSnapshots.get(skillName)
+          const sources = [
+            codex ? { root: 'discovered' as SkillSyncRoot, files: codex.files } : null,
+            claude ? { root: 'library' as SkillSyncRoot, files: claude.files } : null,
+          ].filter(Boolean) as Array<{ root: SkillSyncRoot; files: Map<string, Buffer> }>
+
+          try {
+            const proposal = await generateSkillMerge(
+              settings.primaryMergeAgent,
+              skillName,
+              sources,
+            )
+
+            if (settings.reviewMergeAgent !== 'none') {
+              proposal.review = await reviewSkillMerge(
+                settings.reviewMergeAgent,
+                proposal,
+                sources,
+              )
+            }
+
+            const files = new Map<string, Buffer>()
+            for (const file of proposal.files) {
+              files.set(file.path, Buffer.from(file.content, 'utf8'))
+            }
+            mergedFiles.set(skillName, files)
+          } catch (error) {
+            // If AI merge fails for a skill, fall back to the newer version
+            const codexTs = codex?.modifiedTimestamp ?? 0
+            const claudeTs = claude?.modifiedTimestamp ?? 0
+            mergedFiles.set(skillName, codexTs >= claudeTs ? codex!.files : claude!.files)
+          }
+        }
+
+        setStep('ai-merge', 'done', `Merged ${conflicting.length} skills`)
+        emit('ai-merge')
+
+        // Step 5: Apply merged skills — write to both roots
+        setStep('apply-merge', 'running')
+        emit('apply-merge')
+
+        for (const [skillName, files] of mergedFiles.entries()) {
+          await this.syncSkillDirectory(path.join(codexRoot, skillName), files)
+          await this.syncSkillDirectory(path.join(claudeRoot, skillName), files)
+        }
+
+        setStep('apply-merge', 'done', `Applied ${mergedFiles.size} merged skills`)
+        emit('apply-merge')
+      } else {
+        setStep('ai-merge', 'skipped', 'No conflicts to merge')
+        setStep('apply-merge', 'skipped', 'No merges to apply')
+        emit('ai-merge')
+      }
+
+      // Step 6: Sync back — copy skills only in one root to the other root
+      setStep('sync-back', 'running')
+      emit('sync-back')
+
+      await mkdir(codexRoot, { recursive: true })
+      await mkdir(claudeRoot, { recursive: true })
+
+      for (const skillName of codexOnly) {
+        const snapshot = codexSnapshots.get(skillName)
+        if (snapshot) {
+          await this.syncSkillDirectory(path.join(claudeRoot, skillName), snapshot.files)
+        }
+      }
+      for (const skillName of claudeOnly) {
+        const snapshot = claudeSnapshots.get(skillName)
+        if (snapshot) {
+          await this.syncSkillDirectory(path.join(codexRoot, skillName), snapshot.files)
+        }
+      }
+
+      setStep('sync-back', 'done', `Synced ${codexOnly.length + claudeOnly.length} skills across roots`)
+      emit('sync-back')
+
+      // Step 7: Backup to library root
+      setStep('backup', 'running')
+      emit('backup')
+
+      if (settings.libraryRoot) {
+        const librarySkillsRoot = path.join(settings.libraryRoot, 'skills')
+        await mkdir(librarySkillsRoot, { recursive: true })
+
+        // Re-scan the now-synchronized codex root to get the authoritative set
+        const finalSkills = await listSkillDirectories(codexRoot)
+        for (const skillName of finalSkills) {
+          const result = await readSkillSnapshot('discovered', codexRoot, '.codex/skills', skillName)
+          if (result.snapshot) {
+            await this.syncSkillDirectory(
+              path.join(librarySkillsRoot, skillName),
+              result.snapshot.files,
+            )
+          }
+        }
+
+        setStep('backup', 'done', `Backed up ${finalSkills.length} skills to library root`)
+      } else {
+        setStep('backup', 'skipped', 'Library root not configured')
+      }
+      emit('backup')
+
+      // Emit done
+      emit(null, true)
+
+      const summary = [
+        `Synced ${allSkillNames.length} skills`,
+        conflicting.length > 0 ? `${conflicting.length} merged via AI` : null,
+        codexOnly.length > 0 ? `${codexOnly.length} copied from codex to claude` : null,
+        claudeOnly.length > 0 ? `${claudeOnly.length} copied from claude to codex` : null,
+        settings.libraryRoot ? 'backed up to library' : null,
+      ].filter(Boolean).join(', ')
+
+      return {
+        success: true,
+        summary,
+        steps: structuredClone(steps),
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      // Mark current running step as error
+      for (const step of steps) {
+        if (step.status === 'running') {
+          step.status = 'error'
+          step.detail = message
+        }
+      }
+      emit(null, true, message)
+
+      return {
+        success: false,
+        summary: `Sync failed: ${message}`,
+        steps: structuredClone(steps),
+      }
+    }
   }
 
   private persistResult(result: SkillSyncResult): void {
