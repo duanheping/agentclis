@@ -154,6 +154,7 @@ export function SkillSyncWindow() {
   return (
     <div className="sync-window">
       <div className="sync-window__background" aria-hidden="true" />
+      <div className="sync-window__drag-bar" aria-hidden="true" />
 
       <main className="sync-window__shell">
         <section className="sync-window__card">

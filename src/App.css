@@ -2339,9 +2339,18 @@
 }
 
 .sync-window {
+  --titlebar-height: 38px;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.05);
+  --text-strong: #f4f4f5;
+  --text-base: #d7d7db;
+  --text-muted: #9b9ca2;
   position: relative;
+  height: 100vh;
   min-height: 100vh;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
   color: var(--text-base);
 }
 
@@ -2354,21 +2363,34 @@
     linear-gradient(180deg, rgba(17, 17, 17, 0.98), rgba(9, 11, 14, 1));
 }
 
+.sync-window__drag-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  height: var(--titlebar-height);
+  z-index: 2;
+  -webkit-app-region: drag;
+}
+
 .sync-window__shell {
   position: relative;
   display: flex;
   justify-content: center;
-  padding: 64px 24px 28px;
+  min-height: 100vh;
+  padding: calc(var(--titlebar-height) + 26px) 24px 28px;
 }
 
 .sync-window__card {
   width: min(1120px, 100%);
+  max-height: calc(100vh - (var(--titlebar-height) + 54px));
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 28px;
   padding: 28px;
   background: rgba(22, 22, 22, 0.9);
   backdrop-filter: blur(20px);
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.38);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .sync-window__header {
@@ -2376,6 +2398,8 @@
   justify-content: space-between;
   gap: 20px;
   align-items: flex-start;
+  -webkit-app-region: drag;
+  user-select: none;
 }
 
 .sync-window__title {
@@ -2393,6 +2417,8 @@
 .sync-window__actions {
   display: flex;
   gap: 12px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
 }
 
 .sync-window__status-bar {
@@ -2436,14 +2462,19 @@
   grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
   gap: 18px;
   margin-top: 26px;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .sync-window__panel {
-  min-height: 420px;
+  min-height: 0;
   padding: 18px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.025);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .sync-window__panel-header {
@@ -2467,6 +2498,9 @@
 
 .sync-window__steps {
   gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .sync-window__step-copy {
@@ -2484,10 +2518,12 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 520px;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
   display: grid;
   gap: 10px;
+  scrollbar-gutter: stable;
 }
 
 .sync-log {
@@ -2533,11 +2569,13 @@
 
 @media (max-width: 920px) {
   .sync-window__shell {
-    padding: 56px 16px 20px;
+    padding: calc(var(--titlebar-height) + 18px) 16px 20px;
   }
 
   .sync-window__card {
+    max-height: none;
     padding: 22px;
+    overflow: visible;
   }
 
   .sync-window__header {
@@ -2546,6 +2584,7 @@
 
   .sync-window__grid {
     grid-template-columns: 1fr;
+    flex: initial;
   }
 
   .sync-window__panel {
@@ -2553,7 +2592,7 @@
   }
 
   .sync-window__activity {
-    max-height: 320px;
+    min-height: 220px;
   }
 
   .sync-log {
