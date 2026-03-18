@@ -474,9 +474,6 @@ export function SessionSidebar({
               />
               <span className="sidebar__quick-action-copy">
                 <span className="sidebar__quick-action-title">New session</span>
-                <span className="sidebar__quick-action-meta">
-                  Start a Codex or Copilot CLI session
-                </span>
               </span>
             </button>
             <button
@@ -490,9 +487,6 @@ export function SessionSidebar({
               />
               <span className="sidebar__quick-action-copy">
                 <span className="sidebar__quick-action-title">New project</span>
-                <span className="sidebar__quick-action-meta">
-                  Group sessions under a repo root
-                </span>
               </span>
             </button>
           </div>
@@ -526,9 +520,6 @@ export function SessionSidebar({
                 >
                   <div className="project-group__content">
                     <div className="project-group__title">{project.config.title}</div>
-                    {showProjectPaths ? (
-                      <div className="project-group__path">{project.config.rootPath}</div>
-                    ) : null}
                   </div>
                   <div className="project-group__summary">
                     <span

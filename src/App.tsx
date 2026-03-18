@@ -183,16 +183,6 @@ function formatCountLabel(count: number, singular: string, plural: string): stri
   return `${count} ${count === 1 ? singular : plural}`
 }
 
-function getTitlebarSectionLabel(project: ProjectSnapshot | null): string {
-  if (!project) {
-    return 'Local agent workspace'
-  }
-
-  return project.config.title.trim().toLowerCase() === APP_BRAND_NAME
-    ? 'Current project'
-    : project.config.title
-}
-
 function App() {
   const agentCli = window.agentCli
   const projects = useSessionsStore((state) => state.projects)
@@ -1231,9 +1221,6 @@ function App() {
         <div className="titlebar__brand">
           <div className="titlebar__brand-copy">
             <span className="titlebar__name">{APP_BRAND_NAME}</span>
-            <span className="titlebar__section">
-              {getTitlebarSectionLabel(activeProject)}
-            </span>
           </div>
         </div>
 
@@ -1262,9 +1249,6 @@ function App() {
                   onClick={() => void handleOpenProject('vscode')}
                 >
                   <span className="titlebar-menu__item-title">VS Code</span>
-                  <span className="titlebar-menu__item-meta">
-                    Open the project folder in Visual Studio Code.
-                  </span>
                 </button>
                 <button
                   type="button"
@@ -1273,9 +1257,6 @@ function App() {
                   onClick={() => void handleOpenProject('explorer')}
                 >
                   <span className="titlebar-menu__item-title">File Explorer</span>
-                  <span className="titlebar-menu__item-meta">
-                    Browse the active project root in Explorer.
-                  </span>
                 </button>
                 <button
                   type="button"
@@ -1284,9 +1265,6 @@ function App() {
                   onClick={() => void handleOpenProject('terminal')}
                 >
                   <span className="titlebar-menu__item-title">Terminal</span>
-                  <span className="titlebar-menu__item-meta">
-                    Launch a terminal rooted in the active project.
-                  </span>
                 </button>
               </div>
             ) : null}

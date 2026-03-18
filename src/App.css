@@ -1,5 +1,5 @@
 .app-shell {
-  --titlebar-height: 54px;
+  --titlebar-height: 38px;
   --sidebar-width: 312px;
   --sidebar-resizer-size: 10px;
   --sidebar-mobile-size: auto;
@@ -75,7 +75,7 @@
   left: 50%;
   width: 1px;
   transform: translateX(-50%);
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   transition:
     background-color 140ms ease,
     box-shadow 140ms ease;
@@ -106,6 +106,7 @@
   backdrop-filter: none;
   -webkit-app-region: drag;
   user-select: none;
+  height: var(--titlebar-height);
 }
 
 .titlebar__sidebar-toggle {
@@ -113,8 +114,8 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   padding: 0;
@@ -255,15 +256,15 @@
 .titlebar-action {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
+  gap: 6px;
+  min-height: 28px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  padding: 0.45rem 0.88rem;
+  padding: 0.3rem 0.7rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-base);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   font-weight: 600;
   white-space: nowrap;
   -webkit-app-region: no-drag;
@@ -318,27 +319,27 @@
 
 .titlebar-menu__panel {
   position: absolute;
-  top: calc(100% + 10px);
+  top: calc(100% + 6px);
   left: 0;
   z-index: 30;
   display: grid;
-  gap: 6px;
-  width: 252px;
-  padding: 8px;
+  gap: 2px;
+  width: 180px;
+  padding: 4px;
   border: 1px solid var(--border-subtle);
-  border-radius: 18px;
+  border-radius: 12px;
   background: rgba(32, 32, 32, 0.98);
   box-shadow: 0 20px 42px rgba(0, 0, 0, 0.34);
   -webkit-app-region: no-drag;
 }
 
 .titlebar-menu__item {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: center;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 14px;
-  padding: 0.82rem 0.9rem;
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
   background: transparent;
   color: var(--text-strong);
   font: inherit;
@@ -353,8 +354,8 @@
 }
 
 .titlebar-menu__item-title {
-  font-size: 0.88rem;
-  font-weight: 650;
+  font-size: 0.8rem;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -392,7 +393,7 @@
 .sidebar__header {
   display: grid;
   gap: 0;
-  padding: 14px 14px 12px;
+  padding: 10px 14px 8px;
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -413,18 +414,17 @@
 
 .sidebar__actions {
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .sidebar__quick-action {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 18px;
-  padding: 0.82rem 0.9rem;
+  border-radius: 10px;
+  padding: 0.45rem 0.7rem;
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-base);
   font: inherit;
@@ -445,20 +445,19 @@
 }
 
 .sidebar__quick-action-copy {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: center;
   min-width: 0;
 }
 
 .sidebar__quick-action-title {
   color: var(--text-strong);
-  font-size: 0.88rem;
+  font-size: 0.82rem;
   font-weight: 600;
 }
 
 .sidebar__quick-action-meta {
-  color: var(--text-muted);
-  font-size: 0.76rem;
+  display: none;
 }
 
 .sidebar__quick-action-icon {
@@ -540,7 +539,7 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   min-height: 0;
   overflow: auto;
   padding: 0 12px 14px 14px;
@@ -569,27 +568,27 @@
 
 .project-group {
   display: grid;
-  gap: 6px;
+  gap: 2px;
   padding: 2px 0;
 }
 
 .project-group__header,
 .project-group__content {
   display: grid;
-  gap: 4px;
+  gap: 2px;
 }
 
 .project-group__header {
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   border: 0;
-  border-radius: 14px;
+  border-radius: 10px;
   background: transparent;
   color: inherit;
   font: inherit;
-  padding: 0.76rem 0.85rem;
+  padding: 0.4rem 0.7rem;
   text-align: left;
 }
 
@@ -613,6 +612,9 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-group__path {
@@ -647,7 +649,7 @@
 
 .project-group__sessions {
   display: grid;
-  gap: 4px;
+  gap: 1px;
   margin-left: 8px;
   padding-left: 10px;
   border-left: 1px solid rgba(255, 255, 255, 0.06);
@@ -664,8 +666,8 @@
   align-items: center;
   width: 100%;
   min-width: 0;
-  padding: 0.76rem 0.9rem;
-  border-radius: 14px;
+  padding: 0.35rem 0.7rem;
+  border-radius: 10px;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -713,8 +715,9 @@
 }
 
 .session-item__body {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -724,7 +727,7 @@
   color: var(--text-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -732,20 +735,21 @@
 .session-item__meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .session-item__status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 20px;
-  padding: 0 8px;
+  min-height: 18px;
+  padding: 0 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-base);
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -772,12 +776,7 @@
 }
 
 .session-item__command {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .session-item__rename {

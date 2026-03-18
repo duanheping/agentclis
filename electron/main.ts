@@ -125,7 +125,7 @@ async function createMainWindow(): Promise<void> {
       ? {
           color: '#1b2026',
           symbolColor: '#f4f4f5',
-          height: 54,
+          height: 38,
         }
       : false,
     webPreferences: {
