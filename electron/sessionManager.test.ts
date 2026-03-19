@@ -392,6 +392,162 @@ describe('SessionManager restore policy', () => {
       ).sessions[0]?.externalSession?.sessionId,
     ).toBe('019cf7a4-db19-78a0-a9b1-b9e3d2b0126a')
   })
+
+  it('does not recover a Codex Desktop session for an agentclis-managed restore', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-15T18:10:00.000Z',
+          updatedAt: '2026-03-15T18:12:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'triage ECG-205709',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-15T18:10:24.756Z',
+          updatedAt: '2026-03-15T18:12:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const desktopSessionFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '15',
+      'rollout-2026-03-15T18-10-31-019desktop-session.jsonl',
+    )
+    mocks.setFile(
+      desktopSessionFilePath,
+      [
+        '{"timestamp":"2026-03-15T18:10:31.000Z","type":"session_meta","payload":{"id":"019desktop-session","timestamp":"2026-03-15T18:10:31.000Z","cwd":"C:\\\\repo","originator":"Codex Desktop","source":"vscode"}}',
+        '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"triage ECG-205709"}]}}',
+      ].join('\n'),
+      '2026-03-15T18:10:35.000Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex',
+    ])
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: { sessionId: string }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toBeUndefined()
+  })
+
+  it('drops a previously saved Codex Desktop session id before restore', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-15T18:10:00.000Z',
+          updatedAt: '2026-03-19T15:25:31.314Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'tell me major canadian oil company stock',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-18T20:18:09.708Z',
+          updatedAt: '2026-03-19T15:25:31.314Z',
+          externalSession: {
+            provider: 'codex',
+            sessionId: '019desktop-session',
+            detectedAt: '2026-03-19T15:23:22.906Z',
+          },
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const desktopSessionFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '18',
+      'rollout-2026-03-18T20-18-09-019desktop-session.jsonl',
+    )
+    mocks.setFile(
+      desktopSessionFilePath,
+      [
+        '{"timestamp":"2026-03-18T20:18:24.720Z","type":"session_meta","payload":{"id":"019desktop-session","timestamp":"2026-03-18T20:18:09.708Z","cwd":"C:\\\\repo","originator":"Codex Desktop","source":"vscode"}}',
+      ].join('\n'),
+      '2026-03-19T15:25:31.314Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex',
+    ])
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: { sessionId: string }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toBeUndefined()
+  })
 })
 
 describe('SessionManager project lifecycle', () => {

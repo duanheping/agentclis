@@ -52,6 +52,8 @@ interface DetectedExternalSession {
   startedAt: number
   summary?: string
   sourcePath?: string
+  originator?: string
+  source?: string
 }
 
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
@@ -358,6 +360,26 @@ export class SessionManager {
         this.persist()
       }
 
+      if (normalizedConfig.externalSession?.provider === 'codex') {
+        const shouldKeepStoredSession =
+          await this.shouldKeepStoredCodexExternalSession(normalizedConfig)
+        if (!shouldKeepStoredSession) {
+          this.releaseExternalSession(normalizedConfig)
+          const nextConfig: SessionConfig = {
+            ...normalizedConfig,
+            externalSession: undefined,
+          }
+          this.configs.set(nextConfig.id, nextConfig)
+          this.trackHistoricalExternalSessionRecovery(nextConfig)
+          this.persist()
+          this.events.onConfig({
+            sessionId: nextConfig.id,
+            config: nextConfig,
+          })
+          normalizedConfig = nextConfig
+        }
+      }
+
       const resumableProvider =
         normalizedConfig.externalSession === undefined &&
         this.historicalExternalSessionRecovery.has(normalizedConfig.id)
@@ -589,6 +611,7 @@ export class SessionManager {
     const normalizedCwd = this.normalizePath(config.cwd)
 
     const match = candidates
+      .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
       .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
       .filter((candidate) => {
         const claimedBy = this.claimedExternalSessions.get(
@@ -631,6 +654,7 @@ export class SessionManager {
 
     const scoredCandidates = await Promise.all(
       candidates
+        .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
         .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
         .filter((candidate) => {
           const claimedBy = this.claimedExternalSessions.get(
@@ -664,8 +688,52 @@ export class SessionManager {
       })[0]?.candidate ?? null
   }
 
+  private async shouldKeepStoredCodexExternalSession(
+    config: SessionConfig,
+  ): Promise<boolean> {
+    if (config.externalSession?.provider !== 'codex') {
+      return true
+    }
+
+    const candidate = await this.findRecentExternalSessionById(
+      'codex',
+      config.externalSession.sessionId,
+      this.getExternalSessionReferenceTimes(config),
+    )
+
+    if (!candidate) {
+      return true
+    }
+
+    return this.isEligibleExternalSessionCandidate(candidate)
+  }
+
+  private async findRecentExternalSessionById(
+    provider: 'codex' | 'copilot',
+    sessionId: string,
+    referenceTimestamps: number[],
+  ): Promise<DetectedExternalSession | null> {
+    if (referenceTimestamps.length === 0) {
+      return null
+    }
+
+    const candidates = await this.listRecentExternalSessions(
+      provider,
+      Math.max(
+        0,
+        Math.min(...referenceTimestamps) - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
+      ),
+    )
+
+    return candidates.find((candidate) => candidate.sessionId === sessionId) ?? null
+  }
+
   private getExternalSessionReferenceTimes(config: SessionConfig): number[] {
-    return [config.updatedAt, config.createdAt]
+    return [
+      config.updatedAt,
+      config.createdAt,
+      config.externalSession?.detectedAt,
+    ]
       .map((value) => Date.parse(value))
       .filter((value) => !Number.isNaN(value))
   }
@@ -871,6 +939,8 @@ export class SessionManager {
         cwd: meta.cwd,
         startedAt,
         sourcePath: filePath,
+        originator: meta.originator,
+        source: meta.source,
       }
     } catch {
       return null
@@ -1023,6 +1093,16 @@ export class SessionManager {
     sessionId: string,
   ): string {
     return `${provider}:${sessionId}`
+  }
+
+  private isEligibleExternalSessionCandidate(
+    candidate: DetectedExternalSession,
+  ): boolean {
+    if (candidate.provider !== 'codex') {
+      return true
+    }
+
+    return candidate.source === 'cli' || candidate.originator === 'codex_cli_rs'
   }
 
   private trackHistoricalExternalSessionRecovery(config: SessionConfig): void {

@@ -34,12 +34,14 @@ describe('codexCli', () => {
   it('extracts session metadata from the persisted Codex session prefix', () => {
     expect(
       extractCodexSessionMeta(
-        '{"timestamp":"2026-03-11T15:33:58.860Z","type":"session_meta","payload":{"id":"019cdd85-2982-74c1-bb26-94119101b35c","timestamp":"2026-03-11T15:30:17.652Z","cwd":"C:\\\\Users\\\\hduan10\\\\Documents\\\\repo\\\\agenclis","originator":"codex_cli_rs"}}',
+        '{"timestamp":"2026-03-11T15:33:58.860Z","type":"session_meta","payload":{"id":"019cdd85-2982-74c1-bb26-94119101b35c","timestamp":"2026-03-11T15:30:17.652Z","cwd":"C:\\\\Users\\\\hduan10\\\\Documents\\\\repo\\\\agenclis","originator":"codex_cli_rs","source":"cli"}}',
       ),
     ).toEqual({
       sessionId: '019cdd85-2982-74c1-bb26-94119101b35c',
       timestamp: '2026-03-11T15:30:17.652Z',
       cwd: 'C:\\Users\\hduan10\\Documents\\repo\\agenclis',
+      originator: 'codex_cli_rs',
+      source: 'cli',
     })
   })
 })
