@@ -93,12 +93,13 @@ export function CreateSessionDialog({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const creatingNewProject = formState.projectSelection === NEW_PROJECT_VALUE
+  const projectOnlyFlow = initialIntent === 'project'
   const selectedProject =
     projects.find((project) => project.config.id === formState.projectSelection) ?? null
   const compactProjectSessionFlow =
     mode === 'project-context' && !creatingNewProject && selectedProject !== null
-  const dialogEyebrow = creatingNewProject ? 'New Project' : 'New Session'
-  const dialogTitle = creatingNewProject
+  const dialogEyebrow = projectOnlyFlow || creatingNewProject ? 'New Project' : 'New Session'
+  const dialogTitle = projectOnlyFlow || creatingNewProject
     ? 'Create project'
     : 'Create Agent CLI Session'
   const sessionTitleLabel = creatingNewProject
@@ -110,7 +111,7 @@ export function CreateSessionDialog({
   const sessionCwdLabel = creatingNewProject
     ? 'First session working directory (optional)'
     : 'Session working directory (optional)'
-  const submitLabel = creatingNewProject ? 'Create project' : 'Create session'
+  const submitLabel = projectOnlyFlow || creatingNewProject ? 'Create project' : 'Create session'
 
   useEffect(() => {
     if (!open) {
@@ -219,18 +220,25 @@ export function CreateSessionDialog({
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
+    if (projectOnlyFlow) {
+      if (!formState.projectRootPath.trim()) {
+        setErrorMessage('Project root path is required for a new project.')
+        return
+      }
+    }
+
     const startupCommand = (
       compactProjectSessionFlow
         ? formState.agentCliProvider
         : formState.startupCommand
     ).trim()
 
-    if (!creatingNewProject && !startupCommand) {
+    if (!projectOnlyFlow && !creatingNewProject && !startupCommand) {
       setErrorMessage('Startup command is required.')
       return
     }
 
-    if (creatingNewProject && !formState.projectRootPath.trim()) {
+    if (!projectOnlyFlow && creatingNewProject && !formState.projectRootPath.trim()) {
       setErrorMessage('Project root path is required for a new project.')
       return
     }
@@ -239,6 +247,14 @@ export function CreateSessionDialog({
     setErrorMessage(null)
 
     try {
+      if (projectOnlyFlow) {
+        await onCreateProject({
+          rootPath: formState.projectRootPath,
+        })
+        onClose()
+        return
+      }
+
       if (creatingNewProject && !startupCommand) {
         await onCreateProject({
           title: formState.projectTitle,
@@ -259,6 +275,9 @@ export function CreateSessionDialog({
         payload.projectRootPath = formState.projectRootPath
       } else {
         payload.projectId = formState.projectSelection
+        if (compactProjectSessionFlow) {
+          payload.createWithWorktree = true
+        }
       }
 
       await onCreateSession(payload)
@@ -325,7 +344,7 @@ export function CreateSessionDialog({
         </div>
 
         <form className="dialog-form" onSubmit={handleSubmit}>
-          {compactProjectSessionFlow ? (
+          {projectOnlyFlow ? null : compactProjectSessionFlow ? (
             <label className="field">
               <span>Project</span>
               <div className="project-summary">
@@ -411,7 +430,47 @@ export function CreateSessionDialog({
             </label>
           )}
 
-          {creatingNewProject ? (
+          {projectOnlyFlow ? (
+            <label className="field">
+              <span>Project root path</span>
+              <div className="path-picker">
+                <button
+                  type="button"
+                  className="path-picker__value"
+                  onClick={() => {
+                    void handlePickProjectRoot()
+                  }}
+                  disabled={submitting || pickingProjectRoot}
+                >
+                  <span
+                    className={
+                      formState.projectRootPath
+                        ? 'path-picker__text'
+                        : 'path-picker__text is-placeholder'
+                    }
+                  >
+                    {formState.projectRootPath ||
+                      'Click to choose the project folder'}
+                  </span>
+                </button>
+                <div className="path-picker__actions">
+                  <button
+                    type="button"
+                    className="ghost-button path-picker__action"
+                    onClick={() => {
+                      void handlePickProjectRoot()
+                    }}
+                    disabled={submitting || pickingProjectRoot}
+                  >
+                    {pickingProjectRoot ? 'Opening…' : 'Choose folder'}
+                  </button>
+                </div>
+              </div>
+              <span className="field-hint">
+                Use the native folder picker to choose the project root.
+              </span>
+            </label>
+          ) : creatingNewProject ? (
             <>
               <label className="field">
                 <span>Project name (optional)</span>
@@ -490,10 +549,10 @@ export function CreateSessionDialog({
                 ))}
               </div>
               <span className="field-hint">
-                The session uses the selected project root as its working directory.
+                A fresh git worktree and branch will be created for this session.
               </span>
             </label>
-          ) : (
+          ) : projectOnlyFlow ? null : (
             <>
               <label className="field">
                 <span>{sessionTitleLabel}</span>

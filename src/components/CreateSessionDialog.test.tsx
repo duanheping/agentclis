@@ -57,7 +57,50 @@ describe('CreateSessionDialog', () => {
       title: '',
       startupCommand: 'copilot',
       cwd: 'C:\\Users\\hduan10\\Documents\\repo\\MSAR43_S32G',
+      createWithWorktree: true,
     })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the new project flow focused on the project root path', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const onCreateProject = vi.fn().mockResolvedValue(undefined)
+    const onCreateSession = vi.fn().mockResolvedValue(undefined)
+    window.agentCli = {
+      pickDirectory: vi
+        .fn()
+        .mockResolvedValue('C:\\Users\\hduan10\\Documents\\repo\\agenclis'),
+    } as unknown as typeof window.agentCli
+
+    render(
+      <CreateSessionDialog
+        open
+        initialIntent="project"
+        projects={[]}
+        activeProjectId={null}
+        onClose={onClose}
+        onCreateProject={onCreateProject}
+        onCreateSession={onCreateSession}
+      />,
+    )
+
+    expect(screen.queryByText('Project name (optional)')).not.toBeInTheDocument()
+    expect(screen.queryByText('First session title (optional)')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('First session startup command (optional)'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('First session working directory (optional)'),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Choose folder' }))
+    await user.click(screen.getByRole('button', { name: 'Create project' }))
+
+    expect(onCreateProject).toHaveBeenCalledWith({
+      rootPath: 'C:\\Users\\hduan10\\Documents\\repo\\agenclis',
+    })
+    expect(onCreateSession).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

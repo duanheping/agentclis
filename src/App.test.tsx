@@ -536,7 +536,7 @@ describe('App skills settings', () => {
                 title: 'Codex',
                 startupCommand: 'codex',
                 pendingFirstPromptTitle: false,
-                cwd: 'C:\\repo\\agenclis',
+                cwd: 'C:\\Users\\hduan10\\.codex\\worktrees\\agenclis\\20260317-153045-12345678',
                 shell: 'powershell.exe',
                 createdAt: '2026-03-13T16:00:00.000Z',
                 updatedAt: '2026-03-13T16:00:00.000Z',
@@ -564,13 +564,16 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Open project' }))
     await user.click(screen.getByRole('menuitem', { name: /VS Code/i }))
 
-    expect(agentCli.openProject).toHaveBeenCalledWith('vscode', 'C:\\repo\\agenclis')
+    expect(agentCli.openProject).toHaveBeenCalledWith(
+      'vscode',
+      'C:\\Users\\hduan10\\.codex\\worktrees\\agenclis\\20260317-153045-12345678',
+    )
 
     await user.click(screen.getByRole('button', { name: 'Toggle cmd' }))
 
     expect(agentCli.openWindowsCommandPrompt).toHaveBeenCalledWith(
       'session-1',
-      'C:\\repo\\agenclis',
+      'C:\\Users\\hduan10\\.codex\\worktrees\\agenclis\\20260317-153045-12345678',
     )
 
     await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
@@ -584,9 +587,11 @@ describe('App skills settings', () => {
       expect(screen.getByText(/diff --git a\/src\/App.tsx/i)).toBeInTheDocument()
     })
 
-    expect(agentCli.getProjectGitOverview).toHaveBeenCalledWith('C:\\repo\\agenclis')
+    expect(agentCli.getProjectGitOverview).toHaveBeenCalledWith(
+      'C:\\Users\\hduan10\\.codex\\worktrees\\agenclis\\20260317-153045-12345678',
+    )
     expect(agentCli.getProjectGitDiff).toHaveBeenCalledWith(
-      'C:\\repo\\agenclis',
+      'C:\\Users\\hduan10\\.codex\\worktrees\\agenclis\\20260317-153045-12345678',
       'src/App.tsx',
       false,
     )

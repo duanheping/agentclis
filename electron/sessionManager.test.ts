@@ -27,8 +27,13 @@ const mocks = vi.hoisted(() => {
     terminals.push(terminal)
     return terminal
   })
+  const createProjectSessionWorktree = vi.fn(async () => ({
+    branchName: 'agenclis/main/20260317-153045-session',
+    cwd: 'C:\\Users\\hduan10\\.codex\\worktrees\\repo\\20260317-153045-session',
+  }))
 
   return {
+    createProjectSessionWorktree,
     terminals,
     spawn,
     getFile: (filePath: string) => files.get(filePath)?.content,
@@ -59,6 +64,11 @@ const mocks = vi.hoisted(() => {
         const terminal = createTerminal()
         terminals.push(terminal)
         return terminal
+      })
+      createProjectSessionWorktree.mockReset()
+      createProjectSessionWorktree.mockResolvedValue({
+        branchName: 'agenclis/main/20260317-153045-session',
+        cwd: 'C:\\Users\\hduan10\\.codex\\worktrees\\repo\\20260317-153045-session',
       })
     },
   }
@@ -200,6 +210,10 @@ vi.mock('node:module', async (importOriginal) => {
     },
   }
 })
+
+vi.mock('./projectWorktree', () => ({
+  createProjectSessionWorktree: mocks.createProjectSessionWorktree,
+}))
 
 import { SessionManager } from './sessionManager'
 
@@ -659,6 +673,40 @@ describe('SessionManager project lifecycle', () => {
       'codex',
     ])
     expect(session.config.externalSession).toBeUndefined()
+  })
+
+  it('creates project-context sessions inside a fresh git worktree', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const project = manager.createProject({
+      title: 'Workspace',
+      rootPath: 'C:\\repo',
+    })
+
+    const session = await manager.createSession({
+      projectId: project.config.id,
+      startupCommand: 'codex',
+      createWithWorktree: true,
+    })
+
+    expect(mocks.createProjectSessionWorktree).toHaveBeenCalledWith({
+      projectRootPath: 'C:\\repo',
+      sessionId: session.config.id,
+      createdAt: session.config.createdAt,
+    })
+    expect(session.config.cwd).toBe(
+      'C:\\Users\\hduan10\\.codex\\worktrees\\repo\\20260317-153045-session',
+    )
+    expect((mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[2]).toEqual(
+      expect.objectContaining({
+        cwd: 'C:\\Users\\hduan10\\.codex\\worktrees\\repo\\20260317-153045-session',
+      }),
+    )
   })
 
   it('uses the first submitted prompt as the title for managed CLI sessions', async () => {

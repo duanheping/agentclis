@@ -36,6 +36,7 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
 } from './codexCli'
+import { createProjectSessionWorktree } from './projectWorktree'
 import {
   buildShellArgs,
   resolveShellCommand,
@@ -216,7 +217,15 @@ export class SessionManager {
     const project = this.resolveProjectForCreate(input)
     const id = crypto.randomUUID()
     const shell = resolveShellCommand()
-    const cwd = resolveSessionCwd(input.cwd, project.rootPath)
+    const cwd = input.createWithWorktree
+      ? (
+          await createProjectSessionWorktree({
+            projectRootPath: project.rootPath,
+            sessionId: id,
+            createdAt: now,
+          })
+        ).cwd
+      : resolveSessionCwd(input.cwd, project.rootPath)
 
     const config: SessionConfig = {
       id,
@@ -734,6 +743,7 @@ export class SessionManager {
       config.createdAt,
       config.externalSession?.detectedAt,
     ]
+      .filter((value): value is string => typeof value === 'string')
       .map((value) => Date.parse(value))
       .filter((value) => !Number.isNaN(value))
   }

@@ -69,6 +69,7 @@ export interface CreateSessionInput {
   title?: string
   startupCommand: string
   cwd?: string
+  createWithWorktree?: boolean
 }
 
 export interface SessionCloseResult {
