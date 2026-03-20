@@ -257,15 +257,16 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
+  min-height: 26px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  padding: 0.3rem 0.7rem;
+  padding: 0.22rem 0.62rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-base);
   font: inherit;
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   font-weight: 600;
+  line-height: 1;
   white-space: nowrap;
   -webkit-app-region: no-drag;
 }
@@ -290,23 +291,26 @@
 .titlebar-action__label {
   display: inline-flex;
   align-items: center;
+  line-height: 1;
 }
 
 .titlebar-action__chevron {
   color: var(--text-muted);
   font-size: 0.64rem;
+  line-height: 1;
 }
 
 .titlebar-action__counts {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding-left: 2px;
 }
 
 .titlebar-action__count {
   font-size: 0.74rem;
   font-weight: 700;
+  line-height: 1;
 }
 
 .titlebar-action__count.is-added {
@@ -1289,9 +1293,13 @@
 }
 
 .project-diff-panel__refresh {
-  min-height: 36px;
-  padding: 0.55rem 0.82rem;
-  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0.42rem 0.74rem;
+  font-size: 0.78rem;
+  line-height: 1;
 }
 
 .project-diff-panel__changes,
