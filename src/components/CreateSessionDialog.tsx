@@ -78,7 +78,7 @@ export function CreateSessionDialog({
     mode === 'project-context' && selectedProject !== null
   const dialogEyebrow = projectOnlyFlow ? 'New Project' : 'New Session'
   const dialogTitle = projectOnlyFlow ? null : 'New session'
-  const submitLabel = projectOnlyFlow ? 'Create' : 'Create session'
+  const submitLabel = 'Create'
   const submitDisabled = !projectOnlyFlow && selectedProject === null
 
   useEffect(() => {
@@ -373,18 +373,15 @@ export function CreateSessionDialog({
                       <span className="provider-option__title">
                         {provider === 'codex' ? 'Codex CLI' : 'Copilot CLI'}
                       </span>
-                      <span className="provider-option__meta">
-                        Command: {provider}
-                      </span>
                     </span>
                   </label>
                 ))}
               </div>
-              <span className="field-hint">
-                {compactProjectSessionFlow
-                  ? 'A fresh git worktree and branch will be created for this session.'
-                  : 'The session starts in the selected project root directory.'}
-              </span>
+              {compactProjectSessionFlow ? (
+                <span className="field-hint">
+                  A fresh git worktree and branch will be created for this session.
+                </span>
+              ) : null}
             </label>
           )}
 
