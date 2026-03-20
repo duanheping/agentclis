@@ -1555,10 +1555,14 @@
 }
 
 .dialog-card__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 72px;
-  min-height: 36px;
-  padding: 0.58rem 0.88rem;
+  min-height: 34px;
+  padding: 0.46rem 0.88rem;
   font-size: 0.84rem;
+  line-height: 1;
 }
 
 .dialog-form,
@@ -2236,17 +2240,25 @@
 }
 
 .dialog-actions__cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 80px;
-  min-height: 36px;
-  padding: 0.58rem 0.88rem;
+  min-height: 34px;
+  padding: 0.46rem 0.88rem;
   font-size: 0.84rem;
+  line-height: 1;
 }
 
 .dialog-actions__submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 108px;
-  min-height: 38px;
-  padding: 0.58rem 0.96rem;
+  min-height: 35px;
+  padding: 0.46rem 0.96rem;
   font-size: 0.84rem;
+  line-height: 1;
 }
 
 /* ── Skill Sync Dialog ─────────────────────────────────── */
