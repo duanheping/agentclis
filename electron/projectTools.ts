@@ -1,7 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { access } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
-import { promisify } from 'node:util'
 
 import type { shell as electronShell } from 'electron'
 
@@ -20,8 +19,8 @@ import {
   resolveShellCommand,
 } from './windowsShell'
 
-const execFileAsync = promisify(execFile)
 const GIT_EXECUTABLE = 'git'
+const GIT_INTERNAL_DIFF_OPTIONS = ['--no-ext-diff', '--no-textconv', '--no-color']
 
 interface FileStat {
   path: string
@@ -51,14 +50,33 @@ async function assertProjectPathExists(projectPath: string): Promise<void> {
 }
 
 async function runGit(args: string[], cwd: string): Promise<string> {
-  const result = await execFileAsync(GIT_EXECUTABLE, args, {
-    cwd,
-    encoding: 'utf8',
-    windowsHide: true,
-    maxBuffer: 16 * 1024 * 1024,
-  })
+  const result = await new Promise<{ stdout: string; stderr: string }>(
+    (resolve, reject) => {
+      execFile(
+        GIT_EXECUTABLE,
+        args,
+        {
+          cwd,
+          encoding: 'utf8',
+          windowsHide: true,
+          maxBuffer: 16 * 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          if (error) {
+            reject(error)
+            return
+          }
 
-  return result.stdout.trim()
+          resolve({
+            stdout,
+            stderr,
+          })
+        },
+      )
+    },
+  )
+
+  return result.stdout.trimEnd()
 }
 
 async function tryRunGit(args: string[], cwd: string): Promise<string | null> {
@@ -340,8 +358,14 @@ export async function getProjectGitOverview(
         ['-C', repoRoot, 'status', '--short', '--untracked-files=all'],
         repoRoot,
       ),
-      runGit(['-C', repoRoot, 'diff', '--cached', '--numstat'], repoRoot),
-      runGit(['-C', repoRoot, 'diff', '--numstat'], repoRoot),
+      runGit(
+        ['-C', repoRoot, 'diff', ...GIT_INTERNAL_DIFF_OPTIONS, '--cached', '--numstat'],
+        repoRoot,
+      ),
+      runGit(
+        ['-C', repoRoot, 'diff', ...GIT_INTERNAL_DIFF_OPTIONS, '--numstat'],
+        repoRoot,
+      ),
     ])
 
   const parsedStatus = parseGitStatus(statusOutput)
@@ -386,7 +410,13 @@ export async function getProjectGitDiff(
     ['-C', normalizedPath, 'rev-parse', '--show-toplevel'],
     normalizedPath,
   )
-  const diffArgs = ['-C', repoRoot, 'diff', '--unified=3']
+  const diffArgs = [
+    '-C',
+    repoRoot,
+    'diff',
+    ...GIT_INTERNAL_DIFF_OPTIONS,
+    '--unified=3',
+  ]
   if (staged) {
     diffArgs.push('--cached')
   }
