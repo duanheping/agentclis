@@ -71,6 +71,7 @@ describe('CreateSessionDialog', () => {
       pickDirectory: vi
         .fn()
         .mockResolvedValue('C:\\Users\\hduan10\\Documents\\repo\\agenclis'),
+      persistTransientFile: vi.fn(),
     } as unknown as typeof window.agentCli
 
     render(

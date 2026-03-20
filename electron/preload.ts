@@ -65,6 +65,8 @@ const api: AgentCliApi = {
     createListener<FullSyncProgress>(IPC_CHANNELS.fullSyncProgress, listener),
   onFullSyncDone: (listener) =>
     createListener<FullSyncDone>(IPC_CHANNELS.fullSyncDone, listener),
+  persistTransientFile: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.persistTransientFile, input),
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),

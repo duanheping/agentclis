@@ -370,6 +370,7 @@ function createAgentCliMock(
     }),
     onFullSyncProgress: vi.fn(() => vi.fn()),
     onFullSyncDone: vi.fn(() => vi.fn()),
+    persistTransientFile: vi.fn().mockResolvedValue('C:\\temp\\clipboard.png'),
   }
 
   return {
