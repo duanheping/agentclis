@@ -1283,7 +1283,9 @@
   max-height: 100%;
   border: 1px solid var(--border-soft);
   border-radius: 28px;
-  background: rgba(24, 24, 24, 0.96);
+  background:
+    radial-gradient(circle at top right, rgba(227, 211, 182, 0.06), transparent 34%),
+    linear-gradient(180deg, rgba(27, 27, 27, 0.98), rgba(18, 18, 18, 0.98));
   overflow: hidden;
 }
 
@@ -1345,48 +1347,64 @@
 
 .project-diff-panel__changes,
 .project-diff-panel__preview {
-  border: 1px solid var(--border-subtle);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.03);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .project-diff-panel__changes {
   display: grid;
   flex: 0 0 auto;
-  gap: 10px;
+  gap: 0;
   max-height: min(34vh, 320px);
-  margin: 16px 16px 0;
-  padding: 0.76rem;
+  margin: 0;
+  padding: 8px 0 0;
   overflow: auto;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .project-diff-panel__file-list {
   display: grid;
-  gap: 6px;
+  gap: 0;
 }
 
 .project-diff-panel__file {
   display: grid;
-  gap: 6px;
+  gap: 7px;
   width: 100%;
-  border: 1px solid transparent;
-  border-radius: 14px;
-  padding: 0.76rem 0.82rem;
-  background: rgba(255, 255, 255, 0.03);
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  padding: 0.82rem 16px;
+  background: transparent;
   color: var(--text-strong);
   font: inherit;
   text-align: left;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.project-diff-panel__file:last-child {
+  border-bottom-color: transparent;
 }
 
 .project-diff-panel__file:hover {
   transform: none;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.05);
+  border-left-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .project-diff-panel__file.is-active {
-  border-color: rgba(227, 211, 182, 0.18);
-  background: rgba(227, 211, 182, 0.08);
+  border-left-color: var(--accent);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(227, 211, 182, 0.18) 0%,
+      rgba(227, 211, 182, 0.08) 48%,
+      rgba(227, 211, 182, 0.02) 100%
+    );
 }
 
 .project-diff-panel__file-main,
@@ -1457,11 +1475,14 @@
 .project-diff-panel__preview {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
-  margin: 16px;
-  padding: 0.86rem 16px;
+  margin: 0;
+  padding: 14px 16px 16px;
+  background:
+    radial-gradient(circle at top left, rgba(227, 211, 182, 0.04), transparent 34%),
+    linear-gradient(180deg, rgba(18, 18, 18, 0.24), rgba(10, 10, 10, 0.62));
   overflow: hidden;
 }
 
@@ -1470,6 +1491,8 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .project-diff-panel__preview-header h3 {
@@ -1484,9 +1507,9 @@
   margin: 0;
   display: block;
   overflow: auto;
-  padding: 0.9rem;
-  border-radius: 14px;
-  background: #101010;
+  padding: 0 0 12px;
+  border-radius: 0;
+  background: transparent;
   color: #e3e3e5;
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 0.74rem;
@@ -1542,6 +1565,37 @@
   background: rgba(86, 29, 29, 0.4);
   color: #ffb2b2;
   font-size: 0.8rem;
+}
+
+.project-diff-panel__changes,
+.project-diff-panel__code {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(227, 211, 182, 0.28) rgba(18, 18, 18, 0.96);
+}
+
+.project-diff-panel__changes::-webkit-scrollbar,
+.project-diff-panel__code::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.project-diff-panel__changes::-webkit-scrollbar-track,
+.project-diff-panel__code::-webkit-scrollbar-track,
+.project-diff-panel__changes::-webkit-scrollbar-corner,
+.project-diff-panel__code::-webkit-scrollbar-corner {
+  background: rgba(18, 18, 18, 0.96);
+}
+
+.project-diff-panel__changes::-webkit-scrollbar-thumb,
+.project-diff-panel__code::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(18, 18, 18, 0.96);
+  border-radius: 999px;
+  background: rgba(227, 211, 182, 0.28);
+}
+
+.project-diff-panel__changes::-webkit-scrollbar-thumb:hover,
+.project-diff-panel__code::-webkit-scrollbar-thumb:hover {
+  background: rgba(227, 211, 182, 0.4);
 }
 .primary-button,
 .ghost-button {
