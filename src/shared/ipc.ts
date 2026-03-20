@@ -26,6 +26,12 @@ import type {
   SkillSyncStatus,
 } from './skills'
 
+export interface PersistTransientFileInput {
+  name?: string
+  type?: string
+  data: ArrayBuffer
+}
+
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
   listSessions: 'session:list',
@@ -49,6 +55,7 @@ export const IPC_CHANNELS = {
   getFullSyncState: 'skills:get-full-sync-state',
   fullSyncProgress: 'skills:full-sync-progress',
   fullSyncDone: 'skills:full-sync-done',
+  persistTransientFile: 'file:persist-transient',
   pickDirectory: 'dialog:pick-directory',
   openPath: 'shell:open-path',
   openProject: 'project:open',
@@ -96,6 +103,7 @@ export interface AgentCliApi {
   getFullSyncState(): Promise<FullSyncState>
   onFullSyncProgress(listener: (event: FullSyncProgress) => void): () => void
   onFullSyncDone(listener: (event: FullSyncDone) => void): () => void
+  persistTransientFile(input: PersistTransientFileInput): Promise<string>
   pickDirectory(defaultPath?: string): Promise<string | null>
   openPath(targetPath: string): Promise<void>
   openProject(target: ProjectOpenTarget, projectPath: string): Promise<void>

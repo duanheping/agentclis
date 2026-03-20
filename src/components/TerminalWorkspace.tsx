@@ -166,6 +166,12 @@ function TerminalSurface({
     )
     const detachPasteHandler = attachPlainTextPasteHandler(terminal, {
       resolveFilePath: (file) => window.agentCli.getPathForFile(file),
+      persistFile: async (file) =>
+        window.agentCli.persistTransientFile({
+          name: file.name,
+          type: file.type,
+          data: await file.arrayBuffer(),
+        }),
     })
     terminal.attachCustomKeyEventHandler((event) => {
       const shortcutInput = getTerminalShortcutInput(event)

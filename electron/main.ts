@@ -11,7 +11,7 @@ import {
   type OpenDialogOptions,
 } from 'electron'
 
-import { IPC_CHANNELS } from '../src/shared/ipc'
+import { IPC_CHANNELS, type PersistTransientFileInput } from '../src/shared/ipc'
 import type { ProjectOpenTarget } from '../src/shared/projectTools'
 import type {
   FullSyncDone,
@@ -26,6 +26,7 @@ import {
 } from './projectTools'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
+import { TransientFileStore } from './transientFileStore'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -43,6 +44,7 @@ let fullSyncState: FullSyncState = {
 }
 
 const skillLibraryManager = new SkillLibraryManager()
+const transientFileStore = new TransientFileStore()
 const sessionManager = new SessionManager({
   onData: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionData, event)
@@ -319,6 +321,10 @@ function registerIpcHandlers(): void {
   )
   ipcMain.handle(IPC_CHANNELS.startFullSync, () => startFullSyncIfNeeded())
   ipcMain.handle(IPC_CHANNELS.getFullSyncState, () => cloneFullSyncState())
+  ipcMain.handle(
+    IPC_CHANNELS.persistTransientFile,
+    (_event, input: PersistTransientFileInput) => transientFileStore.persist(input),
+  )
   ipcMain.handle(IPC_CHANNELS.pickDirectory, async (_event, defaultPath?: string) => {
     const options: OpenDialogOptions = {
       title: 'Select project folder',
@@ -422,6 +428,7 @@ if (!gotSingleInstanceLock) {
   app.on('before-quit', () => {
     windowsCommandPromptManager.dispose()
     sessionManager.dispose()
+    void transientFileStore.dispose()
   })
 
   app.on('window-all-closed', () => {

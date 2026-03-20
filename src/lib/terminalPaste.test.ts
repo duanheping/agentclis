@@ -1,3 +1,4 @@
+import { waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -11,7 +12,7 @@ import {
 
 interface ClipboardStub {
   getData: (type: string) => string
-  items?: ArrayLike<{ kind: string; type: string }>
+  items?: ArrayLike<{ kind: string; type: string; getAsFile?: () => File | null }>
   types?: ArrayLike<string>
   files?: ArrayLike<File>
 }
@@ -20,7 +21,7 @@ function createClipboardData(data: {
   plainText?: string
   html?: string
   uriList?: string
-  items?: ArrayLike<{ kind: string; type: string }>
+  items?: ArrayLike<{ kind: string; type: string; getAsFile?: () => File | null }>
   types?: ArrayLike<string>
 }): ClipboardStub {
   return {
@@ -198,7 +199,59 @@ describe('attachPlainTextPasteHandler', () => {
     detach()
   })
 
-  it('pastes dropped file paths into the terminal', () => {
+  it('persists pasted clipboard images and pastes the saved path into the terminal', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const pastedImage = new File(['png'], 'clipboard.png', {
+      type: 'image/png',
+    })
+    const paste = vi.fn()
+    const persistFile = vi
+      .fn<(file: File) => Promise<string>>()
+      .mockResolvedValue('C:\\temp\\clipboard.png')
+    const detach = attachPlainTextPasteHandler(
+      {
+        element,
+        textarea,
+        paste,
+        hasSelection: () => false,
+        getSelection: () => '',
+      },
+      {
+        persistFile,
+      },
+    )
+
+    const pasteEvent = new Event('paste', {
+      bubbles: true,
+      cancelable: true,
+    })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: createClipboardData({
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () => pastedImage,
+          },
+        ],
+        types: ['Files'],
+      }),
+    })
+
+    textarea.dispatchEvent(pasteEvent)
+    await waitFor(() => {
+      expect(persistFile).toHaveBeenCalledWith(pastedImage)
+      expect(paste).toHaveBeenCalledWith('"C:\\temp\\clipboard.png"')
+    })
+    expect(pasteEvent.defaultPrevented).toBe(true)
+
+    detach()
+  })
+
+  it('pastes dropped file paths into the terminal', async () => {
     const element = document.createElement('div')
     const textarea = document.createElement('textarea')
     element.append(textarea)
@@ -235,8 +288,9 @@ describe('attachPlainTextPasteHandler', () => {
     })
 
     textarea.dispatchEvent(dropEvent)
-
-    expect(paste).toHaveBeenCalledWith('"C:\\work\\report.txt"')
+    await waitFor(() => {
+      expect(paste).toHaveBeenCalledWith('"C:\\work\\report.txt"')
+    })
     expect(dropEvent.defaultPrevented).toBe(true)
 
     detach()
@@ -353,6 +407,62 @@ describe('attachPlainTextPasteHandler', () => {
 
     expect(readText).toHaveBeenCalledTimes(1)
     expect(paste).toHaveBeenCalledWith('clipboard text')
+    expect(keydownEvent.defaultPrevented).toBe(true)
+
+    detach()
+  })
+
+  it('pastes clipboard image paths on Ctrl+V when Clipboard.read is available', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const readText = vi.fn().mockResolvedValue('')
+    const read = vi.fn().mockResolvedValue([
+      {
+        types: ['image/png'],
+        getType: vi.fn().mockResolvedValue(new Blob(['png'], { type: 'image/png' })),
+      },
+    ])
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText,
+        read,
+      },
+    })
+
+    const paste = vi.fn()
+    const persistFile = vi
+      .fn<(file: File) => Promise<string>>()
+      .mockResolvedValue('C:\\temp\\clipboard.png')
+    const detach = attachPlainTextPasteHandler(
+      {
+        element,
+        textarea,
+        paste,
+        hasSelection: () => false,
+        getSelection: () => '',
+      },
+      {
+        persistFile,
+      },
+    )
+
+    const keydownEvent = new KeyboardEvent('keydown', {
+      key: 'v',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+
+    textarea.dispatchEvent(keydownEvent)
+    await waitFor(() => {
+      expect(readText).toHaveBeenCalledTimes(1)
+      expect(read).toHaveBeenCalledTimes(1)
+      expect(persistFile).toHaveBeenCalledTimes(1)
+      expect(paste).toHaveBeenCalledWith('"C:\\temp\\clipboard.png"')
+    })
     expect(keydownEvent.defaultPrevented).toBe(true)
 
     detach()
