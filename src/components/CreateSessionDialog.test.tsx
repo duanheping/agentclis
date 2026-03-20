@@ -47,12 +47,16 @@ describe('CreateSessionDialog', () => {
     expect(
       screen.queryByText('Session working directory (optional)'),
     ).not.toBeInTheDocument()
+    expect(screen.queryByText('Command: codex')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('The session starts in the selected project root directory.'),
+    ).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Project' }))
     expect(screen.queryByText('Create new project')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: /Copilot CLI/i }))
-    await user.click(screen.getByRole('button', { name: 'Create session' }))
+    await user.click(screen.getByRole('button', { name: 'Create' }))
 
     expect(onCreateProject).not.toHaveBeenCalled()
     expect(onCreateSession).toHaveBeenCalledWith({
@@ -92,9 +96,13 @@ describe('CreateSessionDialog', () => {
     expect(
       screen.queryByText('Session working directory (optional)'),
     ).not.toBeInTheDocument()
+    expect(screen.queryByText('Command: codex')).not.toBeInTheDocument()
+    expect(
+      screen.getByText('A fresh git worktree and branch will be created for this session.'),
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: /Copilot CLI/i }))
-    await user.click(screen.getByRole('button', { name: 'Create session' }))
+    await user.click(screen.getByRole('button', { name: 'Create' }))
 
     expect(onCreateProject).not.toHaveBeenCalled()
     expect(onCreateSession).toHaveBeenCalledWith({
