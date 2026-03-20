@@ -77,8 +77,8 @@ export function CreateSessionDialog({
   const compactProjectSessionFlow =
     mode === 'project-context' && selectedProject !== null
   const dialogEyebrow = projectOnlyFlow ? 'New Project' : 'New Session'
-  const dialogTitle = projectOnlyFlow ? 'Create project' : 'New session'
-  const submitLabel = projectOnlyFlow ? 'Create project' : 'Create session'
+  const dialogTitle = projectOnlyFlow ? null : 'New session'
+  const submitLabel = projectOnlyFlow ? 'Create' : 'Create session'
   const submitDisabled = !projectOnlyFlow && selectedProject === null
 
   useEffect(() => {
@@ -236,13 +236,14 @@ export function CreateSessionDialog({
         className="dialog-card"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-session-title"
+        aria-label={projectOnlyFlow ? dialogEyebrow : undefined}
+        aria-labelledby={dialogTitle ? 'create-session-title' : undefined}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog-card__header">
           <div>
             <p className="eyebrow">{dialogEyebrow}</p>
-            <h2 id="create-session-title">{dialogTitle}</h2>
+            {dialogTitle ? <h2 id="create-session-title">{dialogTitle}</h2> : null}
           </div>
           <button
             type="button"
@@ -332,12 +333,12 @@ export function CreateSessionDialog({
           )}
 
           {projectOnlyFlow ? (
-            <label className="field">
-              <span>Project root path</span>
+            <div className="field">
               <div className="path-picker">
                 <button
                   type="button"
                   className="path-picker__value"
+                  aria-label="Project root folder"
                   onClick={() => {
                     void handlePickProjectRoot()
                   }}
@@ -350,26 +351,11 @@ export function CreateSessionDialog({
                         : 'path-picker__text is-placeholder'
                     }
                   >
-                    {formState.projectRootPath || 'Click to choose the project folder'}
+                    {formState.projectRootPath || 'Select project folder'}
                   </span>
                 </button>
-                <div className="path-picker__actions">
-                  <button
-                    type="button"
-                    className="ghost-button path-picker__action"
-                    onClick={() => {
-                      void handlePickProjectRoot()
-                    }}
-                    disabled={submitting || pickingProjectRoot}
-                  >
-                    {pickingProjectRoot ? 'Opening...' : 'Choose folder'}
-                  </button>
-                </div>
               </div>
-              <span className="field-hint">
-                Use the native folder picker to choose the project root.
-              </span>
-            </label>
+            </div>
           ) : (
             <label className="field">
               <span>Agent CLI</span>

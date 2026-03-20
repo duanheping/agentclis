@@ -129,7 +129,10 @@ describe('CreateSessionDialog', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Create project' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'New Project' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Create project' }),
+    ).not.toBeInTheDocument()
     expect(screen.queryByText('Project name (optional)')).not.toBeInTheDocument()
     expect(screen.queryByText('First session title (optional)')).not.toBeInTheDocument()
     expect(
@@ -138,9 +141,14 @@ describe('CreateSessionDialog', () => {
     expect(
       screen.queryByText('First session working directory (optional)'),
     ).not.toBeInTheDocument()
+    expect(screen.queryByText('Project root path')).not.toBeInTheDocument()
+    expect(screen.queryByText('Choose folder')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Use the native folder picker to choose the project root.'),
+    ).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Choose folder' }))
-    await user.click(screen.getByRole('button', { name: 'Create project' }))
+    await user.click(screen.getByRole('button', { name: 'Project root folder' }))
+    await user.click(screen.getByRole('button', { name: 'Create' }))
 
     expect(onCreateProject).toHaveBeenCalledWith({
       rootPath: 'C:\\Users\\hduan10\\Documents\\repo\\agenclis',

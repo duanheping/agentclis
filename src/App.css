@@ -1555,9 +1555,9 @@
 }
 
 .dialog-card__close {
-  min-width: 84px;
-  min-height: 40px;
-  padding-inline: 0.95rem;
+  min-width: 72px;
+  min-height: 36px;
+  padding: 0.58rem 0.88rem;
   font-size: 0.84rem;
 }
 
@@ -1810,15 +1810,15 @@
 
 .path-picker__value {
   display: flex;
-  min-height: 52px;
+  min-height: 46px;
   align-items: center;
   width: 100%;
   border: 1px solid var(--border-subtle);
-  border-radius: 16px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-strong);
   font: inherit;
-  padding: 0.88rem 0.95rem;
+  padding: 0.72rem 0.88rem;
   box-sizing: border-box;
   text-align: left;
 }
@@ -2236,14 +2236,16 @@
 }
 
 .dialog-actions__cancel {
-  min-width: 92px;
-  min-height: 40px;
+  min-width: 80px;
+  min-height: 36px;
+  padding: 0.58rem 0.88rem;
   font-size: 0.84rem;
 }
 
 .dialog-actions__submit {
-  min-width: 132px;
-  min-height: 42px;
+  min-width: 108px;
+  min-height: 38px;
+  padding: 0.58rem 0.96rem;
   font-size: 0.84rem;
 }
 
