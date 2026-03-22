@@ -114,6 +114,7 @@ describe('CreateSessionDialog', () => {
       projectId: 'project-1',
       startupCommand: 'copilot',
       cwd: 'C:\\Users\\hduan10\\Documents\\repo\\MSAR43_S32G',
+      attachProjectContext: true,
     })
     expect(onClose).toHaveBeenCalledTimes(1)
   })

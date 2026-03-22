@@ -5,6 +5,9 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { TranscriptEvent } from '../src/shared/projectMemory'
+import type { ProjectLocationIdentity } from './projectIdentity'
+
 function normalizeMockPath(filePath: string): string {
   return filePath.replace(/\//g, '\\').toLowerCase()
 }
@@ -575,7 +578,7 @@ describe('SessionManager project lifecycle', () => {
     vi.useRealTimers()
   })
 
-  it('creates a project without creating a session', () => {
+  it('creates a project without creating a session', async () => {
     const manager = new SessionManager({
       onData: () => undefined,
       onConfig: () => undefined,
@@ -583,7 +586,7 @@ describe('SessionManager project lifecycle', () => {
       onExit: () => undefined,
     })
 
-    const project = manager.createProject({
+    const project = await manager.createProject({
       title: 'Workspace',
       rootPath: 'C:\\repo',
     })
@@ -618,14 +621,14 @@ describe('SessionManager project lifecycle', () => {
 
     expect(manager.listSessions()).toEqual({
       projects: [
-        {
+        expect.objectContaining({
           config: expect.objectContaining({
             id: session.config.projectId,
             title: 'Workspace',
             rootPath: 'C:\\repo',
           }),
           sessions: [],
-        },
+        }),
       ],
       activeSessionId: null,
     })
@@ -683,7 +686,7 @@ describe('SessionManager project lifecycle', () => {
       onExit: () => undefined,
     })
 
-    const project = manager.createProject({
+    const project = await manager.createProject({
       title: 'Workspace',
       rootPath: 'C:\\repo',
     })
@@ -894,5 +897,157 @@ describe('SessionManager project lifecycle', () => {
         }
       ).sessions[0]?.title,
     ).toBe('Review ECG2 Callout Analysis')
+  })
+})
+
+describe('SessionManager logical project identity and project context', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mocks.reset()
+  })
+
+  afterEach(async () => {
+    await vi.runOnlyPendingTimersAsync()
+    vi.useRealTimers()
+  })
+
+  it('merges separate local copies with the same remote fingerprint into one logical project', async () => {
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => {
+        if (rootPath === 'C:\\repo\\copy-a') {
+          return {
+            rootPath,
+            label: 'copy-a',
+            repoRoot: rootPath,
+            gitCommonDir: 'C:\\repo\\copy-a\\.git',
+            remoteFingerprint: 'github.com/openai/agenclis',
+          }
+        }
+
+        return {
+          rootPath,
+          label: 'copy-b',
+          repoRoot: rootPath,
+          gitCommonDir: 'D:\\backup\\copy-b\\.git',
+          remoteFingerprint: 'github.com/openai/agenclis',
+        }
+      }),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+      },
+    )
+
+    const firstProject = await manager.createProject({
+      title: 'Workspace',
+      rootPath: 'C:\\repo\\copy-a',
+    })
+    const secondProject = await manager.createProject({
+      title: 'Workspace backup',
+      rootPath: 'D:\\backup\\copy-b',
+    })
+
+    expect(secondProject.config.id).toBe(firstProject.config.id)
+    expect(secondProject.config.rootPath).toBe('D:\\backup\\copy-b')
+    expect(secondProject.locations).toEqual([
+      expect.objectContaining({
+        label: 'copy-b',
+        rootPath: 'D:\\backup\\copy-b',
+      }),
+      expect.objectContaining({
+        label: 'copy-a',
+        rootPath: 'C:\\repo\\copy-a',
+      }),
+    ])
+  })
+
+  it('injects project context as system input without consuming the first user prompt title', async () => {
+    const transcriptEvents: TranscriptEvent[] = []
+    const transcriptStore = {
+      append: vi.fn(async (event: TranscriptEvent) => {
+        transcriptEvents.push(event)
+      }),
+      readEvents: vi.fn(async () => structuredClone(transcriptEvents)),
+    }
+    const projectMemory = {
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:10.000Z',
+        bootstrapMessage: 'Use the project memory.\nRead:\n- memory.md',
+        fileReferences: ['memory.md'],
+        summaryExcerpt: 'Latest summary',
+      })),
+      captureSession: vi.fn(async () => undefined),
+    }
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+      attachProjectContext: true,
+    })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(mocks.terminals[0]?.write).toHaveBeenCalledWith(
+      'Use the project memory.\nRead:\n- memory.md\r',
+    )
+
+    const bootstrappedSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)
+
+    expect(bootstrappedSession?.config.title).toBe('codex')
+    expect(bootstrappedSession?.config.pendingFirstPromptTitle).toBe(true)
+    expect(projectMemory.assembleContext).toHaveBeenCalled()
+    expect(
+      transcriptStore.append.mock.calls.some(
+        ([event]) =>
+          event.kind === 'input' &&
+          event.source === 'system' &&
+          event.sessionId === session.config.id,
+      ),
+    ).toBe(true)
+
+    manager.writeToSession(session.config.id, 'real user task')
+    manager.writeToSession(session.config.id, '\r')
+
+    const renamedSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)
+
+    expect(renamedSession?.config.title).toBe('real user task')
   })
 })

@@ -9,7 +9,11 @@ import {
   type SkillSyncRoot,
   type SkillSyncStatus,
 } from '../shared/skills'
-import { type ProjectSnapshot, type SessionSnapshot } from '../shared/session'
+import {
+  summarizeCommand,
+  type ProjectSnapshot,
+  type SessionSnapshot,
+} from '../shared/session'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
@@ -90,6 +94,20 @@ function findActiveProjectId(
     projects.find((project) =>
       project.sessions.some((session) => session.config.id === activeSessionId),
     )?.config.id ?? null
+  )
+}
+
+function findSessionLocationLabel(
+  project: ProjectSnapshot,
+  session: SessionSnapshot,
+): string | null {
+  const locations = project.locations ?? []
+  if (locations.length <= 1 || !session.config.locationId) {
+    return null
+  }
+
+  return (
+    locations.find((location) => location.id === session.config.locationId)?.label ?? null
   )
 }
 
@@ -512,6 +530,7 @@ export function SessionSidebar({
                     {project.sessions.map((session) => {
                       const active = session.config.id === activeSessionId
                       const editing = session.config.id === editingId
+                      const sessionLocationLabel = findSessionLocationLabel(project, session)
 
                       return (
                         <div
@@ -572,8 +591,17 @@ export function SessionSidebar({
                             </form>
                           ) : (
                             <div className="session-item__body">
-                              <div className="session-item__title">
-                                {session.config.title}
+                              <div className="session-item__title-group">
+                                <div className="session-item__title">
+                                  {session.config.title}
+                                </div>
+                                {sessionLocationLabel || showProjectPaths ? (
+                                  <div className="session-item__command">
+                                    {sessionLocationLabel
+                                      ? `${sessionLocationLabel} · ${summarizeCommand(session.config.startupCommand, 28)}`
+                                      : summarizeCommand(session.config.startupCommand, 36)}
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           )}

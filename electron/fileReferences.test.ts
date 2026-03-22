@@ -1,3 +1,6 @@
+import os from 'node:os'
+import path from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { openFileReferenceTarget } from './fileReferences'
@@ -25,7 +28,7 @@ describe('openFileReferenceTarget', () => {
     await openFileReferenceTarget('~\\Downloads\\report.md', { openPath })
 
     expect(openPath).toHaveBeenCalledWith(
-      'C:\\Users\\hduan10\\Downloads\\report.md',
+      path.join(os.homedir(), 'Downloads', 'report.md'),
     )
   })
 })

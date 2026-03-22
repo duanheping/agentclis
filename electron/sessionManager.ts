@@ -26,6 +26,10 @@ import {
   type SessionRuntimeEvent,
   type SessionSnapshot,
 } from '../src/shared/session'
+import type {
+  ProjectLocation,
+  TranscriptEvent,
+} from '../src/shared/projectMemory'
 import {
   buildCopilotResumeCommand,
   extractCopilotSessionMeta,
@@ -36,7 +40,10 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
 } from './codexCli'
+import type { ProjectMemoryManager } from './projectMemoryManager'
+import type { ProjectLocationIdentity } from './projectIdentity'
 import { createProjectSessionWorktree } from './projectWorktree'
+import type { TranscriptStore } from './transcriptStore'
 import {
   buildShellArgs,
   resolveShellCommand,
@@ -91,6 +98,7 @@ function isMeaningfulSessionTitleCandidate(title: string): boolean {
 
 interface PersistedSessionState {
   projects: ProjectConfig[]
+  locations: ProjectLocation[]
   sessions: StoredSessionConfig[]
   activeSessionId: string | null
 }
@@ -102,17 +110,57 @@ interface SessionManagerEvents {
   onExit: (event: SessionExitMeta) => void
 }
 
+interface SessionManagerServices {
+  identityResolver?: {
+    inspect: (rootPath: string) => Promise<ProjectLocationIdentity>
+  }
+  transcriptStore?: Pick<TranscriptStore, 'append' | 'readEvents'>
+  projectMemory?: Pick<ProjectMemoryManager, 'assembleContext' | 'captureSession'>
+}
+
+const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResolver']> = {
+  inspect: async (rootPath) => {
+    const normalizedRootPath = rootPath.trim().replace(/[\\/]+$/, '')
+    return {
+      rootPath: normalizedRootPath,
+      label: path.basename(normalizedRootPath) || normalizedRootPath,
+      repoRoot: null,
+      gitCommonDir: null,
+      remoteFingerprint: null,
+    }
+  },
+}
+
+const noopTranscriptStore: NonNullable<SessionManagerServices['transcriptStore']> = {
+  append: async () => undefined,
+  readEvents: async () => [],
+}
+
+const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = {
+  assembleContext: async (input) => ({
+    projectId: input.project.id,
+    locationId: input.location?.id ?? null,
+    generatedAt: new Date().toISOString(),
+    bootstrapMessage: null,
+    fileReferences: [],
+    summaryExcerpt: null,
+  }),
+  captureSession: async () => undefined,
+}
+
 export class SessionManager {
   private readonly store = new Store<PersistedSessionState>({
     name: 'agenclis-sessions',
     defaults: {
       projects: [],
+      locations: [],
       sessions: [],
       activeSessionId: null,
     },
   })
 
   private readonly projects = new Map<string, ProjectConfig>()
+  private readonly locations = new Map<string, ProjectLocation>()
   private readonly configs = new Map<string, SessionConfig>()
   private readonly runtimes = new Map<string, SessionRuntime>()
   private readonly terminals = new Map<string, IPty>()
@@ -122,20 +170,38 @@ export class SessionManager {
   private readonly historicalExternalSessionRecovery = new Set<string>()
   private readonly suppressedExit = new Set<string>()
   private readonly events: SessionManagerEvents
+  private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
+  private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
+  private readonly projectMemory: NonNullable<SessionManagerServices['projectMemory']>
 
   private activeSessionId: string | null
   private restored = false
 
-  constructor(events: SessionManagerEvents) {
+  constructor(events: SessionManagerEvents, services: SessionManagerServices = {}) {
     this.events = events
+    this.identityResolver = services.identityResolver ?? defaultIdentityResolver
+    this.transcriptStore = services.transcriptStore ?? noopTranscriptStore
+    this.projectMemory = services.projectMemory ?? noopProjectMemory
     const persisted = this.store.store
     this.activeSessionId = persisted.activeSessionId
 
     for (const project of persisted.projects ?? []) {
-      this.projects.set(project.id, project)
+      const hydratedProject = this.hydrateProjectConfig(project)
+      this.projects.set(hydratedProject.id, hydratedProject)
+    }
+
+    for (const location of persisted.locations ?? []) {
+      const hydratedLocation = this.hydrateProjectLocation(location)
+      this.locations.set(hydratedLocation.id, hydratedLocation)
     }
 
     let shouldPersist = false
+
+    for (const project of Array.from(this.projects.values())) {
+      if (this.ensureProjectPrimaryLocation(project.id)) {
+        shouldPersist = true
+      }
+    }
 
     for (const config of persisted.sessions ?? []) {
       const hydratedConfig = this.hydrateSessionConfig(config)
@@ -185,51 +251,61 @@ export class SessionManager {
     return this.listSessions()
   }
 
-  createProject(input: CreateProjectInput): ProjectSnapshot {
+  async createProject(input: CreateProjectInput): Promise<ProjectSnapshot> {
     const rootPath = input.rootPath.trim()
     if (!rootPath) {
       throw new Error('Project root path is required.')
     }
 
-    const existingProject = this.findProjectByRootPath(rootPath)
+    const now = new Date().toISOString()
+    const inspectedLocation = await this.identityResolver.inspect(rootPath)
+    const existingProject = this.findProjectByLocationIdentity(inspectedLocation)
     if (existingProject) {
-      this.touchProject(existingProject.id)
+      this.upsertProjectLocation(existingProject.id, inspectedLocation, now, true)
+      this.touchProject(existingProject.id, now)
       this.persist()
       return this.projectSnapshotFor(existingProject.id)
     }
 
-    const now = new Date().toISOString()
     const project: ProjectConfig = {
       id: crypto.randomUUID(),
-      title: deriveProjectTitle(input.title, rootPath),
-      rootPath,
+      title: deriveProjectTitle(input.title, inspectedLocation.rootPath),
+      rootPath: inspectedLocation.rootPath,
       createdAt: now,
       updatedAt: now,
+      primaryLocationId: null,
+      identity: {
+        repoRoot: inspectedLocation.repoRoot,
+        gitCommonDir: inspectedLocation.gitCommonDir,
+        remoteFingerprint: inspectedLocation.remoteFingerprint,
+      },
     }
 
     this.projects.set(project.id, project)
+    this.upsertProjectLocation(project.id, inspectedLocation, now, true)
     this.persist()
     return this.projectSnapshotFor(project.id)
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionSnapshot> {
     const now = new Date().toISOString()
-    const project = this.resolveProjectForCreate(input)
+    const { project, location } = await this.resolveProjectForCreate(input, now)
     const id = crypto.randomUUID()
     const shell = resolveShellCommand()
     const cwd = input.createWithWorktree
       ? (
           await createProjectSessionWorktree({
-            projectRootPath: project.rootPath,
+            projectRootPath: location.rootPath,
             sessionId: id,
             createdAt: now,
           })
         ).cwd
-      : resolveSessionCwd(input.cwd, project.rootPath)
+      : resolveSessionCwd(input.cwd, location.rootPath)
 
     const config: SessionConfig = {
       id,
       projectId: project.id,
+      locationId: location.id,
       title: deriveSessionTitle(input.title, input.startupCommand, cwd),
       startupCommand: input.startupCommand.trim(),
       pendingFirstPromptTitle: this.shouldCaptureFirstPromptTitle(
@@ -247,8 +323,17 @@ export class SessionManager {
     this.touchProject(project.id, now)
     this.activeSessionId = id
     this.persist()
+    this.appendTranscriptEvent({
+      sessionId: id,
+      kind: 'system',
+      source: 'system',
+      chunk: `Session created for ${project.title}.`,
+    })
 
     await this.startSession(config)
+    if (input.attachProjectContext) {
+      this.scheduleProjectContextBootstrap(config.id)
+    }
     return this.snapshotFor(id)
   }
 
@@ -294,6 +379,13 @@ export class SessionManager {
     }
 
     const closingConfig = this.requireConfig(id)
+    const closeEvent = this.appendTranscriptEvent({
+      sessionId: id,
+      kind: 'system',
+      source: 'system',
+      chunk: 'Session closed by agentclis.',
+    })
+    void this.captureProjectMemoryForSession(closingConfig, closeEvent)
 
     this.stopSession(id, true)
     this.cancelExternalSessionDetection(id)
@@ -318,9 +410,7 @@ export class SessionManager {
   }
 
   writeToSession(id: string, data: string): void {
-    this.capturePendingFirstPromptTitle(id, data)
-    this.touchRuntime(id)
-    this.terminals.get(id)?.write(data)
+    this.writeToSessionInternal(id, data, 'user')
   }
 
   resizeSession(id: string, cols: number, rows: number): void {
@@ -431,6 +521,12 @@ export class SessionManager {
       })
 
       terminal.onData((chunk) => {
+        this.appendTranscriptEvent({
+          sessionId: normalizedConfig.id,
+          kind: 'output',
+          source: 'pty',
+          chunk,
+        })
         this.events.onData({
           sessionId: normalizedConfig.id,
           chunk,
@@ -451,6 +547,12 @@ export class SessionManager {
           pid: undefined,
           exitCode,
         })
+        this.appendTranscriptEvent({
+          sessionId: normalizedConfig.id,
+          kind: 'system',
+          source: 'system',
+          chunk: `Session exited with code ${exitCode}.`,
+        })
         this.events.onExit({
           sessionId: normalizedConfig.id,
           exitCode,
@@ -465,7 +567,7 @@ export class SessionManager {
 
       setTimeout(() => {
         if (!launchesInline) {
-          terminal.write(`${launchCommand}\r`)
+          this.writeToTerminal(normalizedConfig.id, `${launchCommand}\r`)
         }
 
         if (externalSessionProvider) {
@@ -486,6 +588,12 @@ export class SessionManager {
       this.events.onData({
         sessionId: config.id,
         chunk: `\r\n[agenclis] Failed to start session: ${this.getErrorMessage(error)}\r\n`,
+      })
+      this.appendTranscriptEvent({
+        sessionId: config.id,
+        kind: 'system',
+        source: 'system',
+        chunk: `Failed to start session: ${this.getErrorMessage(error)}`,
       })
       this.events.onExit({
         sessionId: config.id,
@@ -1127,14 +1235,99 @@ export class SessionManager {
     this.historicalExternalSessionRecovery.add(config.id)
   }
 
+  private hydrateProjectConfig(project: ProjectConfig): ProjectConfig {
+    const rootPath = resolveProjectRoot(project.rootPath, os.homedir())
+    return {
+      ...project,
+      title: deriveProjectTitle(project.title, rootPath),
+      rootPath,
+      primaryLocationId:
+        typeof project.primaryLocationId === 'string'
+          ? project.primaryLocationId
+          : null,
+      identity: {
+        repoRoot:
+          typeof project.identity?.repoRoot === 'string'
+            ? project.identity.repoRoot
+            : null,
+        gitCommonDir:
+          typeof project.identity?.gitCommonDir === 'string'
+            ? project.identity.gitCommonDir
+            : null,
+        remoteFingerprint:
+          typeof project.identity?.remoteFingerprint === 'string'
+            ? project.identity.remoteFingerprint
+            : null,
+      },
+    }
+  }
+
+  private hydrateProjectLocation(location: ProjectLocation): ProjectLocation {
+    const rootPath = resolveProjectRoot(location.rootPath, os.homedir())
+    return {
+      ...location,
+      rootPath,
+      label: location.label?.trim() || path.basename(rootPath) || rootPath,
+      repoRoot: typeof location.repoRoot === 'string' ? location.repoRoot : null,
+      gitCommonDir:
+        typeof location.gitCommonDir === 'string' ? location.gitCommonDir : null,
+      remoteFingerprint:
+        typeof location.remoteFingerprint === 'string'
+          ? location.remoteFingerprint
+          : null,
+      lastSeenAt: location.lastSeenAt || location.updatedAt || location.createdAt,
+    }
+  }
+
+  private ensureProjectPrimaryLocation(projectId: string): boolean {
+    const project = this.projects.get(projectId)
+    if (!project) {
+      return false
+    }
+
+    const currentPrimary =
+      project.primaryLocationId && this.locations.get(project.primaryLocationId)
+    if (currentPrimary) {
+      const nextProject = {
+        ...project,
+        rootPath: currentPrimary.rootPath,
+      }
+      this.projects.set(projectId, nextProject)
+      return nextProject.rootPath !== project.rootPath
+    }
+
+    const existingLocation = this.getProjectLocations(projectId)[0]
+    if (existingLocation) {
+      this.setProjectPrimaryLocation(projectId, existingLocation.id, project.updatedAt)
+      return true
+    }
+
+    const location = this.upsertProjectLocation(
+      projectId,
+      {
+        rootPath: project.rootPath,
+        label: path.basename(project.rootPath) || project.rootPath,
+        repoRoot: project.identity?.repoRoot ?? null,
+        gitCommonDir: project.identity?.gitCommonDir ?? null,
+        remoteFingerprint: project.identity?.remoteFingerprint ?? null,
+      },
+      project.updatedAt,
+      true,
+    )
+
+    return Boolean(location)
+  }
+
   private hydrateSessionConfig(config: StoredSessionConfig): SessionConfig {
     const cwd = resolveSessionCwd(config.cwd, os.homedir())
     const title = this.resolveHydratedSessionTitle(config, cwd)
     const project = this.resolveProjectForHydration(config.projectId, cwd, config)
+    const location = this.resolveLocationForHydration(project, config)
 
     return {
       ...config,
       projectId: project.id,
+      locationId: location.id,
       title,
       pendingFirstPromptTitle: this.inferPendingFirstPromptTitle(config, cwd, title),
       cwd,
@@ -1342,29 +1535,64 @@ export class SessionManager {
     })
   }
 
-  private resolveProjectForCreate(input: CreateSessionInput): ProjectConfig {
+  private async resolveProjectForCreate(
+    input: CreateSessionInput,
+    timestamp: string,
+  ): Promise<{
+    project: ProjectConfig
+    location: ProjectLocation
+  }> {
     if (input.projectId) {
-      return this.requireProject(input.projectId)
+      const project = this.requireProject(input.projectId)
+      const projectRootPath = resolveProjectRoot(input.projectRootPath, project.rootPath)
+      const inspectedLocation = await this.identityResolver.inspect(projectRootPath)
+      const location = this.upsertProjectLocation(
+        project.id,
+        inspectedLocation,
+        timestamp,
+        !input.createWithWorktree,
+      )
+      return {
+        project: this.requireProject(project.id),
+        location,
+      }
     }
 
     const fallbackRootPath = input.cwd?.trim() || os.homedir()
     const rootPath = resolveProjectRoot(input.projectRootPath, fallbackRootPath)
-    const existingProject = this.findProjectByRootPath(rootPath)
+    const inspectedLocation = await this.identityResolver.inspect(rootPath)
+    const existingProject = this.findProjectByLocationIdentity(inspectedLocation)
     if (existingProject) {
-      return existingProject
+      return {
+        project: this.requireProject(existingProject.id),
+        location: this.upsertProjectLocation(
+          existingProject.id,
+          inspectedLocation,
+          timestamp,
+          true,
+        ),
+      }
     }
 
-    const now = new Date().toISOString()
     const project: ProjectConfig = {
       id: crypto.randomUUID(),
-      title: deriveProjectTitle(input.projectTitle, rootPath),
-      rootPath,
-      createdAt: now,
-      updatedAt: now,
+      title: deriveProjectTitle(input.projectTitle, inspectedLocation.rootPath),
+      rootPath: inspectedLocation.rootPath,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      primaryLocationId: null,
+      identity: {
+        repoRoot: inspectedLocation.repoRoot,
+        gitCommonDir: inspectedLocation.gitCommonDir,
+        remoteFingerprint: inspectedLocation.remoteFingerprint,
+      },
     }
 
     this.projects.set(project.id, project)
-    return project
+    return {
+      project: this.requireProject(project.id),
+      location: this.upsertProjectLocation(project.id, inspectedLocation, timestamp, true),
+    }
   }
 
   private resolveProjectForHydration(
@@ -1391,10 +1619,47 @@ export class SessionManager {
       rootPath,
       createdAt,
       updatedAt: config.updatedAt ?? createdAt,
+      primaryLocationId: null,
+      identity: {
+        repoRoot: null,
+        gitCommonDir: null,
+        remoteFingerprint: null,
+      },
     }
 
     this.projects.set(project.id, project)
     return project
+  }
+
+  private resolveLocationForHydration(
+    project: ProjectConfig,
+    config: StoredSessionConfig,
+  ): ProjectLocation {
+    if (config.locationId) {
+      const existingLocation = this.locations.get(config.locationId)
+      if (existingLocation) {
+        return existingLocation
+      }
+    }
+
+    const primaryLocation =
+      project.primaryLocationId && this.locations.get(project.primaryLocationId)
+    if (primaryLocation) {
+      return primaryLocation
+    }
+
+    return this.upsertProjectLocation(
+      project.id,
+      {
+        rootPath: project.rootPath,
+        label: path.basename(project.rootPath) || project.rootPath,
+        repoRoot: project.identity?.repoRoot ?? null,
+        gitCommonDir: project.identity?.gitCommonDir ?? null,
+        remoteFingerprint: project.identity?.remoteFingerprint ?? null,
+      },
+      config.updatedAt ?? config.createdAt ?? new Date().toISOString(),
+      true,
+    )
   }
 
   private requireProject(id: string): ProjectConfig {
@@ -1435,11 +1700,135 @@ export class SessionManager {
     }
 
     this.runtimes.set(id, nextRuntime)
+    if (Object.keys(patch).length > 0) {
+      this.appendTranscriptEvent({
+        sessionId: id,
+        kind: 'runtime',
+        source: 'system',
+        metadata: {
+          status: nextRuntime.status,
+          pid: nextRuntime.pid ?? null,
+          exitCode: nextRuntime.exitCode ?? null,
+        },
+      })
+    }
     this.events.onRuntime({
       sessionId: id,
       runtime: nextRuntime,
     })
     return nextRuntime
+  }
+
+  private writeToSessionInternal(
+    id: string,
+    data: string,
+    source: 'system' | 'user',
+  ): void {
+    if (source === 'user') {
+      this.capturePendingFirstPromptTitle(id, data)
+      this.touchRuntime(id)
+    }
+
+    this.appendTranscriptEvent({
+      sessionId: id,
+      kind: 'input',
+      source,
+      chunk: data,
+    })
+    this.writeToTerminal(id, data)
+  }
+
+  private writeToTerminal(id: string, data: string): void {
+    this.terminals.get(id)?.write(data)
+  }
+
+  private appendTranscriptEvent(
+    input: Omit<TranscriptEvent, 'id' | 'locationId' | 'projectId' | 'timestamp'> & {
+      locationId?: string | null
+      projectId?: string
+      timestamp?: string
+    },
+  ): Promise<void> {
+    const config = this.configs.get(input.sessionId)
+    const projectId = input.projectId ?? config?.projectId
+    if (!projectId) {
+      return Promise.resolve()
+    }
+
+    const locationId = input.locationId ?? config?.locationId ?? null
+    return this.transcriptStore.append({
+      id: crypto.randomUUID(),
+      sessionId: input.sessionId,
+      projectId,
+      locationId,
+      timestamp: input.timestamp ?? new Date().toISOString(),
+      kind: input.kind,
+      source: input.source,
+      chunk: input.chunk,
+      metadata: input.metadata,
+    })
+  }
+
+  private scheduleProjectContextBootstrap(sessionId: string): void {
+    setTimeout(() => {
+      void this.attachProjectContextBootstrap(sessionId)
+    }, 140)
+  }
+
+  private async attachProjectContextBootstrap(sessionId: string): Promise<void> {
+    const config = this.configs.get(sessionId)
+    if (!config || !this.terminals.has(sessionId)) {
+      return
+    }
+
+    const project = this.projects.get(config.projectId)
+    if (!project) {
+      return
+    }
+
+    const location = config.locationId
+      ? this.locations.get(config.locationId) ?? null
+      : null
+    const context = await this.projectMemory.assembleContext({
+      project,
+      location,
+    })
+    if (!context.bootstrapMessage?.trim()) {
+      return
+    }
+
+    const nextConfig: SessionConfig = {
+      ...config,
+      projectContextAttachedAt: context.generatedAt,
+    }
+    this.configs.set(sessionId, nextConfig)
+    this.persist()
+    this.events.onConfig({
+      sessionId,
+      config: nextConfig,
+    })
+    this.writeToSessionInternal(sessionId, `${context.bootstrapMessage}\r`, 'system')
+  }
+
+  private async captureProjectMemoryForSession(
+    config: SessionConfig,
+    pendingEvent?: Promise<void>,
+  ): Promise<void> {
+    const project = this.projects.get(config.projectId)
+    if (!project) {
+      return
+    }
+
+    await pendingEvent
+    const transcript = await this.transcriptStore.readEvents(config.id)
+    await this.projectMemory.captureSession({
+      project,
+      location: config.locationId
+        ? this.locations.get(config.locationId) ?? null
+        : null,
+      session: config,
+      transcript,
+    })
   }
 
   private snapshotFor(id: string): SessionSnapshot {
@@ -1454,6 +1843,7 @@ export class SessionManager {
 
     return {
       config: project,
+      locations: this.getOrderedLocations(project.id),
       sessions: this.getOrderedConfigs(project.id).map((config) =>
         this.snapshotFor(config.id),
       ),
@@ -1512,17 +1902,161 @@ export class SessionManager {
     return this.runtimes.get(id)?.lastActiveAt ?? fallbackValue
   }
 
-  private findProjectByRootPath(rootPath: string): ProjectConfig | undefined {
-    const targetPath = this.normalizePath(rootPath)
-
-    return Array.from(this.projects.values()).find(
-      (project) => this.normalizePath(project.rootPath) === targetPath,
+  private getProjectLocations(projectId: string): ProjectLocation[] {
+    return Array.from(this.locations.values()).filter(
+      (location) => location.projectId === projectId,
     )
+  }
+
+  private getOrderedLocations(projectId: string): ProjectLocation[] {
+    const project = this.projects.get(projectId)
+    const primaryLocationId = project?.primaryLocationId ?? null
+    return this.getProjectLocations(projectId).sort((left, right) => {
+      if (left.id === primaryLocationId) {
+        return -1
+      }
+      if (right.id === primaryLocationId) {
+        return 1
+      }
+
+      return (
+        right.lastSeenAt.localeCompare(left.lastSeenAt) ||
+        left.label.localeCompare(right.label)
+      )
+    })
+  }
+
+  private findProjectByRootPath(rootPath: string): ProjectConfig | undefined {
+    const existingLocation = this.findLocationByRootPath(rootPath)
+    return existingLocation ? this.projects.get(existingLocation.projectId) : undefined
+  }
+
+  private findProjectByLocationIdentity(
+    inspectedLocation: ProjectLocationIdentity,
+  ): ProjectConfig | undefined {
+    const existingLocation = this.findLocationByRootPath(inspectedLocation.rootPath)
+    if (existingLocation) {
+      return this.projects.get(existingLocation.projectId)
+    }
+
+    if (inspectedLocation.gitCommonDir) {
+      const sameGitCommonDir = Array.from(this.locations.values()).find(
+        (location) =>
+          location.gitCommonDir &&
+          this.normalizePath(location.gitCommonDir) ===
+            this.normalizePath(inspectedLocation.gitCommonDir!),
+      )
+      if (sameGitCommonDir) {
+        return this.projects.get(sameGitCommonDir.projectId)
+      }
+    }
+
+    if (inspectedLocation.remoteFingerprint) {
+      const sameRemote = Array.from(this.locations.values()).find(
+        (location) =>
+          location.remoteFingerprint &&
+          location.remoteFingerprint === inspectedLocation.remoteFingerprint,
+      )
+      if (sameRemote) {
+        return this.projects.get(sameRemote.projectId)
+      }
+    }
+
+    return undefined
+  }
+
+  private findLocationByRootPath(rootPath: string): ProjectLocation | undefined {
+    const normalizedRootPath = this.normalizePath(rootPath)
+    return Array.from(this.locations.values()).find(
+      (location) => this.normalizePath(location.rootPath) === normalizedRootPath,
+    )
+  }
+
+  private setProjectPrimaryLocation(
+    projectId: string,
+    locationId: string,
+    timestamp: string,
+  ): void {
+    const project = this.projects.get(projectId)
+    const location = this.locations.get(locationId)
+    if (!project || !location) {
+      return
+    }
+
+    this.projects.set(projectId, {
+      ...project,
+      rootPath: location.rootPath,
+      primaryLocationId: location.id,
+      updatedAt: timestamp,
+      identity: {
+        repoRoot: location.repoRoot ?? project.identity?.repoRoot ?? null,
+        gitCommonDir: location.gitCommonDir ?? project.identity?.gitCommonDir ?? null,
+        remoteFingerprint:
+          location.remoteFingerprint ??
+          project.identity?.remoteFingerprint ??
+          null,
+      },
+    })
+  }
+
+  private upsertProjectLocation(
+    projectId: string,
+    inspectedLocation: ProjectLocationIdentity,
+    timestamp: string,
+    setPrimary: boolean,
+  ): ProjectLocation {
+    const existingLocation = this.findLocationByRootPath(inspectedLocation.rootPath)
+    if (existingLocation) {
+      if (existingLocation.projectId !== projectId) {
+        throw new Error(
+          `Location ${inspectedLocation.rootPath} is already assigned to another project.`,
+        )
+      }
+
+      const nextLocation: ProjectLocation = {
+        ...existingLocation,
+        rootPath: inspectedLocation.rootPath,
+        label: inspectedLocation.label,
+        repoRoot: inspectedLocation.repoRoot,
+        gitCommonDir: inspectedLocation.gitCommonDir,
+        remoteFingerprint: inspectedLocation.remoteFingerprint,
+        updatedAt: timestamp,
+        lastSeenAt: timestamp,
+      }
+      this.locations.set(nextLocation.id, nextLocation)
+
+      if (setPrimary || !this.projects.get(projectId)?.primaryLocationId) {
+        this.setProjectPrimaryLocation(projectId, nextLocation.id, timestamp)
+      }
+
+      return nextLocation
+    }
+
+    const location: ProjectLocation = {
+      id: crypto.randomUUID(),
+      projectId,
+      rootPath: inspectedLocation.rootPath,
+      repoRoot: inspectedLocation.repoRoot,
+      gitCommonDir: inspectedLocation.gitCommonDir,
+      remoteFingerprint: inspectedLocation.remoteFingerprint,
+      label: inspectedLocation.label,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastSeenAt: timestamp,
+    }
+    this.locations.set(location.id, location)
+
+    if (setPrimary || !this.projects.get(projectId)?.primaryLocationId) {
+      this.setProjectPrimaryLocation(projectId, location.id, timestamp)
+    }
+
+    return location
   }
 
   private persist(): void {
     this.store.set({
       projects: Array.from(this.projects.values()),
+      locations: Array.from(this.locations.values()),
       sessions: Array.from(this.configs.values()),
       activeSessionId: this.activeSessionId,
     })

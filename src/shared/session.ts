@@ -1,3 +1,8 @@
+import type {
+  ProjectIdentity,
+  ProjectLocation,
+} from './projectMemory'
+
 export const SESSION_STATUSES = ['starting', 'running', 'exited', 'error'] as const
 
 export type SessionStatus = (typeof SESSION_STATUSES)[number]
@@ -17,17 +22,21 @@ export interface ProjectConfig {
   rootPath: string
   createdAt: string
   updatedAt: string
+  primaryLocationId?: string | null
+  identity?: ProjectIdentity
 }
 
 export interface SessionConfig {
   id: string
   projectId: string
+  locationId?: string
   title: string
   startupCommand: string
   pendingFirstPromptTitle: boolean
   externalSession?: ManagedCliSessionRef
   cwd: string
   shell: string
+  projectContextAttachedAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -47,6 +56,7 @@ export interface SessionSnapshot {
 
 export interface ProjectSnapshot {
   config: ProjectConfig
+  locations?: ProjectLocation[]
   sessions: SessionSnapshot[]
 }
 
@@ -70,6 +80,7 @@ export interface CreateSessionInput {
   startupCommand: string
   cwd?: string
   createWithWorktree?: boolean
+  attachProjectContext?: boolean
 }
 
 export interface SessionCloseResult {

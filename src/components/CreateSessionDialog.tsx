@@ -222,6 +222,9 @@ export function CreateSessionDialog({
       }
 
       payload.cwd = projectForSession.config.rootPath
+      if (projectContextFlow) {
+        payload.attachProjectContext = true
+      }
 
       await onCreateSession(payload)
       onClose()

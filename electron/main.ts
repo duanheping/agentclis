@@ -24,9 +24,13 @@ import {
   getProjectGitOverview,
   openProjectInTarget,
 } from './projectTools'
+import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'
+import { ProjectMemoryManager } from './projectMemoryManager'
+import { ProjectIdentityResolver } from './projectIdentity'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
 import { TransientFileStore } from './transientFileStore'
+import { TranscriptStore } from './transcriptStore'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -45,6 +49,14 @@ let fullSyncState: FullSyncState = {
 
 const skillLibraryManager = new SkillLibraryManager()
 const transientFileStore = new TransientFileStore()
+const projectIdentityResolver = new ProjectIdentityResolver()
+const transcriptStore = new TranscriptStore()
+const projectMemoryManager = new ProjectMemoryManager(
+  () => skillLibraryManager.getSettings().libraryRoot,
+  new ProjectMemoryAgentExtractor(
+    () => skillLibraryManager.getSettings().primaryMergeAgent,
+  ),
+)
 const sessionManager = new SessionManager({
   onData: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionData, event)
@@ -58,6 +70,10 @@ const sessionManager = new SessionManager({
   onExit: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionExit, event)
   },
+}, {
+  identityResolver: projectIdentityResolver,
+  transcriptStore,
+  projectMemory: projectMemoryManager,
 })
 
 const windowsCommandPromptManager = new WindowsCommandPromptManager({
