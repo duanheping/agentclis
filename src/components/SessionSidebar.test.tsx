@@ -47,7 +47,6 @@ function buildProject(): ProjectSnapshot {
 function buildSkillLibrarySettings(): SkillLibrarySettings {
   return {
     libraryRoot: 'C:\\skills\\library',
-    autoSyncOnAppStart: false,
     primaryMergeAgent: 'codex',
     reviewMergeAgent: 'claude',
   }
@@ -160,7 +159,6 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onClearSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onOpenSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
-      onToggleSkillAutoSync={vi.fn().mockResolvedValue(undefined)}
       onSetPrimaryMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSetReviewMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSyncSkills={vi.fn().mockResolvedValue(undefined)}

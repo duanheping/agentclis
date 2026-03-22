@@ -12,7 +12,6 @@ export type SkillSyncRoot = (typeof SKILL_SYNC_ROOTS)[number]
 
 export interface SkillLibrarySettings {
   libraryRoot: string
-  autoSyncOnAppStart: boolean
   primaryMergeAgent: SkillAiMergeAgent
   reviewMergeAgent: SkillAiReviewAgent
 }

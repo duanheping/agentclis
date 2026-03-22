@@ -431,7 +431,6 @@ if (!gotSingleInstanceLock) {
     app.setName('Agent CLIs')
     registerSecurityHeaders()
     registerIpcHandlers()
-    void skillLibraryManager.syncOnAppStart().catch(() => undefined)
     await createMainWindow()
 
     app.on('activate', async () => {

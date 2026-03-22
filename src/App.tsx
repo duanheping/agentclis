@@ -1065,13 +1065,6 @@ function App() {
     }
   }
 
-  const handleToggleSkillAutoSync = async () => {
-    await mutateSkillSettings((current) => ({
-      ...current,
-      autoSyncOnAppStart: !current.autoSyncOnAppStart,
-    }))
-  }
-
   const handleSetPrimaryMergeAgent = async (agent: SkillAiMergeAgent) => {
     await mutateSkillSettings((current) => ({
       ...current,
@@ -1356,7 +1349,6 @@ function App() {
           onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
           onClearSkillLibraryRoot={handleClearSkillLibraryRoot}
           onOpenSkillLibraryRoot={handleOpenSkillLibraryRoot}
-          onToggleSkillAutoSync={handleToggleSkillAutoSync}
           onSetPrimaryMergeAgent={handleSetPrimaryMergeAgent}
           onSetReviewMergeAgent={handleSetReviewMergeAgent}
           onSyncSkills={handleSyncSkills}

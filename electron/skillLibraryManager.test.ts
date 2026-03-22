@@ -98,7 +98,6 @@ describe('SkillLibraryManager', () => {
 
     manager.updateSettings({
       libraryRoot,
-      autoSyncOnAppStart: false,
       primaryMergeAgent: 'codex',
       reviewMergeAgent: 'none',
     })
@@ -348,7 +347,6 @@ describe('SkillLibraryManager', () => {
 
     expect(manager.getSettings()).toEqual({
       libraryRoot: 'C:\\legacy\\skills',
-      autoSyncOnAppStart: true,
       primaryMergeAgent: 'codex',
       reviewMergeAgent: 'none',
     })

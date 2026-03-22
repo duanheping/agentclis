@@ -20,7 +20,6 @@ import { useSessionsStore } from './store/useSessionsStore'
 function buildSkillSettings(): SkillLibrarySettings {
   return {
     libraryRoot: '',
-    autoSyncOnAppStart: false,
     primaryMergeAgent: 'codex',
     reviewMergeAgent: 'none',
   }

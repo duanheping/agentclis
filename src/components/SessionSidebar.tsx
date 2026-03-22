@@ -47,7 +47,6 @@ interface SessionSidebarProps {
   onPickSkillLibraryRoot: () => Promise<void>
   onClearSkillLibraryRoot: () => Promise<void>
   onOpenSkillLibraryRoot: () => Promise<void>
-  onToggleSkillAutoSync: () => Promise<void>
   onSetPrimaryMergeAgent: (agent: SkillAiMergeAgent) => Promise<void>
   onSetReviewMergeAgent: (agent: SkillAiReviewAgent) => Promise<void>
   onSyncSkills: () => Promise<void>
@@ -369,7 +368,6 @@ export function SessionSidebar({
   onPickSkillLibraryRoot,
   onClearSkillLibraryRoot,
   onOpenSkillLibraryRoot,
-  onToggleSkillAutoSync,
   onSetPrimaryMergeAgent,
   onSetReviewMergeAgent,
   onSyncSkills,
@@ -828,18 +826,6 @@ export function SessionSidebar({
                           </p>
                         ))}
                       </div>
-
-                      <label className="sidebar-settings__toggle">
-                        <input
-                          type="checkbox"
-                          checked={skillLibrarySettings.autoSyncOnAppStart}
-                          disabled={skillsBusy}
-                          onChange={() => {
-                            void onToggleSkillAutoSync()
-                          }}
-                        />
-                        <span>Auto-sync on app start</span>
-                      </label>
 
                       <div className="sidebar-settings__agent-grid">
                         <SkillAgentSelect

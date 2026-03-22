@@ -118,7 +118,6 @@ const KNOWN_SKILL_ROOT_SEGMENTS = [
 function buildDefaultSettings(): SkillLibrarySettings {
   return {
     libraryRoot: '',
-    autoSyncOnAppStart: false,
     primaryMergeAgent: 'codex',
     reviewMergeAgent: 'none',
   }
@@ -153,7 +152,6 @@ function normalizeSettings(
   return {
     libraryRoot:
       typeof settings.libraryRoot === 'string' ? settings.libraryRoot.trim() : '',
-    autoSyncOnAppStart: Boolean(settings.autoSyncOnAppStart),
     primaryMergeAgent,
     reviewMergeAgent: normalizeReviewMergeAgent(
       settings.reviewMergeAgent,
@@ -785,15 +783,6 @@ export class SkillLibraryManager {
     )
     this.persistResult(result)
     return result
-  }
-
-  async syncOnAppStart(): Promise<SkillSyncResult | null> {
-    const settings = this.getSettings()
-    if (!settings.autoSyncOnAppStart) {
-      return null
-    }
-
-    return this.sync()
   }
 
   async fullSync(
