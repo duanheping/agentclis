@@ -1,4 +1,10 @@
-import { type MouseEvent, useEffect, useRef, useState } from 'react'
+import {
+  type MouseEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
+import { createPortal } from 'react-dom'
 
 import {
   type SkillAiMergeAgent,
@@ -176,9 +182,46 @@ function SkillAgentSelect<T extends string>({
 }: SkillAgentSelectProps<T>) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const [menuPosition, setMenuPosition] = useState<{
+    top: number
+    left: number
+    width: number
+  } | null>(null)
   const selectId = label.toLowerCase().replace(/\s+/g, '-')
   const selectedOption =
     options.find((option) => option.value === value) ?? options[0] ?? null
+
+  const updateMenuPosition = () => {
+    const trigger = triggerRef.current
+    if (!trigger) {
+      return
+    }
+
+    const triggerRect = trigger.getBoundingClientRect()
+    const viewportPadding = 8
+    const gap = 10
+    const estimatedOptionHeight = 52
+    const estimatedMenuHeight = options.length * estimatedOptionHeight + 22
+    const availableBelow = window.innerHeight - triggerRect.bottom - viewportPadding
+    const availableAbove = triggerRect.top - viewportPadding
+    const openAbove =
+      availableBelow < estimatedMenuHeight + gap && availableAbove > availableBelow
+    const top = openAbove
+      ? Math.max(viewportPadding, triggerRect.top - estimatedMenuHeight - gap)
+      : triggerRect.bottom + gap
+    const left = Math.min(
+      Math.max(viewportPadding, triggerRect.left),
+      Math.max(viewportPadding, window.innerWidth - triggerRect.width - viewportPadding),
+    )
+
+    setMenuPosition({
+      top,
+      left,
+      width: triggerRect.width,
+    })
+  }
 
   useEffect(() => {
     if (!open) {
@@ -187,7 +230,11 @@ function SkillAgentSelect<T extends string>({
 
     const closeMenu = () => setOpen(false)
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node
+      if (
+        !rootRef.current?.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
         setOpen(false)
       }
     }
@@ -201,14 +248,62 @@ function SkillAgentSelect<T extends string>({
     window.addEventListener('blur', closeMenu)
     window.addEventListener('resize', closeMenu)
     window.addEventListener('keydown', onWindowKeyDown)
+    window.addEventListener('scroll', closeMenu, true)
 
     return () => {
       window.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('blur', closeMenu)
       window.removeEventListener('resize', closeMenu)
       window.removeEventListener('keydown', onWindowKeyDown)
+      window.removeEventListener('scroll', closeMenu, true)
     }
   }, [open])
+
+  const menu = open
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className="sidebar-settings__select-menu sidebar-settings__select-menu--floating"
+          role="listbox"
+          aria-label={label}
+          style={
+            menuPosition
+              ? {
+                  top: `${menuPosition.top}px`,
+                  left: `${menuPosition.left}px`,
+                  width: `${menuPosition.width}px`,
+                }
+              : {
+                  top: '0px',
+                  left: '0px',
+                  width: '0px',
+                  visibility: 'hidden',
+                }
+          }
+        >
+          {options.map((option) => {
+            const selected = option.value === value
+
+            return (
+              <button
+                key={`${selectId}-${option.value}`}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`sidebar-settings__select-option${selected ? ' is-selected' : ''}`}
+                onClick={() => {
+                  onChange(option.value)
+                  setOpen(false)
+                }}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>,
+        document.body,
+      )
+    : null
 
   return (
     <div className="sidebar-settings__select-group">
@@ -217,6 +312,7 @@ function SkillAgentSelect<T extends string>({
       </span>
       <div ref={rootRef} className="sidebar-settings__select-wrapper">
         <button
+          ref={triggerRef}
           type="button"
           className={`sidebar-settings__select-trigger${open ? ' is-open' : ''}`}
           aria-expanded={open}
@@ -224,7 +320,15 @@ function SkillAgentSelect<T extends string>({
           aria-labelledby={`${selectId}-label`}
           aria-label={label}
           disabled={disabled}
-          onClick={() => setOpen((current) => !current)}
+          onClick={() => {
+            if (open) {
+              setOpen(false)
+              return
+            }
+
+            updateMenuPosition()
+            setOpen(true)
+          }}
         >
           <span className="sidebar-settings__select-value">
             {selectedOption?.label ?? value}
@@ -233,35 +337,8 @@ function SkillAgentSelect<T extends string>({
             {open ? '^' : 'v'}
           </span>
         </button>
-
-        {open ? (
-          <div
-            className="sidebar-settings__select-menu"
-            role="listbox"
-            aria-label={label}
-          >
-            {options.map((option) => {
-              const selected = option.value === value
-
-              return (
-                <button
-                  key={`${selectId}-${option.value}`}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  className={`sidebar-settings__select-option${selected ? ' is-selected' : ''}`}
-                  onClick={() => {
-                    onChange(option.value)
-                    setOpen(false)
-                  }}
-                >
-                  {option.label}
-                </button>
-              )
-            })}
-          </div>
-        ) : null}
       </div>
+      {menu}
     </div>
   )
 }
@@ -343,7 +420,11 @@ export function SessionSidebar({
 
     const closeSettings = () => setSettingsOpen(false)
     const onPointerDown = (event: PointerEvent) => {
-      if (!settingsRef.current?.contains(event.target as Node)) {
+      const target = event.target as Element | null
+      if (
+        !settingsRef.current?.contains(event.target as Node) &&
+        !target?.closest('.sidebar-settings__select-menu')
+      ) {
         setSettingsOpen(false)
       }
     }
