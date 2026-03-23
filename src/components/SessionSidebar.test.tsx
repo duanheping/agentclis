@@ -154,6 +154,8 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       skillsResolving={null}
       skillsGeneratingMerge={null}
       skillsApplyingMerge={false}
+      projectMemoryImporting={false}
+      projectMemoryImportStatus={null}
       skillAiMergeProposal={null}
       skillsErrorMessage={null}
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
@@ -162,6 +164,7 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       onSetPrimaryMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSetReviewMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSyncSkills={vi.fn().mockResolvedValue(undefined)}
+      onImportHistoricalProjectMemory={vi.fn().mockResolvedValue(undefined)}
       onResolveSkillConflict={vi.fn().mockResolvedValue(undefined)}
       onGenerateSkillAiMerge={vi.fn().mockResolvedValue(undefined)}
       onApplySkillAiMerge={vi.fn().mockResolvedValue(undefined)}
@@ -214,6 +217,20 @@ describe('SessionSidebar', () => {
       'document-topic-search',
       'discovered',
     )
+  })
+
+  it('forwards the dedicated project-memory history import action', async () => {
+    const user = userEvent.setup()
+    const onImportHistoricalProjectMemory = vi.fn().mockResolvedValue(undefined)
+
+    renderSidebar({
+      onImportHistoricalProjectMemory,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Import history' }))
+
+    expect(onImportHistoricalProjectMemory).toHaveBeenCalledTimes(1)
   })
 
   it('allows spaces while renaming a session', async () => {

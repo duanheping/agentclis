@@ -48,6 +48,8 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.getSkillLibrarySettings),
   updateSkillLibrarySettings: (settings) =>
     ipcRenderer.invoke(IPC_CHANNELS.updateSkillLibrarySettings, settings),
+  importHistoricalProjectMemory: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.importHistoricalProjectMemory),
   getSkillSyncStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getSkillSyncStatus),
   syncSkills: () => ipcRenderer.invoke(IPC_CHANNELS.syncSkills),
   resolveSkillConflict: (skillName, sourceRoot) =>

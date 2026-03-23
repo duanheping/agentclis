@@ -42,6 +42,8 @@ interface SessionSidebarProps {
   skillsResolving: string | null
   skillsGeneratingMerge: string | null
   skillsApplyingMerge: boolean
+  projectMemoryImporting: boolean
+  projectMemoryImportStatus: string | null
   skillAiMergeProposal: SkillAiMergeProposal | null
   skillsErrorMessage: string | null
   onPickSkillLibraryRoot: () => Promise<void>
@@ -50,6 +52,7 @@ interface SessionSidebarProps {
   onSetPrimaryMergeAgent: (agent: SkillAiMergeAgent) => Promise<void>
   onSetReviewMergeAgent: (agent: SkillAiReviewAgent) => Promise<void>
   onSyncSkills: () => Promise<void>
+  onImportHistoricalProjectMemory: () => Promise<void>
   onResolveSkillConflict: (
     skillName: string,
     sourceRoot: SkillSyncRoot,
@@ -363,6 +366,8 @@ export function SessionSidebar({
   skillsResolving,
   skillsGeneratingMerge,
   skillsApplyingMerge,
+  projectMemoryImporting,
+  projectMemoryImportStatus,
   skillAiMergeProposal,
   skillsErrorMessage,
   onPickSkillLibraryRoot,
@@ -371,6 +376,7 @@ export function SessionSidebar({
   onSetPrimaryMergeAgent,
   onSetReviewMergeAgent,
   onSyncSkills,
+  onImportHistoricalProjectMemory,
   onResolveSkillConflict,
   onGenerateSkillAiMerge,
   onApplySkillAiMerge,
@@ -870,6 +876,42 @@ export function SessionSidebar({
                             void onSetReviewMergeAgent(agent as SkillAiReviewAgent)
                           }}
                         />
+                      </div>
+
+                      <div className="sidebar-settings__group">
+                        <div className="sidebar-settings__group-header">
+                          <span className="sidebar-settings__field-label">
+                            Project memory
+                          </span>
+                          <button
+                            type="button"
+                            className="ghost-button sidebar-settings__sync-button"
+                            disabled={
+                              skillsLoading ||
+                              skillsBusy ||
+                              projectMemoryImporting ||
+                              !skillLibrarySettings.libraryRoot.trim()
+                            }
+                            onClick={() => {
+                              void onImportHistoricalProjectMemory()
+                            }}
+                          >
+                            {projectMemoryImporting ? 'Queueing…' : 'Import history'}
+                          </button>
+                        </div>
+                        <p className="sidebar-settings__caption">
+                          Queue stored Agent CLIs sessions for low-priority project-memory import.
+                        </p>
+                        {projectMemoryImportStatus ? (
+                          <p className="sidebar-settings__caption">
+                            {projectMemoryImportStatus}
+                          </p>
+                        ) : null}
+                        {!skillLibrarySettings.libraryRoot.trim() ? (
+                          <p className="sidebar-settings__caption">
+                            Choose a library root before importing history.
+                          </p>
+                        ) : null}
                       </div>
 
                       {skillSyncStatus?.conflicts.length ? (

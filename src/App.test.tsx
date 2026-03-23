@@ -302,6 +302,9 @@ function createAgentCliMock(
     getSkillSyncStatus: vi
       .fn()
       .mockImplementation(async () => structuredClone(currentSkillStatus)),
+    importHistoricalProjectMemory: vi.fn().mockResolvedValue({
+      queuedSessionCount: 2,
+    }),
     syncSkills: vi.fn().mockImplementation(async () => {
       currentSkillStatus = {
         ...currentSkillStatus,
@@ -479,6 +482,33 @@ describe('App skills settings', () => {
       'document-topic-search',
       'discovered',
     )
+  })
+
+  it('queues a dedicated historical project-memory import from the settings panel', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Create a project or session to get started.')
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Choose' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Import history' }))
+
+    await waitFor(() => {
+      expect(agentCli.importHistoricalProjectMemory).toHaveBeenCalledTimes(1)
+    })
+
+    expect(
+      screen.getByText('Queued 2 sessions for background import.'),
+    ).toBeInTheDocument()
   })
 
   it('generates an AI merge preview and applies it from the settings panel', async () => {
