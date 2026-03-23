@@ -328,8 +328,8 @@ function registerIpcHandlers(): void {
       return nextSettings
     },
   )
-  ipcMain.handle(IPC_CHANNELS.importHistoricalProjectMemory, () => ({
-    queuedSessionCount: sessionManager.queueHistoricalProjectMemoryImport(),
+  ipcMain.handle(IPC_CHANNELS.importHistoricalProjectMemory, async () => ({
+    queuedSessionCount: await sessionManager.queueHistoricalProjectMemoryImport(),
   }))
   ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
     skillLibraryManager.getStatus(),

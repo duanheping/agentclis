@@ -184,6 +184,101 @@ describe('ProjectMemoryService', () => {
     service.dispose()
   })
 
+  it('retargets queued work when duplicate projects are merged', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => true),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(async () => false),
+      captureSession: vi.fn(async () => undefined),
+      mergeProjects: vi.fn(async () => undefined),
+    }
+    const transcriptStore = {
+      readIndex: vi.fn(async () => ({
+        eventCount: 1,
+        lastEventAt: '2026-03-22T12:00:05.000Z',
+        projectId: 'project-2',
+        locationId: 'location-2',
+      })),
+      readEvents: vi.fn(async (): Promise<TranscriptEvent[]> => [
+        {
+          id: 'event-1',
+          sessionId: 'session-2',
+          projectId: 'project-2',
+          locationId: 'location-2',
+          timestamp: '2026-03-22T12:00:00.000Z',
+          kind: 'input',
+          source: 'user',
+          chunk: 'Carry this memory into the merged project',
+        },
+      ]),
+    }
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+    )
+    const sourceProject = {
+      ...buildProject(),
+      id: 'project-2',
+      title: 'agenclis-copy',
+      rootPath: 'D:\\repo\\agenclis-copy',
+      primaryLocationId: 'location-2',
+    }
+    const sourceLocation = {
+      ...buildLocation(),
+      id: 'location-2',
+      projectId: 'project-2',
+      rootPath: 'D:\\repo\\agenclis-copy',
+      repoRoot: 'D:\\repo\\agenclis-copy',
+      gitCommonDir: 'D:\\repo\\agenclis-copy\\.git',
+      label: 'agenclis-copy',
+    }
+    const sourceSession = {
+      ...buildSession(),
+      id: 'session-2',
+      projectId: 'project-2',
+      locationId: 'location-2',
+      cwd: 'D:\\repo\\agenclis-copy',
+    }
+
+    service.scheduleBackfillSessions([
+      {
+        project: sourceProject,
+        location: sourceLocation,
+        session: sourceSession,
+      },
+    ])
+    await service.mergeProjects({
+      targetProject: buildProject(),
+      sourceProject,
+    })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(manager.mergeProjects).toHaveBeenCalledWith({
+      targetProject: buildProject(),
+      sourceProject,
+    })
+    expect(manager.captureSession).toHaveBeenCalledWith({
+      project: expect.objectContaining({
+        id: 'project-1',
+      }),
+      location: expect.objectContaining({
+        id: 'location-2',
+        projectId: 'project-1',
+      }),
+      session: expect.objectContaining({
+        id: 'session-2',
+        projectId: 'project-1',
+      }),
+      transcript: expect.any(Array),
+    })
+    service.dispose()
+  })
+
   it('keeps queued work pending until memory storage is configured, then resumes processing', async () => {
     let enabled = false
     const manager = {

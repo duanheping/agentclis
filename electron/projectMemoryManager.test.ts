@@ -61,6 +61,29 @@ function buildLocationTwo(): ProjectLocation {
   }
 }
 
+function buildProjectTwo(): ProjectConfig {
+  return {
+    id: 'project-2',
+    title: 'agenclis-copy',
+    rootPath: 'D:\\repo\\agenclis-copy',
+    createdAt: '2026-03-22T12:05:00.000Z',
+    updatedAt: '2026-03-22T12:05:00.000Z',
+    primaryLocationId: 'location-2',
+    identity: {
+      repoRoot: 'D:\\repo\\agenclis-copy',
+      gitCommonDir: 'D:\\repo\\agenclis-copy\\.git',
+      remoteFingerprint: 'github.com/openai/agenclis',
+    },
+  }
+}
+
+function buildSourceLocation(): ProjectLocation {
+  return {
+    ...buildLocationTwo(),
+    projectId: 'project-2',
+  }
+}
+
 function buildSession(): SessionConfig {
   return {
     id: 'session-1',
@@ -73,6 +96,16 @@ function buildSession(): SessionConfig {
     shell: 'pwsh.exe',
     createdAt: '2026-03-22T12:00:00.000Z',
     updatedAt: '2026-03-22T12:00:00.000Z',
+  }
+}
+
+function buildSessionTwo(): SessionConfig {
+  return {
+    ...buildSession(),
+    id: 'session-2',
+    projectId: 'project-2',
+    locationId: 'location-2',
+    cwd: 'D:\\repo\\agenclis-copy',
   }
 }
 
@@ -256,5 +289,84 @@ describe('ProjectMemoryManager', () => {
     expect(copyContext.bootstrapMessage).toContain(
       'Use the local bootstrap script from the copy checkout.',
     )
+  })
+
+  it('merges duplicate project memory into the surviving logical project directory', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async (input: {
+        project: ProjectConfig
+        location: ProjectLocation | null
+        session: SessionConfig
+        transcript: TranscriptEvent[]
+        normalizedTranscript: string
+      }) => ({
+        summary:
+          input.project.id === 'project-2'
+            ? 'Captured workflows from the backup checkout.'
+            : 'Captured workflows from the main checkout.',
+        candidates: [
+          {
+            kind: 'decision' as const,
+            scope: 'project' as const,
+            key: input.project.id === 'project-2' ? 'backup-flow' : 'main-flow',
+            content:
+              input.project.id === 'project-2'
+                ? 'Use the backup checkout for historical imports.'
+                : 'Use the main checkout for active development.',
+            confidence: 0.91,
+            sourceEventIds: ['event-1'],
+          },
+        ],
+      }),
+    })
+
+    await manager.captureSession({
+      project: buildProject(),
+      location: buildLocation(),
+      session: buildSession(),
+      transcript: buildTranscript(),
+    })
+    await manager.captureSession({
+      project: buildProjectTwo(),
+      location: buildSourceLocation(),
+      session: buildSessionTwo(),
+      transcript: buildTranscript().map((event) => ({
+        ...event,
+        sessionId: 'session-2',
+        projectId: 'project-2',
+        locationId: 'location-2',
+      })),
+    })
+
+    await manager.mergeProjects({
+      targetProject: buildProject(),
+      sourceProject: buildProjectTwo(),
+    })
+
+    const targetRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'agenclis--project-1',
+    )
+    const sourceRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'agenclis-copy--project-2',
+    )
+
+    await expect(readFile(path.join(targetRoot, 'memory.md'), 'utf8')).resolves.toContain(
+      'Use the backup checkout for historical imports.',
+    )
+    await expect(readFile(path.join(targetRoot, 'memory.md'), 'utf8')).resolves.toContain(
+      'Use the main checkout for active development.',
+    )
+    await expect(
+      readFile(path.join(targetRoot, 'summaries', 'session-2.json'), 'utf8'),
+    ).resolves.toContain('"projectId": "project-1"')
+    await expect(readFile(path.join(sourceRoot, 'memory.md'), 'utf8')).rejects.toBeDefined()
   })
 })
