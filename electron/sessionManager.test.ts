@@ -911,7 +911,7 @@ describe('SessionManager logical project identity and project context', () => {
     vi.useRealTimers()
   })
 
-  it('merges separate local copies with the same remote fingerprint into one logical project', async () => {
+  it('keeps separate local copies with the same remote fingerprint as separate projects', async () => {
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => {
         if (rootPath === 'C:\\repo\\copy-a') {
@@ -955,21 +955,23 @@ describe('SessionManager logical project identity and project context', () => {
       rootPath: 'D:\\backup\\copy-b',
     })
 
-    expect(secondProject.config.id).toBe(firstProject.config.id)
-    expect(secondProject.config.rootPath).toBe('D:\\backup\\copy-b')
-    expect(secondProject.locations).toEqual([
-      expect.objectContaining({
-        label: 'copy-b',
-        rootPath: 'D:\\backup\\copy-b',
-      }),
+    expect(secondProject.config.id).not.toBe(firstProject.config.id)
+    expect(firstProject.locations).toEqual([
       expect.objectContaining({
         label: 'copy-a',
         rootPath: 'C:\\repo\\copy-a',
       }),
     ])
+    expect(secondProject.locations).toEqual([
+      expect.objectContaining({
+        label: 'copy-b',
+        rootPath: 'D:\\backup\\copy-b',
+      }),
+    ])
+    expect(manager.listSessions().projects).toHaveLength(2)
   })
 
-  it('collapses persisted duplicate projects that already share a remote fingerprint', () => {
+  it('restores persisted duplicate clones as separate projects even when the remote matches', () => {
     mocks.setPersistedState({
       projects: [
         {
@@ -1083,33 +1085,31 @@ describe('SessionManager logical project identity and project context', () => {
 
     const snapshot = manager.listSessions()
 
-    expect(snapshot.projects).toHaveLength(1)
-    expect(snapshot.projects[0]?.config.id).toBe('project-a')
-    expect(snapshot.projects[0]?.locations).toHaveLength(2)
-    expect(snapshot.projects[0]?.locations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'location-b',
-          rootPath: 'D:\\repo\\copy-b',
-        }),
-        expect.objectContaining({
-          id: 'location-a',
-          rootPath: 'C:\\repo\\copy-a',
-        }),
-      ]),
-    )
+    expect(snapshot.projects).toHaveLength(2)
+    expect(snapshot.projects.map((entry) => entry.config.id)).toEqual([
+      'project-a',
+      'project-b',
+    ])
+    expect(snapshot.projects[0]?.locations).toEqual([
+      expect.objectContaining({
+        id: 'location-a',
+        projectId: 'project-a',
+        rootPath: 'C:\\repo\\copy-a',
+      }),
+    ])
+    expect(snapshot.projects[1]?.locations).toEqual([
+      expect.objectContaining({
+        id: 'location-b',
+        projectId: 'project-b',
+        rootPath: 'D:\\repo\\copy-b',
+      }),
+    ])
     expect(snapshot.projects[0]?.sessions.map((entry) => entry.config.projectId)).toEqual([
       'project-a',
-      'project-a',
     ])
-    expect(projectMemory.mergeProjects).toHaveBeenCalledWith({
-      targetProject: expect.objectContaining({
-        id: 'project-a',
-      }),
-      sourceProject: expect.objectContaining({
-        id: 'project-b',
-      }),
-    })
+    expect(snapshot.projects[1]?.sessions.map((entry) => entry.config.projectId)).toEqual([
+      'project-b',
+    ])
   })
 
   it('injects project context as system input without consuming the first user prompt title', async () => {
@@ -1728,7 +1728,7 @@ describe('SessionManager logical project identity and project context', () => {
     ])
   })
 
-  it('refreshes repo identity before manual history import so same remote backfills into one project', async () => {
+  it('refreshes repo identity before manual history import without collapsing clone projects', async () => {
     mocks.setPersistedState({
       projects: [
         {
@@ -1856,14 +1856,6 @@ describe('SessionManager logical project identity and project context', () => {
     await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toBe(2)
 
     expect(identityResolver.inspect).toHaveBeenCalledTimes(2)
-    expect(projectMemory.mergeProjects).toHaveBeenCalledWith({
-      targetProject: expect.objectContaining({
-        id: 'project-a',
-      }),
-      sourceProject: expect.objectContaining({
-        id: 'project-b',
-      }),
-    })
     expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
       expect.objectContaining({
         project: expect.objectContaining({
@@ -1876,11 +1868,11 @@ describe('SessionManager logical project identity and project context', () => {
       }),
       expect.objectContaining({
         project: expect.objectContaining({
-          id: 'project-a',
+          id: 'project-b',
         }),
         session: expect.objectContaining({
           id: 'session-b',
-          projectId: 'project-a',
+          projectId: 'project-b',
         }),
       }),
     ])
