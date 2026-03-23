@@ -169,7 +169,7 @@ describe('ProjectMemoryManager', () => {
       libraryRoot,
       '.agenclis-memory',
       'projects',
-      'agenclis--project-1',
+      'remote-github.com-openai-agenclis',
     )
     await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.toContain(
       'Implemented the project memory pipeline.',
@@ -291,7 +291,7 @@ describe('ProjectMemoryManager', () => {
     )
   })
 
-  it('merges duplicate project memory into the surviving logical project directory', async () => {
+  it('stores different clone projects for the same remote in one shared memory directory', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)
     const manager = new ProjectMemoryManager(() => libraryRoot, {
@@ -339,34 +339,24 @@ describe('ProjectMemoryManager', () => {
         locationId: 'location-2',
       })),
     })
-
-    await manager.mergeProjects({
-      targetProject: buildProject(),
-      sourceProject: buildProjectTwo(),
-    })
-
-    const targetRoot = path.join(
+    const sharedRoot = path.join(
       libraryRoot,
       '.agenclis-memory',
       'projects',
-      'agenclis--project-1',
-    )
-    const sourceRoot = path.join(
-      libraryRoot,
-      '.agenclis-memory',
-      'projects',
-      'agenclis-copy--project-2',
+      'remote-github.com-openai-agenclis',
     )
 
-    await expect(readFile(path.join(targetRoot, 'memory.md'), 'utf8')).resolves.toContain(
+    await expect(readFile(path.join(sharedRoot, 'memory.md'), 'utf8')).resolves.toContain(
       'Use the backup checkout for historical imports.',
     )
-    await expect(readFile(path.join(targetRoot, 'memory.md'), 'utf8')).resolves.toContain(
+    await expect(readFile(path.join(sharedRoot, 'memory.md'), 'utf8')).resolves.toContain(
       'Use the main checkout for active development.',
     )
     await expect(
-      readFile(path.join(targetRoot, 'summaries', 'session-2.json'), 'utf8'),
-    ).resolves.toContain('"projectId": "project-1"')
-    await expect(readFile(path.join(sourceRoot, 'memory.md'), 'utf8')).rejects.toBeDefined()
+      readFile(path.join(sharedRoot, 'summaries', 'session-2.json'), 'utf8'),
+    ).resolves.toContain('"projectId": "project-2"')
+    await expect(
+      readFile(path.join(sharedRoot, 'project.json'), 'utf8'),
+    ).resolves.toContain('"title": "agenclis"')
   })
 })
