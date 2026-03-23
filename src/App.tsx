@@ -249,8 +249,13 @@ function App() {
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
   const workspaceBodyRef = useRef<HTMLElement | null>(null)
   const paneResizeCleanupRef = useRef<(() => void) | null>(null)
+  const pendingWindowsCommandPromptCloseSessionIdsRef = useRef<Set<string>>(
+    new Set(),
+  )
+  const sessionIdsRef = useRef<Set<string>>(new Set())
 
   const sessions = flattenSessions(projects)
+  sessionIdsRef.current = new Set(sessions.map((session) => session.config.id))
   const activeProject = findActiveProject(projects, activeSessionId)
   const activeSession =
     sessions.find((session) => session.config.id === activeSessionId) ?? null
@@ -397,6 +402,19 @@ function App() {
     setInitialData(payload)
   }, [agentCli, setInitialData])
 
+  const hideWindowsCommandPrompt = useCallback((sessionId: string) => {
+    terminalRegistry.forget(buildWindowsCommandPromptTerminalId(sessionId))
+    setWindowsCommandPromptSessionIds((current) =>
+      current.filter((id) => id !== sessionId),
+    )
+  }, [])
+
+  const showWindowsCommandPrompt = useCallback((sessionId: string) => {
+    setWindowsCommandPromptSessionIds((current) =>
+      current.includes(sessionId) ? current : [...current, sessionId],
+    )
+  }, [])
+
   const closeSessionInWorkspace = useCallback(
     async (id: string) => {
       if (!agentCli) {
@@ -405,13 +423,11 @@ function App() {
 
       await agentCli.closeSession(id)
       terminalRegistry.forget(id)
-      terminalRegistry.forget(buildWindowsCommandPromptTerminalId(id))
-      setWindowsCommandPromptSessionIds((current) =>
-        current.filter((sessionId) => sessionId !== id),
-      )
+      pendingWindowsCommandPromptCloseSessionIdsRef.current.delete(id)
+      hideWindowsCommandPrompt(id)
       await refreshWorkspace()
     },
-    [agentCli, refreshWorkspace],
+    [agentCli, hideWindowsCommandPrompt, refreshWorkspace],
   )
 
   const refreshSkillState = useCallback(async () => {
@@ -517,10 +533,8 @@ function App() {
 
     const unsubscribeWindowsCommandPromptExit = agentCli.onWindowsCommandPromptExit(
       ({ sessionId }) => {
-        terminalRegistry.forget(buildWindowsCommandPromptTerminalId(sessionId))
-        setWindowsCommandPromptSessionIds((current) =>
-          current.filter((id) => id !== sessionId),
-        )
+        pendingWindowsCommandPromptCloseSessionIdsRef.current.delete(sessionId)
+        hideWindowsCommandPrompt(sessionId)
       },
     )
 
@@ -591,6 +605,7 @@ function App() {
   }, [
     agentCli,
     closeSessionInWorkspace,
+    hideWindowsCommandPrompt,
     refreshSkillState,
     setInitialData,
     updateConfig,
@@ -939,25 +954,36 @@ function App() {
       return
     }
 
-    const terminalId = buildWindowsCommandPromptTerminalId(id)
+    const closePending = pendingWindowsCommandPromptCloseSessionIdsRef.current.has(id)
     const currentlyOpen = windowsCommandPromptSessionIds.includes(id)
 
     try {
       setErrorMessage(null)
 
+      if (closePending) {
+        return
+      }
+
       if (currentlyOpen) {
-        await agentCli.closeWindowsCommandPrompt(id)
-        terminalRegistry.forget(terminalId)
-        setWindowsCommandPromptSessionIds((current) =>
-          current.filter((sessionId) => sessionId !== id),
-        )
+        pendingWindowsCommandPromptCloseSessionIdsRef.current.add(id)
+        hideWindowsCommandPrompt(id)
+
+        void agentCli.closeWindowsCommandPrompt(id)
+          .catch((error) => {
+            if (sessionIdsRef.current.has(id)) {
+              showWindowsCommandPrompt(id)
+            }
+
+            setErrorMessage(getErrorMessage(error))
+          })
+          .finally(() => {
+            pendingWindowsCommandPromptCloseSessionIdsRef.current.delete(id)
+          })
         return
       }
 
       await agentCli.openWindowsCommandPrompt(id, session.config.cwd)
-      setWindowsCommandPromptSessionIds((current) =>
-        current.includes(id) ? current : [...current, id],
-      )
+      showWindowsCommandPrompt(id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     }
