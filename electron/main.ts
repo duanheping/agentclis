@@ -18,6 +18,7 @@ import type {
   FullSyncProgress,
   FullSyncState,
 } from '../src/shared/skills'
+import { openExternalLinkTarget } from './externalLinks'
 import { openFileReferenceTarget } from './fileReferences'
 import {
   getProjectGitDiff,
@@ -378,6 +379,9 @@ function registerIpcHandlers(): void {
       throw new Error(message)
     }
   })
+  ipcMain.handle(IPC_CHANNELS.openExternalLink, (_event, target: string) =>
+    openExternalLinkTarget(target, shell),
+  )
   ipcMain.handle(
     IPC_CHANNELS.openProject,
     (_event, target: ProjectOpenTarget, projectPath: string) =>

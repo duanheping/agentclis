@@ -1,5 +1,6 @@
 import type { IBuffer, ILink, ILinkProvider, Terminal } from '@xterm/xterm'
 
+import { findExternalLinks } from '../shared/externalLinks'
 import { findFileReferences } from '../shared/fileReferences'
 
 interface WrappedLineSegment {
@@ -15,6 +16,7 @@ interface WrappedLineMatchContext {
 export function createMarkdownFileLinkProvider(
   terminal: Pick<Terminal, 'buffer'>,
   onActivate: (target: string) => void,
+  onActivateExternal?: (target: string) => void,
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
@@ -24,7 +26,21 @@ export function createMarkdownFileLinkProvider(
         return
       }
 
-      const links = findFileReferences(context.text)
+      const links = [
+        ...findFileReferences(context.text).map((match) => ({
+          fullMatch: match.fullMatch,
+          startIndex: match.startIndex,
+          endIndex: match.endIndex,
+          activate: () => onActivate(match.target.raw),
+        })),
+        ...findExternalLinks(context.text).map((match) => ({
+          fullMatch: match.fullMatch,
+          startIndex: match.startIndex,
+          endIndex: match.endIndex,
+          activate: () => (onActivateExternal ?? onActivate)(match.target.raw),
+        })),
+      ]
+        .sort((left, right) => left.startIndex - right.startIndex)
         .map((match) => {
           const start = mapOffsetToBufferPosition(context.segments, match.startIndex)
           const end = mapOffsetToBufferPosition(context.segments, match.endIndex - 1)
@@ -38,7 +54,7 @@ export function createMarkdownFileLinkProvider(
               end,
             },
             text: match.fullMatch,
-            activate: () => onActivate(match.target.raw),
+            activate: match.activate,
             decorations: {
               pointerCursor: true,
               underline: true,

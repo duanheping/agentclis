@@ -366,6 +366,8 @@ function TerminalSurface({
     const markdownFileLinks = terminal.registerLinkProvider(
       createMarkdownFileLinkProvider(terminal, (target) => {
         void window.agentCli.openFileReference(target)
+      }, (target) => {
+        void window.agentCli.openExternalLink(target)
       }),
     )
     const detachPasteHandler = attachPlainTextPasteHandler(terminal, {

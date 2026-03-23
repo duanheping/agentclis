@@ -41,11 +41,11 @@ describe('createMarkdownFileLinkProvider', () => {
         start: { x: number; y: number }
         end: { x: number; y: number }
       }
-      activate: () => void
+      activate: (...args: unknown[]) => void
     }> = []
 
     provider.provideLinks(2, (value) => {
-      links = (value ?? []) as typeof links
+      links = (value ?? []) as unknown as typeof links
     })
 
     expect(links).toHaveLength(1)
@@ -55,7 +55,7 @@ describe('createMarkdownFileLinkProvider', () => {
       end: { x: 11, y: 2 },
     })
 
-    links[0]?.activate()
+    links[0]?.activate(undefined, links[0]?.text)
     expect(onActivate).toHaveBeenCalledWith('C:/repo/src/main.c#L42')
   })
 
@@ -74,11 +74,11 @@ describe('createMarkdownFileLinkProvider', () => {
         start: { x: number; y: number }
         end: { x: number; y: number }
       }
-      activate: () => void
+      activate: (...args: unknown[]) => void
     }> = []
 
     provider.provideLinks(1, (value) => {
-      links = (value ?? []) as typeof links
+      links = (value ?? []) as unknown as typeof links
     })
 
     expect(links).toHaveLength(1)
@@ -88,9 +88,73 @@ describe('createMarkdownFileLinkProvider', () => {
       end: { x: 47, y: 1 },
     })
 
-    links[0]?.activate()
+    links[0]?.activate(undefined, links[0]?.text)
     expect(onActivate).toHaveBeenCalledWith(
       '~\\Downloads\\ECG2_Callout_Logic_Analysis.md',
+    )
+  })
+
+  it('returns clickable plain web links that span wrapped lines', () => {
+    const onActivateFile = vi.fn()
+    const onActivateExternal = vi.fn()
+    const provider = createMarkdownFileLinkProvider(
+      createTerminalBuffer([
+        { text: 'Open https://github.com/duanheping/' },
+        { text: 'agentclis/pull/123 now', isWrapped: true },
+      ]),
+      onActivateFile,
+      onActivateExternal,
+    )
+
+    let links: Array<{
+      text: string
+      range: {
+        start: { x: number; y: number }
+        end: { x: number; y: number }
+      }
+      activate: (...args: unknown[]) => void
+    }> = []
+
+    provider.provideLinks(2, (value) => {
+      links = (value ?? []) as unknown as typeof links
+    })
+
+    expect(links).toHaveLength(1)
+    expect(links[0]?.text).toBe('https://github.com/duanheping/agentclis/pull/123')
+
+    links[0]?.activate(undefined, links[0]?.text)
+    expect(onActivateFile).not.toHaveBeenCalled()
+    expect(onActivateExternal).toHaveBeenCalledWith(
+      'https://github.com/duanheping/agentclis/pull/123',
+    )
+  })
+
+  it('returns clickable markdown web links', () => {
+    const onActivateFile = vi.fn()
+    const onActivateExternal = vi.fn()
+    const provider = createMarkdownFileLinkProvider(
+      createTerminalBuffer([
+        { text: 'See [PR link](https://github.com/duanheping/agentclis/pull/123)' },
+      ]),
+      onActivateFile,
+      onActivateExternal,
+    )
+
+    let links: Array<{
+      text: string
+      activate: (...args: unknown[]) => void
+    }> = []
+
+    provider.provideLinks(1, (value) => {
+      links = (value ?? []) as unknown as typeof links
+    })
+
+    expect(links).toHaveLength(1)
+    expect(links[0]?.text).toBe('[PR link](https://github.com/duanheping/agentclis/pull/123)')
+
+    links[0]?.activate(undefined, links[0]?.text)
+    expect(onActivateExternal).toHaveBeenCalledWith(
+      'https://github.com/duanheping/agentclis/pull/123',
     )
   })
 })

@@ -145,6 +145,7 @@ describe('TerminalWorkspace', () => {
         writeToWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
         resizeWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
         openFileReference: vi.fn().mockResolvedValue(undefined),
+        openExternalLink: vi.fn().mockResolvedValue(undefined),
         getPathForFile: vi.fn(() => null),
         persistTransientFile: vi.fn().mockResolvedValue('C:\\temp\\clipboard.png'),
       },

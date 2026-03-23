@@ -58,6 +58,7 @@ export const IPC_CHANNELS = {
   persistTransientFile: 'file:persist-transient',
   pickDirectory: 'dialog:pick-directory',
   openPath: 'shell:open-path',
+  openExternalLink: 'shell:open-external-link',
   openProject: 'project:open',
   getProjectGitOverview: 'project:git-overview',
   getProjectGitDiff: 'project:git-diff',
@@ -106,6 +107,7 @@ export interface AgentCliApi {
   persistTransientFile(input: PersistTransientFileInput): Promise<string>
   pickDirectory(defaultPath?: string): Promise<string | null>
   openPath(targetPath: string): Promise<void>
+  openExternalLink(target: string): Promise<void>
   openProject(target: ProjectOpenTarget, projectPath: string): Promise<void>
   getProjectGitOverview(projectPath: string): Promise<ProjectGitOverview>
   getProjectGitDiff(
