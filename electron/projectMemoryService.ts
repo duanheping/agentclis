@@ -48,6 +48,21 @@ interface ProjectMemoryServiceOptions {
 }
 
 const MAX_DIAGNOSTICS = 80
+const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 4_000
+
+function truncateDiagnosticText(
+  value: string,
+  maxLength = MAX_DIAGNOSTIC_MESSAGE_LENGTH,
+): string {
+  const normalized = value.trim()
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+
+  const suffix = `... [truncated ${normalized.length - maxLength} chars]`
+  const sliceLength = Math.max(0, maxLength - suffix.length)
+  return `${normalized.slice(0, sliceLength).trimEnd()}${suffix}`
+}
 
 function normalizeDiagnostic(
   diagnostic: ProjectMemoryDiagnosticEntry,
@@ -56,7 +71,9 @@ function normalizeDiagnostic(
     timestamp: diagnostic.timestamp || new Date().toISOString(),
     level: diagnostic.level === 'error' ? 'error' : 'warning',
     code: diagnostic.code.trim() || 'unknown',
-    message: diagnostic.message.trim() || 'Unknown diagnostic.',
+    message: truncateDiagnosticText(
+      diagnostic.message.trim() || 'Unknown diagnostic.',
+    ),
     projectId: diagnostic.projectId?.trim() || undefined,
     sessionId: diagnostic.sessionId?.trim() || undefined,
   }
@@ -103,7 +120,9 @@ function normalizeJob(
     lastAttemptAt:
       typeof candidate.lastAttemptAt === 'string' ? candidate.lastAttemptAt : undefined,
     lastError:
-      typeof candidate.lastError === 'string' ? candidate.lastError : undefined,
+      typeof candidate.lastError === 'string'
+        ? truncateDiagnosticText(candidate.lastError)
+        : undefined,
     payload: structuredClone(candidate.payload),
   }
 }
@@ -363,8 +382,9 @@ export class ProjectMemoryService {
       return true
     } catch (error) {
       const nextAttempts = job.attempts + 1
-      const message =
-        error instanceof Error ? error.message : 'Unknown project-memory job failure.'
+      const message = truncateDiagnosticText(
+        error instanceof Error ? error.message : 'Unknown project-memory job failure.',
+      )
       const nextJob: ProjectMemoryJob = {
         ...job,
         attempts: nextAttempts,

@@ -16,6 +16,148 @@ const VALID_CANDIDATE_KINDS = new Set([
   'workflow',
 ])
 const VALID_CANDIDATE_SCOPES = new Set(['project', 'location'])
+export const MAX_PROJECT_MEMORY_PROMPT_BYTES = 240_000
+const MAX_TRANSCRIPT_DIGEST_BYTES = 120_000
+const MAX_TRANSCRIPT_EVENT_PREVIEW_BYTES = 90_000
+const MAX_TRANSCRIPT_EVENT_PREVIEW_LINES = 160
+const MAX_TRANSCRIPT_EVENT_PREVIEW_CHARS = 320
+const MAX_PROCESS_OUTPUT_BYTES = 4_000
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) {
+    return ''
+  }
+
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) {
+    return value
+  }
+
+  const suffix = '...'
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8')
+  if (suffixBytes >= maxBytes) {
+    return suffix.slice(0, maxBytes)
+  }
+
+  let low = 0
+  let high = value.length
+  let best = ''
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2)
+    const candidate = value.slice(0, mid)
+    if (Buffer.byteLength(candidate, 'utf8') <= maxBytes - suffixBytes) {
+      best = candidate
+      low = mid + 1
+    } else {
+      high = mid - 1
+    }
+  }
+
+  return `${best.trimEnd()}${suffix}`
+}
+
+function buildTranscriptDigestForPrompt(
+  normalizedTranscript: string,
+  maxBytes: number,
+): string {
+  if (!normalizedTranscript.trim()) {
+    return '(empty transcript digest)'
+  }
+
+  const lines = normalizedTranscript.split('\n')
+  const keptLines: string[] = []
+  let usedBytes = 0
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]
+    const separatorBytes = keptLines.length > 0 ? 1 : 0
+    const nextBytes = Buffer.byteLength(line, 'utf8') + separatorBytes
+    if (keptLines.length > 0 && usedBytes + nextBytes > maxBytes) {
+      break
+    }
+
+    if (keptLines.length === 0 && nextBytes > maxBytes) {
+      keptLines.push(truncateUtf8(line, maxBytes))
+      usedBytes = Buffer.byteLength(keptLines[0], 'utf8')
+      break
+    }
+
+    keptLines.push(line)
+    usedBytes += nextBytes
+  }
+
+  keptLines.reverse()
+  let digest = keptLines.join('\n')
+  const omittedLineCount = Math.max(0, lines.length - keptLines.length)
+  if (omittedLineCount > 0) {
+    const prefix = `[older transcript omitted: ${omittedLineCount} lines]\n`
+    digest = truncateUtf8(`${prefix}${digest}`, maxBytes)
+  }
+
+  return digest
+}
+
+function buildTranscriptPreviewForPrompt(
+  transcript: Parameters<ProjectMemoryExtractor['extract']>[0]['transcript'],
+  maxBytes: number,
+): string {
+  if (transcript.length === 0) {
+    return '(no transcript events)'
+  }
+
+  const keptLines: string[] = []
+  let usedBytes = 0
+  let omittedEventCount = 0
+
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const event = transcript[index]
+    const payload = event.chunk?.trim()
+    const preview = payload
+      ? payload.slice(0, MAX_TRANSCRIPT_EVENT_PREVIEW_CHARS)
+      : JSON.stringify(event.metadata ?? {})
+    const line = `${event.id} ${event.kind}/${event.source}: ${preview}`
+    const separatorBytes = keptLines.length > 0 ? 1 : 0
+    const nextBytes = Buffer.byteLength(line, 'utf8') + separatorBytes
+
+    if (keptLines.length >= MAX_TRANSCRIPT_EVENT_PREVIEW_LINES) {
+      omittedEventCount = index + 1
+      break
+    }
+
+    if (keptLines.length > 0 && usedBytes + nextBytes > maxBytes) {
+      omittedEventCount = index + 1
+      break
+    }
+
+    if (keptLines.length === 0 && nextBytes > maxBytes) {
+      keptLines.push(truncateUtf8(line, maxBytes))
+      usedBytes = Buffer.byteLength(keptLines[0], 'utf8')
+      omittedEventCount = index
+      break
+    }
+
+    keptLines.push(line)
+    usedBytes += nextBytes
+  }
+
+  keptLines.reverse()
+  let preview = keptLines.join('\n')
+  if (omittedEventCount > 0) {
+    const prefix = `[older events omitted: ${omittedEventCount}]\n`
+    preview = truncateUtf8(`${prefix}${preview}`, maxBytes)
+  }
+
+  return preview
+}
+
+function formatProcessOutput(label: string, output: string): string | null {
+  const trimmed = output.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  return `${label}: ${truncateUtf8(trimmed, MAX_PROCESS_OUTPUT_BYTES)}`
+}
 
 function quoteWindowsArg(value: string): string {
   if (!/[\s"]/u.test(value)) {
@@ -89,16 +231,19 @@ function buildSchema(): string {
   )
 }
 
-function buildPrompt(input: Parameters<ProjectMemoryExtractor['extract']>[0]): string {
-  const transcriptPreview = input.transcript
-    .map((event) => {
-      const payload = event.chunk?.trim()
-      const preview = payload ? payload.slice(0, 400) : JSON.stringify(event.metadata ?? {})
-      return `${event.id} ${event.kind}/${event.source}: ${preview}`
-    })
-    .join('\n')
+export function buildPrompt(
+  input: Parameters<ProjectMemoryExtractor['extract']>[0],
+): string {
+  const transcriptDigest = buildTranscriptDigestForPrompt(
+    input.normalizedTranscript,
+    MAX_TRANSCRIPT_DIGEST_BYTES,
+  )
+  const transcriptPreview = buildTranscriptPreviewForPrompt(
+    input.transcript,
+    MAX_TRANSCRIPT_EVENT_PREVIEW_BYTES,
+  )
 
-  return [
+  return truncateUtf8([
     'You are extracting durable project memory from an Agent CLIs session transcript.',
     'Return only structured JSON matching the provided schema.',
     'Focus on information that is useful across future sessions.',
@@ -113,11 +258,11 @@ function buildPrompt(input: Parameters<ProjectMemoryExtractor['extract']>[0]): s
     `Current checkout label: ${input.location?.label ?? 'n/a'}`,
     `Known remote fingerprint: ${input.project.identity?.remoteFingerprint ?? 'n/a'}`,
     'Transcript digest:',
-    input.normalizedTranscript || '(empty transcript digest)',
+    transcriptDigest,
     '',
     'Transcript events with ids:',
-    transcriptPreview || '(no transcript events)',
-  ].join('\n')
+    transcriptPreview,
+  ].join('\n'), MAX_PROJECT_MEMORY_PROMPT_BYTES)
 }
 
 async function runCommand(
@@ -165,8 +310,8 @@ async function runCommand(
         new Error(
           [
             `${command} exited with code ${code ?? 'unknown'}.`,
-            stderr.trim() ? `stderr: ${stderr.trim()}` : null,
-            stdout.trim() ? `stdout: ${stdout.trim()}` : null,
+            formatProcessOutput('stderr', stderr),
+            formatProcessOutput('stdout', stdout),
           ]
             .filter(Boolean)
             .join(' '),

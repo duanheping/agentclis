@@ -227,4 +227,47 @@ describe('ProjectMemoryService', () => {
     expect(manager.captureSession).toHaveBeenCalledTimes(1)
     service.dispose()
   })
+
+  it('truncates oversized diagnostic messages before persisting and logging them', () => {
+    const manager = {
+      isEnabled: vi.fn(() => true),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const transcriptStore = {
+      readIndex: vi.fn(),
+      readEvents: vi.fn(),
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+    )
+
+    service.recordDiagnostic({
+      timestamp: '2026-03-22T12:00:00.000Z',
+      level: 'error',
+      code: 'extractor-failed',
+      message: 'x'.repeat(12_000),
+      projectId: 'project-1',
+      sessionId: 'session-1',
+    })
+
+    const persistedState = storeState.get() as { diagnostics: Array<{ message: string }> }
+    expect(persistedState.diagnostics).toHaveLength(1)
+    expect(persistedState.diagnostics[0]?.message.length).toBeLessThan(4_100)
+    expect(persistedState.diagnostics[0]?.message).toContain('[truncated')
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[agenclis project memory] extractor-failed:'),
+    )
+
+    errorSpy.mockRestore()
+    service.dispose()
+  })
 })
