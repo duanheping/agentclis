@@ -260,6 +260,27 @@ export class SessionManager {
     return this.listSessions()
   }
 
+  scheduleProjectMemoryBackfill(): void {
+    if (this.memoryBackfillTimer) {
+      return
+    }
+
+    this.memoryBackfillTimer = setTimeout(() => {
+      this.memoryBackfillTimer = null
+      this.projectMemory.scheduleBackfillSessions(this.collectBackfillInputs())
+    }, BACKGROUND_MEMORY_BACKFILL_DELAY_MS)
+  }
+
+  queueHistoricalProjectMemoryImport(): number {
+    const inputs = this.collectBackfillInputs()
+    if (inputs.length === 0) {
+      return 0
+    }
+
+    this.projectMemory.scheduleBackfillSessions(inputs)
+    return inputs.length
+  }
+
   async createProject(input: CreateProjectInput): Promise<ProjectSnapshot> {
     const rootPath = input.rootPath.trim()
     if (!rootPath) {
@@ -1808,12 +1829,7 @@ export class SessionManager {
       }, BACKGROUND_IDENTITY_REFRESH_DELAY_MS)
     }
 
-    if (!this.memoryBackfillTimer) {
-      this.memoryBackfillTimer = setTimeout(() => {
-        this.memoryBackfillTimer = null
-        this.projectMemory.scheduleBackfillSessions(this.collectBackfillInputs())
-      }, BACKGROUND_MEMORY_BACKFILL_DELAY_MS)
-    }
+    this.scheduleProjectMemoryBackfill()
   }
 
   private async refreshStoredProjectIdentity(): Promise<void> {
@@ -1955,8 +1971,15 @@ export class SessionManager {
     location: ProjectLocation | null
     session: SessionConfig
   }> {
-    return this.getOrderedConfigs()
-      .filter((config) => config.id !== this.activeSessionId)
+    const orderedConfigs = this.getOrderedConfigs()
+    const inactiveConfigs = orderedConfigs.filter(
+      (config) => config.id !== this.activeSessionId,
+    )
+    const activeConfig = this.activeSessionId
+      ? orderedConfigs.find((config) => config.id === this.activeSessionId) ?? null
+      : null
+
+    return [...inactiveConfigs, ...(activeConfig ? [activeConfig] : [])]
       .map((config) => {
         const project = this.projects.get(config.projectId)
         if (!project) {

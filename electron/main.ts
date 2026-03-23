@@ -324,9 +324,13 @@ function registerIpcHandlers(): void {
     {
       const nextSettings = skillLibraryManager.updateSettings(settings)
       projectMemoryService.resume()
+      sessionManager.scheduleProjectMemoryBackfill()
       return nextSettings
     },
   )
+  ipcMain.handle(IPC_CHANNELS.importHistoricalProjectMemory, () => ({
+    queuedSessionCount: sessionManager.queueHistoricalProjectMemoryImport(),
+  }))
   ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
     skillLibraryManager.getStatus(),
   )

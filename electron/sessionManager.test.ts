@@ -1286,4 +1286,295 @@ describe('SessionManager logical project identity and project context', () => {
       ]),
     )
   })
+
+  it('includes the restored active session at the end of low-priority backfill', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+          primaryLocationId: 'location-1',
+          identity: {
+            repoRoot: null,
+            gitCommonDir: null,
+            remoteFingerprint: null,
+          },
+        },
+      ],
+      locations: [
+        {
+          id: 'location-1',
+          projectId: 'project-1',
+          rootPath: 'C:\\repo',
+          repoRoot: null,
+          gitCommonDir: null,
+          remoteFingerprint: null,
+          label: 'repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+          lastSeenAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          title: 'existing session',
+          startupCommand: 'beta',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:05:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          title: 'older session',
+          startupCommand: 'alpha',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-22T11:00:00.000Z',
+          updatedAt: '2026-03-22T11:05:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const projectMemory = {
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:10.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+      captureSession: vi.fn(async () => undefined),
+      scheduleBackfillSessions: vi.fn(() => undefined),
+      dispose: vi.fn(() => undefined),
+    }
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore: {
+          append: vi.fn(async () => undefined),
+        },
+        projectMemory,
+      },
+    )
+
+    await manager.restoreSessions()
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledTimes(1)
+    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        session: expect.objectContaining({
+          id: 'session-b',
+        }),
+      }),
+      expect.objectContaining({
+        session: expect.objectContaining({
+          id: 'session-a',
+        }),
+      }),
+    ])
+  })
+
+  it('can schedule low-priority project-memory backfill for an existing active session', async () => {
+    const projectMemory = {
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:10.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+      captureSession: vi.fn(async () => undefined),
+      scheduleBackfillSessions: vi.fn(() => undefined),
+      dispose: vi.fn(() => undefined),
+    }
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore: {
+          append: vi.fn(async () => undefined),
+        },
+        projectMemory,
+      },
+    )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'beta',
+    })
+
+    manager.scheduleProjectMemoryBackfill()
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledTimes(1)
+    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        session: expect.objectContaining({
+          id: session.config.id,
+        }),
+      }),
+    ])
+  })
+
+  it('queues a dedicated historical project-memory import on demand', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+          primaryLocationId: 'location-1',
+          identity: {
+            repoRoot: null,
+            gitCommonDir: null,
+            remoteFingerprint: null,
+          },
+        },
+      ],
+      locations: [
+        {
+          id: 'location-1',
+          projectId: 'project-1',
+          rootPath: 'C:\\repo',
+          repoRoot: null,
+          gitCommonDir: null,
+          remoteFingerprint: null,
+          label: 'repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+          lastSeenAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          title: 'existing session',
+          startupCommand: 'beta',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:05:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          title: 'older session',
+          startupCommand: 'alpha',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-22T11:00:00.000Z',
+          updatedAt: '2026-03-22T11:05:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const projectMemory = {
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:10.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+      captureSession: vi.fn(async () => undefined),
+      scheduleBackfillSessions: vi.fn(() => undefined),
+      dispose: vi.fn(() => undefined),
+    }
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore: {
+          append: vi.fn(async () => undefined),
+        },
+        projectMemory,
+      },
+    )
+
+    expect(manager.queueHistoricalProjectMemoryImport()).toBe(2)
+    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledTimes(1)
+    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        session: expect.objectContaining({
+          id: 'session-b',
+        }),
+      }),
+      expect.objectContaining({
+        session: expect.objectContaining({
+          id: 'session-a',
+        }),
+      }),
+    ])
+  })
 })

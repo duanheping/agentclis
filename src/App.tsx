@@ -241,6 +241,9 @@ function App() {
   const [skillsResolving, setSkillsResolving] = useState<string | null>(null)
   const [skillsGeneratingMerge, setSkillsGeneratingMerge] = useState<string | null>(null)
   const [skillsApplyingMerge, setSkillsApplyingMerge] = useState(false)
+  const [projectMemoryImporting, setProjectMemoryImporting] = useState(false)
+  const [projectMemoryImportStatus, setProjectMemoryImportStatus] =
+    useState<string | null>(null)
   const [skillAiMergeProposal, setSkillAiMergeProposal] =
     useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
@@ -469,6 +472,7 @@ function App() {
     const nextSettings = await agentCli.updateSkillLibrarySettings(settings)
     setSkillLibrarySettings(nextSettings)
     setSkillSyncStatus(await agentCli.getSkillSyncStatus())
+    setProjectMemoryImportStatus(null)
     setSkillAiMergeProposal(null)
   }
 
@@ -1124,6 +1128,30 @@ function App() {
     }
   }
 
+  const handleImportHistoricalProjectMemory = async () => {
+    if (!agentCli) {
+      setSkillsErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setProjectMemoryImporting(true)
+    setProjectMemoryImportStatus(null)
+    setSkillsErrorMessage(null)
+
+    try {
+      const result = await agentCli.importHistoricalProjectMemory()
+      setProjectMemoryImportStatus(
+        result.queuedSessionCount > 0
+          ? `Queued ${formatCountLabel(result.queuedSessionCount, 'session', 'sessions')} for background import.`
+          : 'No stored sessions were available for import.',
+      )
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setProjectMemoryImporting(false)
+    }
+  }
+
   const handleResolveSkillConflict = async (
     skillName: string,
     sourceRoot: SkillSyncRoot,
@@ -1370,6 +1398,8 @@ function App() {
           skillsResolving={skillsResolving}
           skillsGeneratingMerge={skillsGeneratingMerge}
           skillsApplyingMerge={skillsApplyingMerge}
+          projectMemoryImporting={projectMemoryImporting}
+          projectMemoryImportStatus={projectMemoryImportStatus}
           skillAiMergeProposal={skillAiMergeProposal}
           skillsErrorMessage={skillsErrorMessage}
           onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
@@ -1378,6 +1408,7 @@ function App() {
           onSetPrimaryMergeAgent={handleSetPrimaryMergeAgent}
           onSetReviewMergeAgent={handleSetReviewMergeAgent}
           onSyncSkills={handleSyncSkills}
+          onImportHistoricalProjectMemory={handleImportHistoricalProjectMemory}
           onResolveSkillConflict={handleResolveSkillConflict}
           onGenerateSkillAiMerge={handleGenerateSkillAiMerge}
           onApplySkillAiMerge={handleApplySkillAiMerge}

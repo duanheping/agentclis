@@ -32,6 +32,10 @@ export interface PersistTransientFileInput {
   data: ArrayBuffer
 }
 
+export interface ProjectMemoryImportResult {
+  queuedSessionCount: number
+}
+
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
   listSessions: 'session:list',
@@ -45,6 +49,7 @@ export const IPC_CHANNELS = {
   resizeSession: 'session:resize',
   getSkillLibrarySettings: 'skills:get-settings',
   updateSkillLibrarySettings: 'skills:update-settings',
+  importHistoricalProjectMemory: 'project-memory:import-history',
   getSkillSyncStatus: 'skills:get-status',
   syncSkills: 'skills:sync',
   resolveSkillConflict: 'skills:resolve-conflict',
@@ -91,6 +96,7 @@ export interface AgentCliApi {
   updateSkillLibrarySettings(
     settings: SkillLibrarySettings,
   ): Promise<SkillLibrarySettings>
+  importHistoricalProjectMemory(): Promise<ProjectMemoryImportResult>
   getSkillSyncStatus(): Promise<SkillSyncStatus>
   syncSkills(): Promise<SkillSyncResult>
   resolveSkillConflict(
