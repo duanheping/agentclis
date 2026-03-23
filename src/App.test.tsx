@@ -598,6 +598,74 @@ describe('App skills settings', () => {
     )
   })
 
+  it('hides the cmd pane immediately while the close request is still pending', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+    let resolveClose: (() => void) | null = null
+
+    agentCli.listWindowsCommandPrompts.mockResolvedValue(['session-1'])
+    agentCli.closeWindowsCommandPrompt.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveClose = resolve
+        }),
+    )
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Console on')
+
+    await user.click(screen.getByRole('button', { name: 'Toggle cmd' }))
+
+    expect(agentCli.closeWindowsCommandPrompt).toHaveBeenCalledWith('session-1')
+
+    await waitFor(() => {
+      expect(screen.getByText('Console')).toBeInTheDocument()
+      expect(screen.queryByText('Console on')).not.toBeInTheDocument()
+    })
+
+    await act(async () => {
+      resolveClose?.()
+    })
+  })
+
   it('closes a session immediately when the agent CLI exits on its own', async () => {
     let exitListener: ((event: { sessionId: string; exitCode: number }) => void) | null = null
     let workspacePayload: ListSessionsResponse = {
