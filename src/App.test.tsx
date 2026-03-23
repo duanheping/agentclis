@@ -342,6 +342,7 @@ function createAgentCliMock(
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n+new line\n-old line',
     }),
     openFileReference: vi.fn().mockResolvedValue(undefined),
+    openExternalLink: vi.fn().mockResolvedValue(undefined),
     getPathForFile: vi.fn((file: File) => file.name),
     listWindowsCommandPrompts: vi.fn().mockResolvedValue([]),
     openWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),

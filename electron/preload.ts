@@ -70,6 +70,8 @@ const api: AgentCliApi = {
   pickDirectory: (defaultPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.pickDirectory, defaultPath),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.openPath, targetPath),
+  openExternalLink: (target) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openExternalLink, target),
   openProject: (target, projectPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.openProject, target, projectPath),
   getProjectGitOverview: (projectPath) =>
