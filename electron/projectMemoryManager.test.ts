@@ -46,6 +46,21 @@ function buildLocation(): ProjectLocation {
   }
 }
 
+function buildLocationTwo(): ProjectLocation {
+  return {
+    id: 'location-2',
+    projectId: 'project-1',
+    rootPath: 'D:\\repo\\agenclis-copy',
+    repoRoot: 'D:\\repo\\agenclis-copy',
+    gitCommonDir: 'D:\\repo\\agenclis-copy\\.git',
+    remoteFingerprint: 'github.com/openai/agenclis',
+    label: 'agenclis-copy',
+    createdAt: '2026-03-22T12:00:00.000Z',
+    updatedAt: '2026-03-22T12:00:00.000Z',
+    lastSeenAt: '2026-03-22T12:00:00.000Z',
+  }
+}
+
 function buildSession(): SessionConfig {
   return {
     id: 'session-1',
@@ -170,6 +185,76 @@ describe('ProjectMemoryManager', () => {
     expect(context.bootstrapMessage).toContain('Current local checkout: agenclis')
     expect(context.fileReferences.every((filePath) => filePath.includes('.agenclis-memory'))).toBe(
       true,
+    )
+  })
+
+  it('limits location-scoped memory to the matching checkout', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const extractor = {
+      extract: async (input: {
+        project: ProjectConfig
+        location: ProjectLocation | null
+        session: SessionConfig
+        transcript: TranscriptEvent[]
+        normalizedTranscript: string
+      }) => ({
+        summary: 'Captured location-specific workflow guidance.',
+        candidates:
+          input.location?.id === 'location-2'
+            ? [
+                {
+                  kind: 'workflow' as const,
+                  scope: 'location' as const,
+                  key: 'copy-worktree-bootstrap',
+                  content: 'Use the local bootstrap script from the copy checkout.',
+                  confidence: 0.86,
+                  sourceEventIds: ['event-1'],
+                },
+              ]
+            : [],
+      }),
+    }
+    const manager = new ProjectMemoryManager(() => libraryRoot, extractor)
+
+    await manager.captureSession({
+      project: buildProject(),
+      location: buildLocation(),
+      session: buildSession(),
+      transcript: buildTranscript(),
+    })
+    await manager.captureSession({
+      project: buildProject(),
+      location: buildLocationTwo(),
+      session: {
+        ...buildSession(),
+        id: 'session-2',
+        locationId: 'location-2',
+        cwd: 'D:\\repo\\agenclis-copy',
+      },
+      transcript: buildTranscript().map((event) => ({
+        ...event,
+        sessionId: 'session-2',
+        locationId: 'location-2',
+      })),
+    })
+
+    const primaryContext = await manager.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+      query: 'bootstrap script',
+    })
+    const copyContext = await manager.assembleContext({
+      project: buildProject(),
+      location: buildLocationTwo(),
+      query: 'bootstrap script',
+    })
+
+    expect(primaryContext.bootstrapMessage).not.toContain(
+      'Use the local bootstrap script from the copy checkout.',
+    )
+    expect(copyContext.bootstrapMessage).toContain(
+      'Use the local bootstrap script from the copy checkout.',
     )
   })
 })

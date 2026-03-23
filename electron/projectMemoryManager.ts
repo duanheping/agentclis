@@ -39,6 +39,19 @@ export interface ProjectMemoryExtractionResult {
   }>
 }
 
+export interface ProjectMemoryDiagnosticEntry {
+  timestamp: string
+  level: 'warning' | 'error'
+  code: string
+  message: string
+  projectId?: string
+  sessionId?: string
+}
+
+export type ProjectMemoryDiagnosticReporter = (
+  entry: ProjectMemoryDiagnosticEntry,
+) => void
+
 export interface ProjectMemoryExtractor {
   extract(input: {
     project: ProjectConfig
@@ -249,9 +262,17 @@ function buildMemoryMarkdown(
 
 function selectRelevantEntries(
   items: ProjectMemoryCandidate[],
+  locationId: string | null,
   query?: string,
 ): ProjectMemoryCandidate[] {
-  const activeItems = items.filter((item) => item.status === 'active')
+  const activeItems = items.filter(
+    (item) =>
+      item.status === 'active' &&
+      (
+        item.scope === 'project' ||
+        (locationId !== null && item.locationId === locationId)
+      ),
+  )
   const normalizedQuery = normalizeWhitespace(query ?? '').toLowerCase()
   if (!normalizedQuery) {
     return activeItems
@@ -295,10 +316,28 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
 export class ProjectMemoryManager {
   private readonly getLibraryRoot: () => string
   private readonly extractor?: ProjectMemoryExtractor
+  private diagnosticReporter?: ProjectMemoryDiagnosticReporter
 
   constructor(getLibraryRoot: () => string, extractor?: ProjectMemoryExtractor) {
     this.getLibraryRoot = getLibraryRoot
     this.extractor = extractor
+  }
+
+  setDiagnosticReporter(reporter: ProjectMemoryDiagnosticReporter): void {
+    this.diagnosticReporter = reporter
+  }
+
+  isEnabled(): boolean {
+    return Boolean(this.getLibraryRoot().trim())
+  }
+
+  private reportDiagnostic(
+    entry: Omit<ProjectMemoryDiagnosticEntry, 'timestamp'>,
+  ): void {
+    this.diagnosticReporter?.({
+      ...entry,
+      timestamp: new Date().toISOString(),
+    })
   }
 
   private getProjectDirectory(project: ProjectConfig): string | null {
@@ -363,6 +402,19 @@ export class ProjectMemoryManager {
       preferences,
       workflows,
     }
+  }
+
+  async hasSessionSummary(
+    project: ProjectConfig,
+    sessionId: string,
+  ): Promise<boolean> {
+    const filePath = this.getSnapshotFilePath(project, `summaries/${sessionId}.json`)
+    if (!filePath) {
+      return false
+    }
+
+    const summary = await readJsonFile<SessionSummary | null>(filePath, null)
+    return Boolean(summary?.summary?.trim())
   }
 
   private validateCandidates(
@@ -456,17 +508,29 @@ export class ProjectMemoryManager {
 
     const timestamp = new Date().toISOString()
     const normalizedTranscript = buildNormalizedTranscript(input.transcript)
-    const extractorResult = this.extractor
-      ? await this.extractor
-          .extract({
-            project: input.project,
-            location: input.location,
-            session: input.session,
-            transcript: input.transcript,
-            normalizedTranscript,
-          })
-          .catch(() => null)
-      : null
+    let extractorResult: ProjectMemoryExtractionResult | null = null
+    if (this.extractor) {
+      try {
+        extractorResult = await this.extractor.extract({
+          project: input.project,
+          location: input.location,
+          session: input.session,
+          transcript: input.transcript,
+          normalizedTranscript,
+        })
+      } catch (error) {
+        this.reportDiagnostic({
+          level: 'warning',
+          code: 'extractor-failed',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Project memory extraction failed.',
+          projectId: input.project.id,
+          sessionId: input.session.id,
+        })
+      }
+    }
 
     const sourceEventIds = uniqueStrings(input.transcript.map((event) => event.id))
     const summary: SessionSummary = {
@@ -583,10 +647,27 @@ export class ProjectMemoryManager {
       }
     }
 
-    const relevantFacts = selectRelevantEntries(snapshot.facts, input.query).slice(0, 6)
-    const relevantDecisions = selectRelevantEntries(snapshot.decisions, input.query).slice(0, 4)
-    const relevantPreferences = selectRelevantEntries(snapshot.preferences, input.query).slice(0, 4)
-    const relevantWorkflows = selectRelevantEntries(snapshot.workflows, input.query).slice(0, 4)
+    const locationId = input.location?.id ?? null
+    const relevantFacts = selectRelevantEntries(
+      snapshot.facts,
+      locationId,
+      input.query,
+    ).slice(0, 6)
+    const relevantDecisions = selectRelevantEntries(
+      snapshot.decisions,
+      locationId,
+      input.query,
+    ).slice(0, 4)
+    const relevantPreferences = selectRelevantEntries(
+      snapshot.preferences,
+      locationId,
+      input.query,
+    ).slice(0, 4)
+    const relevantWorkflows = selectRelevantEntries(
+      snapshot.workflows,
+      locationId,
+      input.query,
+    ).slice(0, 4)
     const fileReferences = [
       path.join(projectDirectory, 'memory.md'),
       path.join(projectDirectory, 'decisions.json'),

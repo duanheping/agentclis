@@ -9,6 +9,14 @@ import type {
   ProjectMemoryExtractionResult,
 } from './projectMemoryManager'
 
+const VALID_CANDIDATE_KINDS = new Set([
+  'fact',
+  'decision',
+  'preference',
+  'workflow',
+])
+const VALID_CANDIDATE_SCOPES = new Set(['project', 'location'])
+
 function quoteWindowsArg(value: string): string {
   if (!/[\s"]/u.test(value)) {
     return value
@@ -173,7 +181,9 @@ async function runCommand(
   })
 }
 
-function parseResponse(rawOutput: string): ProjectMemoryExtractionResult {
+export function parseProjectMemoryResponse(
+  rawOutput: string,
+): ProjectMemoryExtractionResult {
   const parsed = JSON.parse(rawOutput) as Partial<ProjectMemoryExtractionResult>
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Project memory extraction returned invalid JSON.')
@@ -188,6 +198,16 @@ function parseResponse(rawOutput: string): ProjectMemoryExtractionResult {
           }
 
           const normalized = candidate as ProjectMemoryExtractionResult['candidates'][number]
+          if (
+            !VALID_CANDIDATE_KINDS.has(normalized.kind) ||
+            !VALID_CANDIDATE_SCOPES.has(normalized.scope) ||
+            typeof normalized.key !== 'string' ||
+            typeof normalized.content !== 'string' ||
+            typeof normalized.confidence !== 'number'
+          ) {
+            return []
+          }
+
           return [
             {
               kind: normalized.kind,
@@ -314,7 +334,7 @@ export class ProjectMemoryAgentExtractor implements ProjectMemoryExtractor {
         rawOutput = await runCopilotStructured(tempRoot, prompt)
       }
 
-      return parseResponse(rawOutput)
+      return parseProjectMemoryResponse(rawOutput)
     } finally {
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined)
     }

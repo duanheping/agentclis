@@ -27,6 +27,7 @@ import {
 import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'
 import { ProjectMemoryManager } from './projectMemoryManager'
 import { ProjectIdentityResolver } from './projectIdentity'
+import { ProjectMemoryService } from './projectMemoryService'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
 import { TransientFileStore } from './transientFileStore'
@@ -57,6 +58,10 @@ const projectMemoryManager = new ProjectMemoryManager(
     () => skillLibraryManager.getSettings().primaryMergeAgent,
   ),
 )
+const projectMemoryService = new ProjectMemoryService(
+  projectMemoryManager,
+  transcriptStore,
+)
 const sessionManager = new SessionManager({
   onData: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionData, event)
@@ -73,7 +78,7 @@ const sessionManager = new SessionManager({
 }, {
   identityResolver: projectIdentityResolver,
   transcriptStore,
-  projectMemory: projectMemoryManager,
+  projectMemory: projectMemoryService,
 })
 
 const windowsCommandPromptManager = new WindowsCommandPromptManager({
@@ -315,7 +320,11 @@ function registerIpcHandlers(): void {
     skillLibraryManager.getSettings(),
   )
   ipcMain.handle(IPC_CHANNELS.updateSkillLibrarySettings, (_event, settings) =>
-    skillLibraryManager.updateSettings(settings),
+    {
+      const nextSettings = skillLibraryManager.updateSettings(settings)
+      projectMemoryService.resume()
+      return nextSettings
+    },
   )
   ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
     skillLibraryManager.getStatus(),

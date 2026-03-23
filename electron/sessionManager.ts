@@ -40,8 +40,8 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
 } from './codexCli'
-import type { ProjectMemoryManager } from './projectMemoryManager'
 import type { ProjectLocationIdentity } from './projectIdentity'
+import type { ProjectMemoryService } from './projectMemoryService'
 import { createProjectSessionWorktree } from './projectWorktree'
 import type { TranscriptStore } from './transcriptStore'
 import {
@@ -79,6 +79,8 @@ const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
 const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
 const FIRST_PROMPT_TITLE_LIMIT = 80
+const BACKGROUND_IDENTITY_REFRESH_DELAY_MS = 1_500
+const BACKGROUND_MEMORY_BACKFILL_DELAY_MS = 4_500
 
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
@@ -114,8 +116,11 @@ interface SessionManagerServices {
   identityResolver?: {
     inspect: (rootPath: string) => Promise<ProjectLocationIdentity>
   }
-  transcriptStore?: Pick<TranscriptStore, 'append' | 'readEvents'>
-  projectMemory?: Pick<ProjectMemoryManager, 'assembleContext' | 'captureSession'>
+  transcriptStore?: Pick<TranscriptStore, 'append'>
+  projectMemory?: Pick<
+    ProjectMemoryService,
+    'assembleContext' | 'captureSession' | 'scheduleBackfillSessions' | 'dispose'
+  >
 }
 
 const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResolver']> = {
@@ -133,7 +138,6 @@ const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResol
 
 const noopTranscriptStore: NonNullable<SessionManagerServices['transcriptStore']> = {
   append: async () => undefined,
-  readEvents: async () => [],
 }
 
 const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = {
@@ -146,6 +150,8 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
     summaryExcerpt: null,
   }),
   captureSession: async () => undefined,
+  scheduleBackfillSessions: () => undefined,
+  dispose: () => undefined,
 }
 
 export class SessionManager {
@@ -176,6 +182,8 @@ export class SessionManager {
 
   private activeSessionId: string | null
   private restored = false
+  private identityRefreshTimer: NodeJS.Timeout | null = null
+  private memoryBackfillTimer: NodeJS.Timeout | null = null
 
   constructor(events: SessionManagerEvents, services: SessionManagerServices = {}) {
     this.events = events
@@ -243,6 +251,7 @@ export class SessionManager {
   async restoreSessions(): Promise<ListSessionsResponse> {
     if (!this.restored) {
       this.restored = true
+      this.scheduleBackgroundProjectMaintenance()
       if (this.activeSessionId) {
         void this.ensureSessionStarted(this.activeSessionId)
       }
@@ -379,13 +388,13 @@ export class SessionManager {
     }
 
     const closingConfig = this.requireConfig(id)
-    const closeEvent = this.appendTranscriptEvent({
+    this.appendTranscriptEvent({
       sessionId: id,
       kind: 'system',
       source: 'system',
       chunk: 'Session closed by agentclis.',
     })
-    void this.captureProjectMemoryForSession(closingConfig, closeEvent)
+    void this.queueProjectMemoryCapture(closingConfig)
 
     this.stopSession(id, true)
     this.cancelExternalSessionDetection(id)
@@ -423,15 +432,30 @@ export class SessionManager {
   }
 
   dispose(): void {
+    if (this.identityRefreshTimer) {
+      clearTimeout(this.identityRefreshTimer)
+      this.identityRefreshTimer = null
+    }
+    if (this.memoryBackfillTimer) {
+      clearTimeout(this.memoryBackfillTimer)
+      this.memoryBackfillTimer = null
+    }
+
     for (const sessionId of Array.from(
       this.pendingExternalSessionDetections.keys(),
     )) {
       this.cancelExternalSessionDetection(sessionId)
     }
 
+    for (const config of Array.from(this.configs.values())) {
+      void this.queueProjectMemoryCapture(config)
+    }
+
     for (const id of Array.from(this.terminals.keys())) {
       this.stopSession(id, true)
     }
+
+    this.projectMemory.dispose()
   }
 
   private async startSession(config: SessionConfig): Promise<void> {
@@ -553,6 +577,7 @@ export class SessionManager {
           source: 'system',
           chunk: `Session exited with code ${exitCode}.`,
         })
+        void this.queueProjectMemoryCapture(normalizedConfig)
         this.events.onExit({
           sessionId: normalizedConfig.id,
           exitCode,
@@ -1775,6 +1800,121 @@ export class SessionManager {
     }, 140)
   }
 
+  private scheduleBackgroundProjectMaintenance(): void {
+    if (!this.identityRefreshTimer) {
+      this.identityRefreshTimer = setTimeout(() => {
+        this.identityRefreshTimer = null
+        void this.refreshStoredProjectIdentity()
+      }, BACKGROUND_IDENTITY_REFRESH_DELAY_MS)
+    }
+
+    if (!this.memoryBackfillTimer) {
+      this.memoryBackfillTimer = setTimeout(() => {
+        this.memoryBackfillTimer = null
+        this.projectMemory.scheduleBackfillSessions(this.collectBackfillInputs())
+      }, BACKGROUND_MEMORY_BACKFILL_DELAY_MS)
+    }
+  }
+
+  private async refreshStoredProjectIdentity(): Promise<void> {
+    let shouldPersist = false
+
+    for (const location of Array.from(this.locations.values())) {
+      const needsRefresh =
+        !location.repoRoot ||
+        !location.gitCommonDir ||
+        !location.remoteFingerprint
+      if (!needsRefresh) {
+        continue
+      }
+
+      let inspectedLocation: ProjectLocationIdentity | null = null
+      try {
+        inspectedLocation = await this.identityResolver.inspect(location.rootPath)
+      } catch {
+        inspectedLocation = null
+      }
+
+      if (!inspectedLocation) {
+        continue
+      }
+
+      if (this.updateStoredLocationIdentity(location.id, inspectedLocation)) {
+        shouldPersist = true
+      }
+    }
+
+    if (shouldPersist) {
+      this.persist()
+    }
+  }
+
+  private updateStoredLocationIdentity(
+    locationId: string,
+    inspectedLocation: ProjectLocationIdentity,
+  ): boolean {
+    const currentLocation = this.locations.get(locationId)
+    if (!currentLocation) {
+      return false
+    }
+
+    const timestamp = new Date().toISOString()
+    const nextLocation: ProjectLocation = {
+      ...currentLocation,
+      rootPath: inspectedLocation.rootPath,
+      label: inspectedLocation.label,
+      repoRoot: inspectedLocation.repoRoot,
+      gitCommonDir: inspectedLocation.gitCommonDir,
+      remoteFingerprint: inspectedLocation.remoteFingerprint,
+      updatedAt: timestamp,
+    }
+    const locationChanged =
+      nextLocation.rootPath !== currentLocation.rootPath ||
+      nextLocation.label !== currentLocation.label ||
+      nextLocation.repoRoot !== currentLocation.repoRoot ||
+      nextLocation.gitCommonDir !== currentLocation.gitCommonDir ||
+      nextLocation.remoteFingerprint !== currentLocation.remoteFingerprint
+
+    if (!locationChanged) {
+      return false
+    }
+
+    this.locations.set(locationId, nextLocation)
+
+    const project = this.projects.get(currentLocation.projectId)
+    if (!project) {
+      return true
+    }
+
+    const shouldPromoteIdentity =
+      project.primaryLocationId === locationId ||
+      !project.identity?.repoRoot ||
+      !project.identity?.gitCommonDir ||
+      !project.identity?.remoteFingerprint
+    const nextProject: ProjectConfig = shouldPromoteIdentity
+      ? {
+          ...project,
+          rootPath: nextLocation.rootPath,
+          updatedAt: timestamp,
+          primaryLocationId: project.primaryLocationId ?? nextLocation.id,
+          identity: {
+            repoRoot: nextLocation.repoRoot ?? project.identity?.repoRoot ?? null,
+            gitCommonDir: nextLocation.gitCommonDir ?? project.identity?.gitCommonDir ?? null,
+            remoteFingerprint:
+              nextLocation.remoteFingerprint ??
+              project.identity?.remoteFingerprint ??
+              null,
+          },
+        }
+      : project
+
+    if (nextProject !== project) {
+      this.projects.set(project.id, nextProject)
+    }
+
+    return true
+  }
+
   private async attachProjectContextBootstrap(sessionId: string): Promise<void> {
     const config = this.configs.get(sessionId)
     if (!config || !this.terminals.has(sessionId)) {
@@ -1810,24 +1950,48 @@ export class SessionManager {
     this.writeToSessionInternal(sessionId, `${context.bootstrapMessage}\r`, 'system')
   }
 
-  private async captureProjectMemoryForSession(
+  private collectBackfillInputs(): Array<{
+    project: ProjectConfig
+    location: ProjectLocation | null
+    session: SessionConfig
+  }> {
+    return this.getOrderedConfigs()
+      .filter((config) => config.id !== this.activeSessionId)
+      .map((config) => {
+        const project = this.projects.get(config.projectId)
+        if (!project) {
+          return null
+        }
+
+        return {
+          project,
+          location: config.locationId
+            ? this.locations.get(config.locationId) ?? null
+            : null,
+          session: config,
+        }
+      })
+      .filter((entry): entry is {
+        project: ProjectConfig
+        location: ProjectLocation | null
+        session: SessionConfig
+      } => entry !== null)
+  }
+
+  private async queueProjectMemoryCapture(
     config: SessionConfig,
-    pendingEvent?: Promise<void>,
   ): Promise<void> {
     const project = this.projects.get(config.projectId)
     if (!project) {
       return
     }
 
-    await pendingEvent
-    const transcript = await this.transcriptStore.readEvents(config.id)
     await this.projectMemory.captureSession({
       project,
       location: config.locationId
         ? this.locations.get(config.locationId) ?? null
         : null,
       session: config,
-      transcript,
     })
   }
 
