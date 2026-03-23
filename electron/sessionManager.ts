@@ -119,7 +119,11 @@ interface SessionManagerServices {
   transcriptStore?: Pick<TranscriptStore, 'append'>
   projectMemory?: Pick<
     ProjectMemoryService,
-    'assembleContext' | 'captureSession' | 'scheduleBackfillSessions' | 'dispose'
+    | 'assembleContext'
+    | 'captureSession'
+    | 'scheduleBackfillSessions'
+    | 'mergeProjects'
+    | 'dispose'
   >
 }
 
@@ -151,6 +155,7 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
   }),
   captureSession: async () => undefined,
   scheduleBackfillSessions: () => undefined,
+  mergeProjects: async () => undefined,
   dispose: () => undefined,
 }
 
@@ -204,6 +209,16 @@ export class SessionManager {
     }
 
     let shouldPersist = false
+
+    for (const project of Array.from(this.projects.values())) {
+      if (this.ensureProjectPrimaryLocation(project.id)) {
+        shouldPersist = true
+      }
+    }
+
+    if (this.consolidateProjectsByIdentity()) {
+      shouldPersist = true
+    }
 
     for (const project of Array.from(this.projects.values())) {
       if (this.ensureProjectPrimaryLocation(project.id)) {
@@ -271,7 +286,8 @@ export class SessionManager {
     }, BACKGROUND_MEMORY_BACKFILL_DELAY_MS)
   }
 
-  queueHistoricalProjectMemoryImport(): number {
+  async queueHistoricalProjectMemoryImport(): Promise<number> {
+    await this.refreshStoredProjectIdentity()
     const inputs = this.collectBackfillInputs()
     if (inputs.length === 0) {
       return 0
@@ -1653,6 +1669,16 @@ export class SessionManager {
       }
     }
 
+    if (config.locationId) {
+      const locationProjectId = this.locations.get(config.locationId)?.projectId
+      if (locationProjectId) {
+        const project = this.projects.get(locationProjectId)
+        if (project) {
+          return project
+        }
+      }
+    }
+
     const existingProject = this.findProjectByRootPath(rootPath)
     if (existingProject) {
       return existingProject
@@ -1928,6 +1954,7 @@ export class SessionManager {
       this.projects.set(project.id, nextProject)
     }
 
+    this.consolidateProjectsByIdentity()
     return true
   }
 
@@ -2120,15 +2147,28 @@ export class SessionManager {
 
   private findProjectByLocationIdentity(
     inspectedLocation: ProjectLocationIdentity,
+    options: {
+      excludeProjectIds?: Set<string>
+      excludeLocationIds?: Set<string>
+    } = {},
   ): ProjectConfig | undefined {
-    const existingLocation = this.findLocationByRootPath(inspectedLocation.rootPath)
+    const excludeProjectIds = options.excludeProjectIds ?? new Set<string>()
+    const excludeLocationIds = options.excludeLocationIds ?? new Set<string>()
+    const existingLocation = this.findLocationByRootPath(
+      inspectedLocation.rootPath,
+      excludeLocationIds,
+    )
     if (existingLocation) {
-      return this.projects.get(existingLocation.projectId)
+      if (!excludeProjectIds.has(existingLocation.projectId)) {
+        return this.projects.get(existingLocation.projectId)
+      }
     }
 
     if (inspectedLocation.gitCommonDir) {
       const sameGitCommonDir = Array.from(this.locations.values()).find(
         (location) =>
+          !excludeLocationIds.has(location.id) &&
+          !excludeProjectIds.has(location.projectId) &&
           location.gitCommonDir &&
           this.normalizePath(location.gitCommonDir) ===
             this.normalizePath(inspectedLocation.gitCommonDir!),
@@ -2141,6 +2181,8 @@ export class SessionManager {
     if (inspectedLocation.remoteFingerprint) {
       const sameRemote = Array.from(this.locations.values()).find(
         (location) =>
+          !excludeLocationIds.has(location.id) &&
+          !excludeProjectIds.has(location.projectId) &&
           location.remoteFingerprint &&
           location.remoteFingerprint === inspectedLocation.remoteFingerprint,
       )
@@ -2152,11 +2194,222 @@ export class SessionManager {
     return undefined
   }
 
-  private findLocationByRootPath(rootPath: string): ProjectLocation | undefined {
+  private findLocationByRootPath(
+    rootPath: string,
+    excludeLocationIds = new Set<string>(),
+  ): ProjectLocation | undefined {
     const normalizedRootPath = this.normalizePath(rootPath)
     return Array.from(this.locations.values()).find(
-      (location) => this.normalizePath(location.rootPath) === normalizedRootPath,
+      (location) =>
+        !excludeLocationIds.has(location.id) &&
+        this.normalizePath(location.rootPath) === normalizedRootPath,
     )
+  }
+
+  private consolidateProjectsByIdentity(): boolean {
+    let changed = false
+
+    for (const locationId of Array.from(this.locations.keys())) {
+      const location = this.locations.get(locationId)
+      if (!location) {
+        continue
+      }
+
+      const currentProject = this.projects.get(location.projectId)
+      if (!currentProject) {
+        continue
+      }
+
+      const matchingProject = this.findProjectByLocationIdentity(location, {
+        excludeProjectIds: new Set([currentProject.id]),
+        excludeLocationIds: new Set([location.id]),
+      })
+      if (!matchingProject || matchingProject.id === currentProject.id) {
+        continue
+      }
+
+      const canonicalProjectId = this.selectCanonicalProjectId(
+        currentProject.id,
+        matchingProject.id,
+      )
+      const duplicateProjectId =
+        canonicalProjectId === currentProject.id
+          ? matchingProject.id
+          : currentProject.id
+
+      if (
+        this.mergeProjectInto(
+          canonicalProjectId,
+          duplicateProjectId,
+          new Date().toISOString(),
+        )
+      ) {
+        changed = true
+      }
+    }
+
+    return changed
+  }
+
+  private selectCanonicalProjectId(leftProjectId: string, rightProjectId: string): string {
+    const leftProject = this.projects.get(leftProjectId)
+    const rightProject = this.projects.get(rightProjectId)
+    if (!leftProject) {
+      return rightProjectId
+    }
+    if (!rightProject) {
+      return leftProjectId
+    }
+
+    return (
+      leftProject.createdAt.localeCompare(rightProject.createdAt) ||
+      leftProject.id.localeCompare(rightProject.id)
+    ) <= 0
+      ? leftProject.id
+      : rightProject.id
+  }
+
+  private preferProjectTitle(targetProject: ProjectConfig, sourceProject: ProjectConfig): string {
+    const targetIsDerived =
+      targetProject.title === deriveProjectTitle(undefined, targetProject.rootPath)
+    const sourceIsDerived =
+      sourceProject.title === deriveProjectTitle(undefined, sourceProject.rootPath)
+
+    if (targetIsDerived && !sourceIsDerived) {
+      return sourceProject.title
+    }
+
+    return targetProject.title
+  }
+
+  private mergeProjectInto(
+    targetProjectId: string,
+    sourceProjectId: string,
+    timestamp: string,
+  ): boolean {
+    if (targetProjectId === sourceProjectId) {
+      return false
+    }
+
+    const targetProject = this.projects.get(targetProjectId)
+    const sourceProject = this.projects.get(sourceProjectId)
+    if (!targetProject || !sourceProject) {
+      return false
+    }
+
+    const locationIdRemap = new Map<string, string>()
+    const targetLocationsByPath = new Map(
+      this.getProjectLocations(targetProjectId).map((location) => [
+        this.normalizePath(location.rootPath),
+        location,
+      ]),
+    )
+
+    for (const sourceLocation of this.getProjectLocations(sourceProjectId)) {
+      const normalizedRootPath = this.normalizePath(sourceLocation.rootPath)
+      const existingTargetLocation = targetLocationsByPath.get(normalizedRootPath)
+
+      if (existingTargetLocation) {
+        const mergedTargetLocation: ProjectLocation = {
+          ...existingTargetLocation,
+          repoRoot: existingTargetLocation.repoRoot ?? sourceLocation.repoRoot,
+          gitCommonDir:
+            existingTargetLocation.gitCommonDir ?? sourceLocation.gitCommonDir,
+          remoteFingerprint:
+            existingTargetLocation.remoteFingerprint ??
+            sourceLocation.remoteFingerprint,
+          updatedAt: timestamp,
+          lastSeenAt:
+            existingTargetLocation.lastSeenAt.localeCompare(sourceLocation.lastSeenAt) >= 0
+              ? existingTargetLocation.lastSeenAt
+              : sourceLocation.lastSeenAt,
+        }
+        this.locations.set(existingTargetLocation.id, mergedTargetLocation)
+        this.locations.delete(sourceLocation.id)
+        locationIdRemap.set(sourceLocation.id, existingTargetLocation.id)
+        continue
+      }
+
+      const mergedSourceLocation: ProjectLocation = {
+        ...sourceLocation,
+        projectId: targetProjectId,
+        updatedAt: timestamp,
+      }
+      this.locations.set(sourceLocation.id, mergedSourceLocation)
+      targetLocationsByPath.set(normalizedRootPath, mergedSourceLocation)
+      locationIdRemap.set(sourceLocation.id, sourceLocation.id)
+    }
+
+    for (const config of Array.from(this.configs.values())) {
+      const nextProjectId =
+        config.projectId === sourceProjectId ? targetProjectId : config.projectId
+      const nextLocationId = config.locationId
+        ? locationIdRemap.get(config.locationId) ?? config.locationId
+        : config.locationId
+      if (
+        nextProjectId === config.projectId &&
+        nextLocationId === config.locationId
+      ) {
+        continue
+      }
+
+      this.configs.set(config.id, {
+        ...config,
+        projectId: nextProjectId,
+        locationId: nextLocationId,
+      })
+    }
+
+    const sourcePrimaryLocationId = sourceProject.primaryLocationId
+      ? locationIdRemap.get(sourceProject.primaryLocationId) ??
+        sourceProject.primaryLocationId
+      : null
+    const nextPrimaryLocationId =
+      targetProject.primaryLocationId && this.locations.has(targetProject.primaryLocationId)
+        ? targetProject.primaryLocationId
+        : sourcePrimaryLocationId
+
+    this.projects.set(targetProjectId, {
+      ...targetProject,
+      title: this.preferProjectTitle(targetProject, sourceProject),
+      createdAt:
+        targetProject.createdAt.localeCompare(sourceProject.createdAt) <= 0
+          ? targetProject.createdAt
+          : sourceProject.createdAt,
+      updatedAt:
+        targetProject.updatedAt.localeCompare(sourceProject.updatedAt) >= 0
+          ? targetProject.updatedAt
+          : sourceProject.updatedAt,
+      rootPath: targetProject.rootPath || sourceProject.rootPath,
+      primaryLocationId: nextPrimaryLocationId,
+      identity: {
+        repoRoot: targetProject.identity?.repoRoot ?? sourceProject.identity?.repoRoot ?? null,
+        gitCommonDir:
+          targetProject.identity?.gitCommonDir ??
+          sourceProject.identity?.gitCommonDir ??
+          null,
+        remoteFingerprint:
+          targetProject.identity?.remoteFingerprint ??
+          sourceProject.identity?.remoteFingerprint ??
+          null,
+      },
+    })
+    this.projects.delete(sourceProjectId)
+
+    if (nextPrimaryLocationId && this.locations.has(nextPrimaryLocationId)) {
+      this.setProjectPrimaryLocation(targetProjectId, nextPrimaryLocationId, timestamp)
+    } else {
+      this.ensureProjectPrimaryLocation(targetProjectId)
+    }
+
+    void this.projectMemory
+      .mergeProjects({
+        targetProject: this.requireProject(targetProjectId),
+        sourceProject,
+      })
+      .catch(() => undefined)
+
+    return true
   }
 
   private setProjectPrimaryLocation(

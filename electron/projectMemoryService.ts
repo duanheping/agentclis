@@ -226,6 +226,47 @@ export class ProjectMemoryService {
     this.enqueueJob('capture-session', 'high', input)
   }
 
+  async mergeProjects(input: {
+    targetProject: ProjectConfig
+    sourceProject: ProjectConfig
+  }): Promise<void> {
+    let jobsChanged = false
+
+    this.state.jobs = this.state.jobs.map((job) => {
+      if (
+        job.payload.project.id !== input.sourceProject.id &&
+        job.payload.session.projectId !== input.sourceProject.id
+      ) {
+        return job
+      }
+
+      jobsChanged = true
+      return {
+        ...job,
+        payload: {
+          ...job.payload,
+          project: structuredClone(input.targetProject),
+          location: job.payload.location
+            ? {
+                ...job.payload.location,
+                projectId: input.targetProject.id,
+              }
+            : null,
+          session: {
+            ...job.payload.session,
+            projectId: input.targetProject.id,
+          },
+        },
+      }
+    })
+
+    if (jobsChanged) {
+      this.persist()
+    }
+
+    await this.manager.mergeProjects(input)
+  }
+
   scheduleBackfillSessions(inputs: ProjectMemoryJobPayload[]): void {
     for (const input of inputs) {
       this.enqueueJob('backfill-session', 'low', input)

@@ -1,6 +1,8 @@
 import {
   mkdir,
+  readdir,
   readFile,
+  rm,
   writeFile,
 } from 'node:fs/promises'
 import path from 'node:path'
@@ -170,6 +172,41 @@ function trimExcerpt(value: string | null, limit: number): string | null {
   return normalized.length <= limit
     ? normalized
     : `${normalized.slice(0, limit - 3).trimEnd()}...`
+}
+
+function remapCandidateProjectId(
+  candidate: ProjectMemoryCandidate,
+  projectId: string,
+): ProjectMemoryCandidate {
+  return {
+    ...candidate,
+    projectId,
+  }
+}
+
+function remapSummaryProjectId(
+  summary: SessionSummary,
+  projectId: string,
+): SessionSummary {
+  return {
+    ...summary,
+    projectId,
+  }
+}
+
+function pickLatestSummary(
+  left: SessionSummary | null,
+  right: SessionSummary | null,
+): SessionSummary | null {
+  if (!left) {
+    return right
+  }
+
+  if (!right) {
+    return left
+  }
+
+  return left.generatedAt.localeCompare(right.generatedAt) >= 0 ? left : right
 }
 
 function buildStableFacts(
@@ -415,6 +452,143 @@ export class ProjectMemoryManager {
 
     const summary = await readJsonFile<SessionSummary | null>(filePath, null)
     return Boolean(summary?.summary?.trim())
+  }
+
+  async mergeProjects(input: {
+    targetProject: ProjectConfig
+    sourceProject: ProjectConfig
+  }): Promise<void> {
+    const targetDirectory = this.getProjectDirectory(input.targetProject)
+    const sourceDirectory = this.getProjectDirectory(input.sourceProject)
+    if (!targetDirectory || !sourceDirectory || targetDirectory === sourceDirectory) {
+      return
+    }
+
+    const sourceSnapshot = await this.readSnapshot(input.sourceProject)
+    const targetSnapshot = await this.readSnapshot(input.targetProject)
+    const hasSourceMaterial =
+      Boolean(sourceSnapshot.summary?.summary) ||
+      sourceSnapshot.facts.length > 0 ||
+      sourceSnapshot.decisions.length > 0 ||
+      sourceSnapshot.preferences.length > 0 ||
+      sourceSnapshot.workflows.length > 0
+
+    if (!hasSourceMaterial) {
+      await rm(sourceDirectory, { recursive: true, force: true })
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const remappedSourceFacts = sourceSnapshot.facts.map((candidate) =>
+      remapCandidateProjectId(candidate, input.targetProject.id),
+    )
+    const remappedSourceDecisions = sourceSnapshot.decisions.map((candidate) =>
+      remapCandidateProjectId(candidate, input.targetProject.id),
+    )
+    const remappedSourcePreferences = sourceSnapshot.preferences.map((candidate) =>
+      remapCandidateProjectId(candidate, input.targetProject.id),
+    )
+    const remappedSourceWorkflows = sourceSnapshot.workflows.map((candidate) =>
+      remapCandidateProjectId(candidate, input.targetProject.id),
+    )
+    const mergedSummary = pickLatestSummary(
+      targetSnapshot.summary,
+      sourceSnapshot.summary
+        ? remapSummaryProjectId(sourceSnapshot.summary, input.targetProject.id)
+        : null,
+    )
+    const mergedFacts = this.mergeCandidates(targetSnapshot.facts, remappedSourceFacts)
+    const mergedDecisions = this.mergeCandidates(
+      targetSnapshot.decisions,
+      remappedSourceDecisions,
+    )
+    const mergedPreferences = this.mergeCandidates(
+      targetSnapshot.preferences,
+      remappedSourcePreferences,
+    )
+    const mergedWorkflows = this.mergeCandidates(
+      targetSnapshot.workflows,
+      remappedSourceWorkflows,
+    )
+
+    const sourceSummariesDirectory = path.join(sourceDirectory, 'summaries')
+    const summaryEntries = await readdir(sourceSummariesDirectory, {
+      withFileTypes: true,
+    }).catch(() => [])
+
+    await mkdir(path.join(targetDirectory, 'summaries'), { recursive: true })
+
+    for (const entry of summaryEntries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name === 'latest.json') {
+        continue
+      }
+
+      const targetSummaryPath = path.join(targetDirectory, 'summaries', entry.name)
+      const sourceSummaryPath = path.join(sourceSummariesDirectory, entry.name)
+      const sourceSummary = await readJsonFile<SessionSummary | null>(
+        sourceSummaryPath,
+        null,
+      )
+      if (!sourceSummary) {
+        continue
+      }
+
+      const remappedSourceSummary = remapSummaryProjectId(
+        sourceSummary,
+        input.targetProject.id,
+      )
+      const targetSummary = await readJsonFile<SessionSummary | null>(
+        targetSummaryPath,
+        null,
+      )
+      await writeJsonFile(
+        targetSummaryPath,
+        pickLatestSummary(targetSummary, remappedSourceSummary),
+      )
+    }
+
+    await writeJsonFile(path.join(targetDirectory, 'project.json'), {
+      id: input.targetProject.id,
+      title: input.targetProject.title,
+      createdAt: input.targetProject.createdAt,
+      updatedAt: timestamp,
+      primaryLocationId: input.targetProject.primaryLocationId,
+      identity: input.targetProject.identity,
+    })
+    await this.writeCandidates(input.targetProject, 'facts.json', mergedFacts)
+    await this.writeCandidates(input.targetProject, 'decisions.json', mergedDecisions)
+    await this.writeCandidates(
+      input.targetProject,
+      'preferences.json',
+      mergedPreferences,
+    )
+    await this.writeCandidates(input.targetProject, 'workflows.json', mergedWorkflows)
+
+    if (mergedSummary) {
+      await writeJsonFile(
+        path.join(targetDirectory, 'summaries', 'latest.json'),
+        mergedSummary,
+      )
+      await writeFile(
+        path.join(targetDirectory, 'summaries', 'latest.md'),
+        `${mergedSummary.summary}\n`,
+        'utf8',
+      )
+    }
+
+    await writeFile(
+      path.join(targetDirectory, 'memory.md'),
+      buildMemoryMarkdown(input.targetProject, {
+        summary: mergedSummary,
+        facts: mergedFacts,
+        decisions: mergedDecisions,
+        preferences: mergedPreferences,
+        workflows: mergedWorkflows,
+      }),
+      'utf8',
+    )
+
+    await rm(sourceDirectory, { recursive: true, force: true })
   }
 
   private validateCandidates(
