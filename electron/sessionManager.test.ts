@@ -321,6 +321,44 @@ describe('SessionManager restore policy', () => {
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
   })
 
+  it('starts the newly active session when closing the restored active session', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+
+    const closeResult = await manager.closeSession('session-b')
+
+    expect(closeResult).toEqual({
+      closedSessionId: 'session-b',
+      activeSessionId: 'session-a',
+    })
+    expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
+    expect(secondSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'alpha',
+    ])
+    expect(manager.listSessions().activeSessionId).toBe('session-a')
+    expect(
+      Object.fromEntries(
+        manager.listSessions().projects[0]?.sessions.map((session) => [
+          session.config.id,
+          session.runtime.status,
+        ]) ?? [],
+      ),
+    ).toEqual({
+      'session-a': 'running',
+    })
+  })
+
   it('recovers a missing Codex resume id from local session history before restoring', async () => {
     const onConfig = vi.fn()
 
@@ -1445,7 +1483,7 @@ describe('SessionManager logical project identity and project context', () => {
       startupCommand: 'codex',
     })
 
-    manager.closeSession(session.config.id)
+    await manager.closeSession(session.config.id)
     await vi.waitFor(() => {
       expect(projectMemory.captureSession).toHaveBeenCalledTimes(1)
     })
