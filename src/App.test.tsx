@@ -304,6 +304,10 @@ function createAgentCliMock(
       .mockImplementation(async () => structuredClone(currentSkillStatus)),
     importHistoricalProjectMemory: vi.fn().mockResolvedValue({
       queuedSessionCount: 2,
+      cleanedProjectCount: 1,
+      removedEmptySummaryCount: 2,
+      prunedCandidateCount: 3,
+      regeneratedArchitectureCount: 1,
     }),
     syncSkills: vi.fn().mockImplementation(async () => {
       currentSkillStatus = {
@@ -507,7 +511,9 @@ describe('App skills settings', () => {
     })
 
     expect(
-      screen.getByText('Queued 2 sessions for background import.'),
+      screen.getByText(
+        'Refreshed 1 project memory snapshot, removed 2 empty summaries, pruned 3 stale memory entries, regenerated architecture for 1 project, queued 2 sessions for background import.',
+      ),
     ).toBeInTheDocument()
   })
 

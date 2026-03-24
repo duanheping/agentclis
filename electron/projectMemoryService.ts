@@ -12,6 +12,7 @@ import type {
   ProjectMemoryDiagnosticEntry,
   ProjectMemoryDiagnosticReporter,
   ProjectMemoryManager,
+  ProjectMemoryRefreshResult,
 } from './projectMemoryManager'
 import type { TranscriptStore } from './transcriptStore'
 
@@ -230,6 +231,12 @@ export class ProjectMemoryService {
     for (const input of inputs) {
       this.enqueueJob('backfill-session', 'low', input)
     }
+  }
+
+  async refreshHistoricalImport(
+    projects: ProjectConfig[],
+  ): Promise<ProjectMemoryRefreshResult> {
+    return await this.manager.refreshHistoricalImport(projects)
   }
 
   resume(): void {

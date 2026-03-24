@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import Store from 'electron-store'
 
+import type { ProjectMemoryImportResult } from '../src/shared/ipc'
 import {
   buildRuntime,
   type CreateProjectInput,
@@ -120,7 +121,9 @@ interface SessionManagerServices {
   projectMemory?: Pick<
     ProjectMemoryService,
     'assembleContext' | 'captureSession' | 'scheduleBackfillSessions' | 'dispose'
-  >
+  > & {
+    refreshHistoricalImport?: ProjectMemoryService['refreshHistoricalImport']
+  }
 }
 
 const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResolver']> = {
@@ -151,6 +154,12 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
   }),
   captureSession: async () => undefined,
   scheduleBackfillSessions: () => undefined,
+  refreshHistoricalImport: async () => ({
+    cleanedProjectCount: 0,
+    removedEmptySummaryCount: 0,
+    prunedCandidateCount: 0,
+    regeneratedArchitectureCount: 0,
+  }),
   dispose: () => undefined,
 }
 
@@ -281,15 +290,28 @@ export class SessionManager {
     }, BACKGROUND_MEMORY_BACKFILL_DELAY_MS)
   }
 
-  async queueHistoricalProjectMemoryImport(): Promise<number> {
+  async queueHistoricalProjectMemoryImport(): Promise<ProjectMemoryImportResult> {
     await this.refreshStoredProjectIdentity()
+    const refreshResult =
+      (
+        await this.projectMemory.refreshHistoricalImport?.(
+          Array.from(this.projects.values()),
+        )
+      ) ?? {
+        cleanedProjectCount: 0,
+        removedEmptySummaryCount: 0,
+        prunedCandidateCount: 0,
+        regeneratedArchitectureCount: 0,
+      }
     const inputs = this.collectBackfillInputs()
-    if (inputs.length === 0) {
-      return 0
+    if (inputs.length > 0) {
+      this.projectMemory.scheduleBackfillSessions(inputs)
     }
 
-    this.projectMemory.scheduleBackfillSessions(inputs)
-    return inputs.length
+    return {
+      queuedSessionCount: inputs.length,
+      ...refreshResult,
+    }
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectSnapshot> {

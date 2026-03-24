@@ -1067,7 +1067,12 @@ describe('SessionManager logical project identity and project context', () => {
       })),
       captureSession: vi.fn(async () => undefined),
       scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
+      refreshHistoricalImport: vi.fn(async () => ({
+        cleanedProjectCount: 1,
+        removedEmptySummaryCount: 2,
+        prunedCandidateCount: 3,
+        regeneratedArchitectureCount: 1,
+      })),
       dispose: vi.fn(() => undefined),
     }
 
@@ -1195,7 +1200,12 @@ describe('SessionManager logical project identity and project context', () => {
       })),
       captureSession: vi.fn(async () => undefined),
       scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
+      refreshHistoricalImport: vi.fn(async () => ({
+        cleanedProjectCount: 1,
+        removedEmptySummaryCount: 2,
+        prunedCandidateCount: 3,
+        regeneratedArchitectureCount: 1,
+      })),
       dispose: vi.fn(() => undefined),
     }
 
@@ -1397,7 +1407,12 @@ describe('SessionManager logical project identity and project context', () => {
       })),
       captureSession: vi.fn(async () => undefined),
       scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
+      refreshHistoricalImport: vi.fn(async () => ({
+        cleanedProjectCount: 1,
+        removedEmptySummaryCount: 2,
+        prunedCandidateCount: 3,
+        regeneratedArchitectureCount: 1,
+      })),
       dispose: vi.fn(() => undefined),
     }
     const identityResolver = {
@@ -1865,7 +1880,12 @@ describe('SessionManager logical project identity and project context', () => {
       })),
       captureSession: vi.fn(async () => undefined),
       scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
+      refreshHistoricalImport: vi.fn(async () => ({
+        cleanedProjectCount: 1,
+        removedEmptySummaryCount: 2,
+        prunedCandidateCount: 3,
+        regeneratedArchitectureCount: 1,
+      })),
       dispose: vi.fn(() => undefined),
     }
     const identityResolver = {
@@ -1894,7 +1914,18 @@ describe('SessionManager logical project identity and project context', () => {
       },
     )
 
-    await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toBe(2)
+    await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toEqual({
+      queuedSessionCount: 2,
+      cleanedProjectCount: 1,
+      removedEmptySummaryCount: 2,
+      prunedCandidateCount: 3,
+      regeneratedArchitectureCount: 1,
+    })
+    expect(projectMemory.refreshHistoricalImport).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 'project-1',
+      }),
+    ])
     expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledTimes(1)
     expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
       expect.objectContaining({
@@ -2006,7 +2037,12 @@ describe('SessionManager logical project identity and project context', () => {
       })),
       captureSession: vi.fn(async () => undefined),
       scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
+      refreshHistoricalImport: vi.fn(async () => ({
+        cleanedProjectCount: 2,
+        removedEmptySummaryCount: 0,
+        prunedCandidateCount: 0,
+        regeneratedArchitectureCount: 2,
+      })),
       dispose: vi.fn(() => undefined),
     }
     const identityResolver = {
@@ -2035,9 +2071,23 @@ describe('SessionManager logical project identity and project context', () => {
       },
     )
 
-    await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toBe(2)
+    await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toEqual({
+      queuedSessionCount: 2,
+      cleanedProjectCount: 2,
+      removedEmptySummaryCount: 0,
+      prunedCandidateCount: 0,
+      regeneratedArchitectureCount: 2,
+    })
 
     expect(identityResolver.inspect).toHaveBeenCalledTimes(2)
+    expect(projectMemory.refreshHistoricalImport).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 'project-a',
+      }),
+      expect.objectContaining({
+        id: 'project-b',
+      }),
+    ])
     expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
       expect.objectContaining({
         project: expect.objectContaining({
