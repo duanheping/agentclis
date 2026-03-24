@@ -1112,6 +1112,188 @@ describe('SessionManager logical project identity and project context', () => {
     ])
   })
 
+  it('splits legacy multi-location projects into separate clone projects during restore', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-a',
+          title: 'MSAR43_S32G',
+          rootPath: 'C:\\repo\\copy-a',
+          createdAt: '2026-03-22T10:00:00.000Z',
+          updatedAt: '2026-03-22T10:00:00.000Z',
+          primaryLocationId: 'location-a',
+          identity: {
+            repoRoot: 'C:\\repo\\copy-a',
+            gitCommonDir: 'C:\\repo\\copy-a\\.git',
+            remoteFingerprint: 'github.com/openai/agenclis',
+          },
+        },
+      ],
+      locations: [
+        {
+          id: 'location-a',
+          projectId: 'project-a',
+          rootPath: 'C:\\repo\\copy-a',
+          repoRoot: 'C:\\repo\\copy-a',
+          gitCommonDir: 'C:\\repo\\copy-a\\.git',
+          remoteFingerprint: 'github.com/openai/agenclis',
+          label: 'copy-a',
+          createdAt: '2026-03-22T10:00:00.000Z',
+          updatedAt: '2026-03-22T10:00:00.000Z',
+          lastSeenAt: '2026-03-22T10:00:00.000Z',
+        },
+        {
+          id: 'location-b',
+          projectId: 'project-a',
+          rootPath: 'D:\\repo\\copy-b',
+          repoRoot: 'D:\\repo\\copy-b',
+          gitCommonDir: 'D:\\repo\\copy-b\\.git',
+          remoteFingerprint: 'github.com/openai/agenclis',
+          label: 'copy-b',
+          createdAt: '2026-03-22T11:00:00.000Z',
+          updatedAt: '2026-03-22T11:00:00.000Z',
+          lastSeenAt: '2026-03-22T11:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-a',
+          locationId: 'location-a',
+          title: 'alpha',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo\\copy-a',
+          shell: 'pwsh.exe',
+          createdAt: '2026-03-22T10:00:00.000Z',
+          updatedAt: '2026-03-22T10:30:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-a',
+          locationId: 'location-b',
+          title: 'beta',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'D:\\repo\\copy-b',
+          shell: 'pwsh.exe',
+          createdAt: '2026-03-22T11:00:00.000Z',
+          updatedAt: '2026-03-22T11:30:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-b',
+    })
+
+    const projectMemory = {
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-a',
+        locationId: 'location-a',
+        generatedAt: '2026-03-22T12:00:10.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+      captureSession: vi.fn(async () => undefined),
+      scheduleBackfillSessions: vi.fn(() => undefined),
+      mergeProjects: vi.fn(async () => undefined),
+      dispose: vi.fn(() => undefined),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        projectMemory,
+      },
+    )
+
+    const snapshot = manager.listSessions()
+
+    expect(snapshot.projects).toHaveLength(2)
+
+    const copyAProject = snapshot.projects.find(
+      (entry) => entry.config.rootPath === 'C:\\repo\\copy-a',
+    )
+    const copyBProject = snapshot.projects.find(
+      (entry) => entry.config.rootPath === 'D:\\repo\\copy-b',
+    )
+
+    expect(copyAProject).toMatchObject({
+      config: {
+        id: 'project-a',
+        title: 'copy-a',
+        rootPath: 'C:\\repo\\copy-a',
+        primaryLocationId: 'location-a',
+      },
+    })
+    expect(copyAProject?.locations).toEqual([
+      expect.objectContaining({
+        id: 'location-a',
+        projectId: 'project-a',
+        rootPath: 'C:\\repo\\copy-a',
+      }),
+    ])
+    expect(copyAProject?.sessions.map((entry) => entry.config.id)).toEqual(['session-a'])
+    expect(copyAProject?.sessions.map((entry) => entry.config.projectId)).toEqual([
+      'project-a',
+    ])
+
+    expect(copyBProject?.config.title).toBe('copy-b')
+    expect(copyBProject?.config.primaryLocationId).toBe('location-b')
+    expect(copyBProject?.locations).toEqual([
+      expect.objectContaining({
+        id: 'location-b',
+        rootPath: 'D:\\repo\\copy-b',
+      }),
+    ])
+    expect(copyBProject?.sessions.map((entry) => entry.config.id)).toEqual(['session-b'])
+    expect(copyBProject?.sessions[0]?.config.projectId).toBe(copyBProject?.config.id)
+
+    const persistedState = mocks.getPersistedState() as {
+      projects: Array<{
+        id: string
+        title: string
+        rootPath: string
+        primaryLocationId: string | null
+      }>
+      locations: Array<{ id: string; projectId: string; rootPath: string }>
+      sessions: Array<{ id: string; projectId: string; locationId: string }>
+    }
+
+    expect(persistedState.projects).toHaveLength(2)
+    expect(
+      persistedState.projects.find((entry) => entry.rootPath === 'C:\\repo\\copy-a'),
+    ).toMatchObject({
+      id: 'project-a',
+      title: 'copy-a',
+      primaryLocationId: 'location-a',
+    })
+
+    const persistedCopyBProject = persistedState.projects.find(
+      (entry) => entry.rootPath === 'D:\\repo\\copy-b',
+    )
+    expect(persistedCopyBProject).toMatchObject({
+      title: 'copy-b',
+      primaryLocationId: 'location-b',
+    })
+    expect(
+      persistedState.locations.find((entry) => entry.id === 'location-b'),
+    )?.toMatchObject({
+      projectId: persistedCopyBProject?.id,
+      rootPath: 'D:\\repo\\copy-b',
+    })
+    expect(
+      persistedState.sessions.find((entry) => entry.id === 'session-b'),
+    )?.toMatchObject({
+      projectId: persistedCopyBProject?.id,
+      locationId: 'location-b',
+    })
+  })
+
   it('injects project context as system input without consuming the first user prompt title', async () => {
     const transcriptEvents: TranscriptEvent[] = []
     const transcriptStore = {
