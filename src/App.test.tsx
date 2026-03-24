@@ -414,6 +414,52 @@ describe('App skills settings', () => {
     })
   })
 
+  it('reflects session attention in the document title', async () => {
+    const { agentCli } = createAgentCliMock({
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-12T18:00:00.000Z',
+            updatedAt: '2026-03-12T18:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'pwsh.exe',
+                createdAt: '2026-03-12T18:00:00.000Z',
+                updatedAt: '2026-03-12T18:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                attention: 'needs-user-decision',
+                lastActiveAt: '2026-03-12T18:00:05.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.title).toBe('Reply needed: Codex - Agent CLIs')
+    })
+  })
+
   it('loads root settings, lets the user choose paths, and triggers sync', async () => {
     const user = userEvent.setup()
     const { agentCli } = createAgentCliMock()

@@ -734,13 +734,44 @@
 
 .session-item__title {
   min-width: 0;
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+}
+
+.session-item__title-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item__attention {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-item__attention.is-task-complete {
+  background: rgba(52, 211, 153, 0.16);
+  color: #86efac;
+}
+
+.session-item__attention.is-needs-user-decision {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
 }
 
 .session-item__meta {

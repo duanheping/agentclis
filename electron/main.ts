@@ -6,6 +6,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeImage,
   session,
   shell,
   type OpenDialogOptions,
@@ -13,6 +14,12 @@ import {
 
 import { IPC_CHANNELS, type PersistTransientFileInput } from '../src/shared/ipc'
 import type { ProjectOpenTarget } from '../src/shared/projectTools'
+import type { SessionAttentionKind } from '../src/shared/session'
+import {
+  formatWorkspaceWindowTitle,
+  getSessionAttentionTitleLabel,
+  selectHighestPriorityAttentionSession,
+} from '../src/shared/sessionAttention'
 import type {
   FullSyncDone,
   FullSyncProgress,
@@ -38,11 +45,13 @@ import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
+const APP_BRAND_NAME = 'Agent CLIs'
 
 let mainWindow: BrowserWindow | null = null
 let skillSyncWindow: BrowserWindow | null = null
 let securityHeadersRegistered = false
 let fullSyncRun: Promise<FullSyncDone> | null = null
+let currentWindowAttentionKey: string | null = null
 let fullSyncState: FullSyncState = {
   running: false,
   progress: null,
@@ -69,9 +78,11 @@ const sessionManager = new SessionManager({
   },
   onConfig: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionConfig, event)
+    updateMainWindowShell()
   },
   onRuntime: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionRuntime, event)
+    updateMainWindowShell()
   },
   onExit: (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.sessionExit, event)
@@ -107,6 +118,72 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
 
     window.webContents.send(channel, payload)
   }
+}
+
+function createAttentionOverlayIcon(
+  attention: SessionAttentionKind,
+) {
+  const fill = attention === 'needs-user-decision' ? '#f59e0b' : '#22c55e'
+  const centerMarkup =
+    attention === 'needs-user-decision'
+      ? '<path d="M32 17c-5.8 0-10.5 4.7-10.5 10.5h6c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5c0 1.9-1.1 3-3.4 4.5-2.9 1.9-4.6 4-4.6 8.5h6c0-2.3.7-3.2 2.5-4.4 2.6-1.7 5.5-4 5.5-8.6C42.5 21.7 37.8 17 32 17Z" fill="#fff"/><circle cx="32" cy="47.5" r="3.8" fill="#fff"/>'
+      : '<path d="M19 33.5l8.2 8.2L45 24" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>'
+
+  const svg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">',
+    `<circle cx="32" cy="32" r="28" fill="${fill}"/>`,
+    centerMarkup,
+    '</svg>',
+  ].join('')
+
+  return nativeImage.createFromDataURL(
+    `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`,
+  )
+}
+
+const attentionOverlayIcons = {
+  'needs-user-decision': createAttentionOverlayIcon('needs-user-decision'),
+  'task-complete': createAttentionOverlayIcon('task-complete'),
+} as const
+
+function updateMainWindowShell(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    currentWindowAttentionKey = null
+    return
+  }
+
+  const workspace = sessionManager.listSessions()
+  mainWindow.setTitle(formatWorkspaceWindowTitle(workspace, APP_BRAND_NAME))
+
+  const attentionSession = selectHighestPriorityAttentionSession(workspace)
+  const attention = attentionSession?.runtime.attention ?? null
+  const nextAttentionKey =
+    attention && attentionSession
+      ? `${attentionSession.config.id}:${attention}`
+      : null
+
+  if (process.platform === 'win32') {
+    if (attention && attentionSession) {
+      mainWindow.setOverlayIcon(
+        attentionOverlayIcons[attention],
+        `${getSessionAttentionTitleLabel(attention)}: ${attentionSession.config.title}`,
+      )
+    } else {
+      mainWindow.setOverlayIcon(null, '')
+    }
+  }
+
+  if (!attention) {
+    mainWindow.flashFrame(false)
+    currentWindowAttentionKey = null
+    return
+  }
+
+  if (nextAttentionKey !== currentWindowAttentionKey && !mainWindow.isFocused()) {
+    mainWindow.flashFrame(true)
+  }
+
+  currentWindowAttentionKey = nextAttentionKey
 }
 
 async function loadRendererWindow(
@@ -276,39 +353,55 @@ function registerSecurityHeaders(): void {
 
 async function createMainWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
-    ...createWindowOptions('Agent CLIs', 1480, 960),
+    ...createWindowOptions(APP_BRAND_NAME, 1480, 960),
     minWidth: 1180,
     minHeight: 760,
   })
   mainWindow.removeMenu()
   await loadRendererWindow(mainWindow, 'main')
+  updateMainWindowShell()
+
+  mainWindow.on('focus', () => {
+    mainWindow?.flashFrame(false)
+  })
 
   mainWindow.on('closed', () => {
+    currentWindowAttentionKey = null
     mainWindow = null
   })
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.restoreSessions, () => sessionManager.restoreSessions())
+  ipcMain.handle(IPC_CHANNELS.restoreSessions, async () => {
+    const result = await sessionManager.restoreSessions()
+    updateMainWindowShell()
+    return result
+  })
   ipcMain.handle(IPC_CHANNELS.listSessions, () => sessionManager.listSessions())
   ipcMain.handle(IPC_CHANNELS.createProject, (_event, input) =>
     sessionManager.createProject(input),
   )
-  ipcMain.handle(IPC_CHANNELS.createSession, (_event, input) =>
-    sessionManager.createSession(input),
-  )
+  ipcMain.handle(IPC_CHANNELS.createSession, async (_event, input) => {
+    const result = await sessionManager.createSession(input)
+    updateMainWindowShell()
+    return result
+  })
   ipcMain.handle(IPC_CHANNELS.renameSession, (_event, id, title) =>
     sessionManager.renameSession(id, title),
   )
-  ipcMain.handle(IPC_CHANNELS.activateSession, (_event, id) =>
-    sessionManager.activateSession(id),
-  )
-  ipcMain.handle(IPC_CHANNELS.restartSession, (_event, id) =>
-    sessionManager.restartSession(id),
-  )
+  ipcMain.handle(IPC_CHANNELS.activateSession, async (_event, id) => {
+    await sessionManager.activateSession(id)
+    updateMainWindowShell()
+  })
+  ipcMain.handle(IPC_CHANNELS.restartSession, async (_event, id) => {
+    const result = await sessionManager.restartSession(id)
+    updateMainWindowShell()
+    return result
+  })
   ipcMain.handle(IPC_CHANNELS.closeSession, (_event, id) => {
     const result = sessionManager.closeSession(id)
     windowsCommandPromptManager.close(id)
+    updateMainWindowShell()
     return result
   })
   ipcMain.handle(IPC_CHANNELS.writeToSession, (_event, id, data) =>
@@ -445,7 +538,7 @@ if (!gotSingleInstanceLock) {
   })
 
   app.whenReady().then(async () => {
-    app.setName('Agent CLIs')
+    app.setName(APP_BRAND_NAME)
     registerSecurityHeaders()
     registerIpcHandlers()
     await createMainWindow()

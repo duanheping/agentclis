@@ -6,6 +6,12 @@ import type {
 export const SESSION_STATUSES = ['starting', 'running', 'exited', 'error'] as const
 
 export type SessionStatus = (typeof SESSION_STATUSES)[number]
+export const SESSION_ATTENTION_KINDS = [
+  'task-complete',
+  'needs-user-decision',
+] as const
+
+export type SessionAttentionKind = (typeof SESSION_ATTENTION_KINDS)[number]
 export const MANAGED_CLI_PROVIDERS = ['codex', 'copilot'] as const
 
 export type ManagedCliProvider = (typeof MANAGED_CLI_PROVIDERS)[number]
@@ -44,6 +50,7 @@ export interface SessionConfig {
 export interface SessionRuntime {
   sessionId: string
   status: SessionStatus
+  attention?: SessionAttentionKind | null
   pid?: number
   exitCode?: number
   lastActiveAt: string
@@ -195,6 +202,7 @@ export function buildRuntime(
   return {
     sessionId,
     status,
+    attention: null,
     lastActiveAt: new Date().toISOString(),
   }
 }

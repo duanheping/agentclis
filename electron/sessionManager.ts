@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, type Dirent } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -22,11 +22,16 @@ import {
   type SessionConfig,
   type SessionConfigEvent,
   type SessionDataEvent,
+  type SessionAttentionKind,
   type SessionExitMeta,
   type SessionRuntime,
   type SessionRuntimeEvent,
   type SessionSnapshot,
 } from '../src/shared/session'
+import {
+  extractCodexAttentionFromSessionLine,
+  extractCopilotAttentionFromSessionLine,
+} from '../src/shared/sessionAttention'
 import type {
   ProjectLocation,
   TranscriptEvent,
@@ -65,6 +70,16 @@ interface DetectedExternalSession {
   source?: string
 }
 
+interface ExternalSessionAttentionTracker {
+  provider: 'codex' | 'copilot'
+  externalSessionId: string
+  filePath: string
+  interval: NodeJS.Timeout
+  offset: number
+  remainder: string
+  polling: boolean
+}
+
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
   projectId?: string
   pendingFirstPromptTitle?: boolean
@@ -82,6 +97,7 @@ const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
 const FIRST_PROMPT_TITLE_LIMIT = 80
 const BACKGROUND_IDENTITY_REFRESH_DELAY_MS = 1_500
 const BACKGROUND_MEMORY_BACKFILL_DELAY_MS = 4_500
+const EXTERNAL_ATTENTION_POLL_INTERVAL_MS = 1_500
 
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
@@ -182,6 +198,10 @@ export class SessionManager {
   private readonly pendingFirstPromptBuffers = new Map<string, string>()
   private readonly claimedExternalSessions = new Map<string, string>()
   private readonly pendingExternalSessionDetections = new Map<string, NodeJS.Timeout>()
+  private readonly externalSessionAttentionTrackers = new Map<
+    string,
+    ExternalSessionAttentionTracker
+  >()
   private readonly historicalExternalSessionRecovery = new Set<string>()
   private readonly suppressedExit = new Set<string>()
   private readonly events: SessionManagerEvents
@@ -423,7 +443,9 @@ export class SessionManager {
     const config = this.requireConfig(id)
     this.activeSessionId = id
     this.touchProject(config.projectId)
-    this.touchRuntime(id)
+    if (!this.acknowledgeSessionAttention(id)) {
+      this.touchRuntime(id)
+    }
     this.persist()
     await this.ensureSessionStarted(id)
   }
@@ -452,6 +474,7 @@ export class SessionManager {
 
     this.stopSession(id, true)
     this.cancelExternalSessionDetection(id)
+    this.stopExternalSessionAttentionTracking(id)
     this.pendingFirstPromptBuffers.delete(id)
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
@@ -501,6 +524,12 @@ export class SessionManager {
       this.cancelExternalSessionDetection(sessionId)
     }
 
+    for (const sessionId of Array.from(
+      this.externalSessionAttentionTrackers.keys(),
+    )) {
+      this.stopExternalSessionAttentionTracking(sessionId)
+    }
+
     for (const config of Array.from(this.configs.values())) {
       void this.queueProjectMemoryCapture(config)
     }
@@ -515,8 +544,10 @@ export class SessionManager {
   private async startSession(config: SessionConfig): Promise<void> {
     this.stopSession(config.id, true)
     this.cancelExternalSessionDetection(config.id)
+    this.stopExternalSessionAttentionTracking(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
     this.setRuntime(config.id, {
+      attention: null,
       status: 'starting',
       pid: undefined,
       exitCode: undefined,
@@ -597,6 +628,9 @@ export class SessionManager {
         pid: terminal.pid,
         exitCode: undefined,
       })
+      if (normalizedConfig.externalSession) {
+        void this.ensureExternalSessionAttentionTracking(normalizedConfig)
+      }
 
       terminal.onData((chunk) => {
         this.appendTranscriptEvent({
@@ -1254,6 +1288,183 @@ export class SessionManager {
       sessionId: nextConfig.id,
       config: nextConfig,
     })
+    void this.ensureExternalSessionAttentionTracking(
+      nextConfig,
+      detectedSession.sourcePath,
+    )
+  }
+
+  private async ensureExternalSessionAttentionTracking(
+    config: SessionConfig,
+    sourcePath?: string,
+  ): Promise<void> {
+    if (!config.externalSession) {
+      this.stopExternalSessionAttentionTracking(config.id)
+      return
+    }
+
+    const filePath =
+      sourcePath ??
+      (await this.resolveExternalSessionAttentionFilePath(
+        config.externalSession.provider,
+        config.externalSession.sessionId,
+      ))
+    if (!filePath) {
+      return
+    }
+
+    const existingTracker = this.externalSessionAttentionTrackers.get(config.id)
+    if (
+      existingTracker &&
+      existingTracker.provider === config.externalSession.provider &&
+      existingTracker.externalSessionId === config.externalSession.sessionId &&
+      existingTracker.filePath === filePath
+    ) {
+      return
+    }
+
+    let initialOffset = 0
+    try {
+      initialOffset = (await stat(filePath)).size
+    } catch {
+      return
+    }
+
+    this.stopExternalSessionAttentionTracking(config.id)
+    const interval = setInterval(() => {
+      void this.pollExternalSessionAttention(config.id)
+    }, EXTERNAL_ATTENTION_POLL_INTERVAL_MS)
+
+    this.externalSessionAttentionTrackers.set(config.id, {
+      provider: config.externalSession.provider,
+      externalSessionId: config.externalSession.sessionId,
+      filePath,
+      interval,
+      offset: initialOffset,
+      remainder: '',
+      polling: false,
+    })
+  }
+
+  private stopExternalSessionAttentionTracking(sessionId: string): void {
+    const tracker = this.externalSessionAttentionTrackers.get(sessionId)
+    if (!tracker) {
+      return
+    }
+
+    clearInterval(tracker.interval)
+    this.externalSessionAttentionTrackers.delete(sessionId)
+  }
+
+  private async resolveExternalSessionAttentionFilePath(
+    provider: 'codex' | 'copilot',
+    sessionId: string,
+  ): Promise<string | null> {
+    if (provider === 'copilot') {
+      const filePath = path.join(COPILOT_SESSIONS_ROOT, sessionId, 'events.jsonl')
+      try {
+        return (await stat(filePath)).isFile() ? filePath : null
+      } catch {
+        return null
+      }
+    }
+
+    const dayDirectories = this.getCodexSessionDayDirectories(
+      Date.now() - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
+    )
+
+    for (const dayDirectory of dayDirectories) {
+      let entries: Dirent[] = []
+      try {
+        entries = await readdir(dayDirectory, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      const matchingEntry = entries.find(
+        (entry) =>
+          entry.isFile() &&
+          entry.name.endsWith(`${sessionId}.jsonl`),
+      )
+      if (!matchingEntry) {
+        continue
+      }
+
+      return path.join(dayDirectory, matchingEntry.name)
+    }
+
+    return null
+  }
+
+  private async pollExternalSessionAttention(sessionId: string): Promise<void> {
+    const tracker = this.externalSessionAttentionTrackers.get(sessionId)
+    if (!tracker || tracker.polling) {
+      return
+    }
+
+    const config = this.configs.get(sessionId)
+    if (
+      !config?.externalSession ||
+      config.externalSession.provider !== tracker.provider ||
+      config.externalSession.sessionId !== tracker.externalSessionId
+    ) {
+      this.stopExternalSessionAttentionTracking(sessionId)
+      return
+    }
+
+    tracker.polling = true
+    let handle: Awaited<ReturnType<typeof open>> | null = null
+
+    try {
+      const details = await stat(tracker.filePath)
+      if (details.size < tracker.offset) {
+        tracker.offset = 0
+        tracker.remainder = ''
+      }
+
+      if (details.size <= tracker.offset) {
+        return
+      }
+
+      const length = details.size - tracker.offset
+      const buffer = Buffer.alloc(length)
+      handle = await open(tracker.filePath, 'r')
+      await handle.read(buffer, 0, length, tracker.offset)
+      tracker.offset = details.size
+
+      const nextChunk = `${tracker.remainder}${buffer.toString('utf8')}`
+      const lines = nextChunk.split(/\r?\n/u)
+      tracker.remainder = lines.pop() ?? ''
+
+      for (const line of lines) {
+        this.processExternalSessionAttentionLine(sessionId, tracker.provider, line)
+      }
+    } catch {
+      return
+    } finally {
+      tracker.polling = false
+      await handle?.close().catch(() => undefined)
+    }
+  }
+
+  private processExternalSessionAttentionLine(
+    sessionId: string,
+    provider: 'codex' | 'copilot',
+    line: string,
+  ): void {
+    if (!line.trim()) {
+      return
+    }
+
+    const attention =
+      provider === 'codex'
+        ? extractCodexAttentionFromSessionLine(line)
+        : extractCopilotAttentionFromSessionLine(line)
+    if (!attention) {
+      return
+    }
+
+    this.setSessionAttention(sessionId, attention)
   }
 
   private claimExternalSession(config: SessionConfig): void {
@@ -1777,6 +1988,33 @@ export class SessionManager {
     return this.setRuntime(id, {})
   }
 
+  private setSessionAttention(
+    id: string,
+    attention: SessionAttentionKind | null,
+  ): boolean {
+    const currentAttention = this.runtimes.get(id)?.attention ?? null
+    if (currentAttention === attention) {
+      return false
+    }
+
+    this.setRuntime(id, {
+      attention,
+    })
+    return true
+  }
+
+  private acknowledgeSessionAttention(id: string): boolean {
+    if (this.runtimes.get(id)?.attention !== 'task-complete') {
+      return false
+    }
+
+    return this.setSessionAttention(id, null)
+  }
+
+  private clearSessionAttention(id: string): boolean {
+    return this.setSessionAttention(id, null)
+  }
+
   private setRuntime(
     id: string,
     patch: Partial<Omit<SessionRuntime, 'sessionId'>>,
@@ -1796,6 +2034,7 @@ export class SessionManager {
         kind: 'runtime',
         source: 'system',
         metadata: {
+          attention: nextRuntime.attention ?? null,
           status: nextRuntime.status,
           pid: nextRuntime.pid ?? null,
           exitCode: nextRuntime.exitCode ?? null,
@@ -1815,8 +2054,11 @@ export class SessionManager {
     source: 'system' | 'user',
   ): void {
     if (source === 'user') {
+      const attentionCleared = this.clearSessionAttention(id)
       this.capturePendingFirstPromptTitle(id, data)
-      this.touchRuntime(id)
+      if (!attentionCleared) {
+        this.touchRuntime(id)
+      }
     }
 
     this.appendTranscriptEvent({
