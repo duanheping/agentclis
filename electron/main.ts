@@ -398,8 +398,8 @@ function registerIpcHandlers(): void {
     updateMainWindowShell()
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.closeSession, (_event, id) => {
-    const result = sessionManager.closeSession(id)
+  ipcMain.handle(IPC_CHANNELS.closeSession, async (_event, id) => {
+    const result = await sessionManager.closeSession(id)
     windowsCommandPromptManager.close(id)
     updateMainWindowShell()
     return result

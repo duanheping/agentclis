@@ -976,7 +976,14 @@ function App() {
       return
     }
 
-    if (id === activeSessionId) {
+    const selectedSession =
+      sessions.find((session) => session.config.id === id) ?? null
+    const alreadyRunningActiveSession =
+      id === activeSessionId &&
+      (selectedSession?.runtime.status === 'running' ||
+        selectedSession?.runtime.status === 'starting')
+
+    if (alreadyRunningActiveSession) {
       terminalRegistry.focus(id)
       return
     }

@@ -827,6 +827,57 @@ describe('App skills settings', () => {
     })
   })
 
+  it('reactivates an already-selected session when it is no longer running', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Copilot',
+                startupCommand: 'copilot',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'exited',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Copilot')
+
+    await user.click(screen.getByText('Copilot'))
+
+    await waitFor(() => {
+      expect(agentCli.activateSession).toHaveBeenCalledWith('session-1')
+    })
+  })
+
   it('lets the user drag the sidebar and diff splitters to resize panes', async () => {
     const user = userEvent.setup()
     const workspacePayload: ListSessionsResponse = {

@@ -456,7 +456,7 @@ export class SessionManager {
     return this.snapshotFor(id)
   }
 
-  closeSession(id: string): SessionCloseResult {
+  async closeSession(id: string): Promise<SessionCloseResult> {
     const orderedIds = this.getOrderedConfigs().map((config) => config.id)
     const closingIndex = orderedIds.indexOf(id)
     if (closingIndex === -1) {
@@ -488,10 +488,16 @@ export class SessionManager {
         null
     }
 
+    const nextActiveSessionId = this.activeSessionId
     this.persist()
+
+    if (nextActiveSessionId) {
+      await this.ensureSessionStarted(nextActiveSessionId)
+    }
+
     return {
       closedSessionId: id,
-      activeSessionId: this.activeSessionId,
+      activeSessionId: nextActiveSessionId,
     }
   }
 
