@@ -13,6 +13,7 @@ import {
   buildWindowsCommandPromptTerminalId,
   terminalRegistry,
 } from './lib/terminalRegistry'
+import type { ProjectMemoryImportResult } from './shared/ipc'
 import type {
   ProjectGitFileChange,
   ProjectGitOverview,
@@ -181,6 +182,66 @@ function getDiffPanelMaxWidth(containerWidth: number): number {
 
 function formatCountLabel(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`
+}
+
+function buildProjectMemoryImportStatus(
+  result: ProjectMemoryImportResult,
+): string {
+  const parts: string[] = []
+
+  if (result.cleanedProjectCount > 0) {
+    parts.push(
+      `refreshed ${formatCountLabel(
+        result.cleanedProjectCount,
+        'project memory snapshot',
+        'project memory snapshots',
+      )}`,
+    )
+  }
+  if (result.removedEmptySummaryCount > 0) {
+    parts.push(
+      `removed ${formatCountLabel(
+        result.removedEmptySummaryCount,
+        'empty summary',
+        'empty summaries',
+      )}`,
+    )
+  }
+  if (result.prunedCandidateCount > 0) {
+    parts.push(
+      `pruned ${formatCountLabel(
+        result.prunedCandidateCount,
+        'stale memory entry',
+        'stale memory entries',
+      )}`,
+    )
+  }
+  if (result.regeneratedArchitectureCount > 0) {
+    parts.push(
+      `regenerated architecture for ${formatCountLabel(
+        result.regeneratedArchitectureCount,
+        'project',
+        'projects',
+      )}`,
+    )
+  }
+  if (result.queuedSessionCount > 0) {
+    parts.push(
+      `queued ${formatCountLabel(
+        result.queuedSessionCount,
+        'session',
+        'sessions',
+      )} for background import`,
+    )
+  }
+
+  if (parts.length === 0) {
+    return 'No stored project memory or sessions were available for import.'
+  }
+
+  const [firstPart, ...remainingParts] = parts
+  const sentence = [firstPart[0]?.toUpperCase(), firstPart.slice(1)].join('')
+  return `${[sentence, ...remainingParts].join(', ')}.`
 }
 
 function App() {
@@ -1140,11 +1201,7 @@ function App() {
 
     try {
       const result = await agentCli.importHistoricalProjectMemory()
-      setProjectMemoryImportStatus(
-        result.queuedSessionCount > 0
-          ? `Queued ${formatCountLabel(result.queuedSessionCount, 'session', 'sessions')} for background import.`
-          : 'No stored sessions were available for import.',
-      )
+      setProjectMemoryImportStatus(buildProjectMemoryImportStatus(result))
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
     } finally {

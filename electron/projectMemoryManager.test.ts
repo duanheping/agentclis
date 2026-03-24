@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -134,6 +134,78 @@ function buildTranscript(): TranscriptEvent[] {
   ]
 }
 
+function buildProjectAt(rootPath: string): ProjectConfig {
+  return {
+    ...buildProject(),
+    rootPath,
+    identity: {
+      repoRoot: rootPath,
+      gitCommonDir: path.join(rootPath, '.git'),
+      remoteFingerprint: 'github.com/openai/agenclis',
+    },
+  }
+}
+
+function buildLocationAt(rootPath: string): ProjectLocation {
+  return {
+    ...buildLocation(),
+    rootPath,
+    repoRoot: rootPath,
+    gitCommonDir: path.join(rootPath, '.git'),
+  }
+}
+
+function buildSessionAt(rootPath: string): SessionConfig {
+  return {
+    ...buildSession(),
+    cwd: rootPath,
+  }
+}
+
+async function createArchitectureFixture(): Promise<string> {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-arch-fixture-'))
+  tempRoots.push(repoRoot)
+
+  const files = new Map<string, string>([
+    ['src/App.tsx', "import { SessionSidebar } from './components/SessionSidebar'\nimport { TerminalWorkspace } from './components/TerminalWorkspace'\nimport { useSessionsStore } from './store/useSessionsStore'\nexport default function App() { return SessionSidebar && TerminalWorkspace && useSessionsStore ? null : null }\n"],
+    ['src/App.test.tsx', 'export {}\n'],
+    ['src/components/SessionSidebar.tsx', 'export function SessionSidebar() { return null }\n'],
+    ['src/components/SessionSidebar.test.tsx', 'export {}\n'],
+    ['src/components/TerminalWorkspace.tsx', 'export function TerminalWorkspace() { return null }\n'],
+    ['src/components/TerminalWorkspace.test.tsx', 'export {}\n'],
+    ['src/store/useSessionsStore.ts', 'export const useSessionsStore = {}\n'],
+    ['src/shared/ipc.ts', 'export const IPC_CHANNELS = {}\nexport interface AgentCliApi {}\n'],
+    ['src/shared/session.ts', 'export interface SessionConfig {}\nexport function buildRuntime() { return null }\n'],
+    ['src/shared/projectMemory.ts', 'export interface AssembledProjectContext {}\nexport interface ProjectMemorySnapshot {}\n'],
+    ['src/shared/projectArchitecture.ts', 'export interface ProjectArchitectureSnapshot {}\n'],
+    ['electron/preload.ts', "import { IPC_CHANNELS } from '../src/shared/ipc'\nexport const api = { IPC_CHANNELS }\n"],
+    ['electron/main.ts', "import { IPC_CHANNELS } from '../src/shared/ipc'\nimport { SessionManager } from './sessionManager'\nimport { ProjectMemoryService } from './projectMemoryService'\nexport function registerIpcHandlers() { return { IPC_CHANNELS, SessionManager, ProjectMemoryService } }\n"],
+    ['electron/sessionManager.ts', "import { TranscriptStore } from './transcriptStore'\nimport { ProjectMemoryService } from './projectMemoryService'\nexport class SessionManager { transcriptStore?: TranscriptStore; projectMemory?: ProjectMemoryService }\n"],
+    ['electron/sessionManager.test.ts', 'export {}\n'],
+    ['electron/transcriptStore.ts', 'export class TranscriptStore {}\n'],
+    ['electron/transcriptStore.test.ts', 'export {}\n'],
+    ['electron/projectMemoryService.ts', "import { ProjectMemoryManager } from './projectMemoryManager'\nexport class ProjectMemoryService { manager?: ProjectMemoryManager }\n"],
+    ['electron/projectMemoryService.test.ts', 'export {}\n'],
+    ['electron/projectMemoryManager.ts', "import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'\nexport class ProjectMemoryManager { extractor?: ProjectMemoryAgentExtractor }\n"],
+    ['electron/projectMemoryManager.test.ts', 'export {}\n'],
+    ['electron/projectMemoryAgent.ts', 'export class ProjectMemoryAgentExtractor {}\n'],
+    ['electron/projectMemoryAgent.test.ts', 'export {}\n'],
+    ['electron/skillLibraryManager.ts', 'export class SkillLibraryManager {}\n'],
+    ['electron/skillLibraryManager.test.ts', 'export {}\n'],
+    ['electron/windowsCommandPromptManager.ts', 'export class WindowsCommandPromptManager {}\n'],
+  ])
+
+  await Promise.all(
+    Array.from(files.entries()).map(async ([relativePath, content]) => {
+      const filePath = path.join(repoRoot, relativePath)
+      await mkdir(path.dirname(filePath), { recursive: true })
+      await writeFile(filePath, content, 'utf8')
+    }),
+  )
+
+  return repoRoot
+}
+
 describe('ProjectMemoryManager', () => {
   afterEach(async () => {
     await Promise.all(tempRoots.splice(0).map((tempRoot) => rm(tempRoot, { recursive: true, force: true })))
@@ -142,6 +214,7 @@ describe('ProjectMemoryManager', () => {
   it('writes canonical memory beneath a dot-prefixed namespace without machine-local paths', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
     const manager = new ProjectMemoryManager(() => libraryRoot, {
       extract: async () => ({
         summary: 'Implemented the project memory pipeline.',
@@ -159,9 +232,9 @@ describe('ProjectMemoryManager', () => {
     })
 
     await manager.captureSession({
-      project: buildProject(),
-      location: buildLocation(),
-      session: buildSession(),
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
       transcript: buildTranscript(),
     })
 
@@ -174,17 +247,24 @@ describe('ProjectMemoryManager', () => {
     await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.toContain(
       'Implemented the project memory pipeline.',
     )
+    await expect(readFile(path.join(memoryRoot, 'architecture.md'), 'utf8')).resolves.toContain(
+      'Renderer app shell',
+    )
     await expect(readFile(path.join(memoryRoot, 'facts.json'), 'utf8')).resolves.toContain(
       'Canonical remote: github.com/openai/agenclis',
     )
-    await expect(readFile(path.join(memoryRoot, 'project.json'), 'utf8')).resolves.not.toContain(
-      'C:\\repo\\agenclis',
+    await expect(readFile(path.join(memoryRoot, 'project.json'), 'utf8')).resolves.toContain(
+      '"repoRoot": null',
+    )
+    await expect(readFile(path.join(memoryRoot, 'project.json'), 'utf8')).resolves.toContain(
+      '"gitCommonDir": null',
     )
   })
 
   it('assembles a short bootstrap context from canonical memory files', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
     const manager = new ProjectMemoryManager(() => libraryRoot, {
       extract: async () => ({
         summary: 'Focused on session restore and memory injection.',
@@ -202,20 +282,29 @@ describe('ProjectMemoryManager', () => {
     })
 
     await manager.captureSession({
-      project: buildProject(),
-      location: buildLocation(),
-      session: buildSession(),
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
       transcript: buildTranscript(),
     })
 
     const context = await manager.assembleContext({
-      project: buildProject(),
-      location: buildLocation(),
-      query: 'restore memory',
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      query: 'session restore preload ipc',
     })
 
     expect(context.bootstrapMessage).toContain('Use the project memory for this logical project')
+    expect(context.bootstrapMessage).toContain('Architecture overview:')
+    expect(context.bootstrapMessage).toContain('Relevant modules:')
+    expect(context.bootstrapMessage).toContain('Session lifecycle manager')
     expect(context.bootstrapMessage).toContain('Current local checkout: agenclis')
+    expect(context.fileReferences.some((filePath) => filePath.endsWith('architecture.md'))).toBe(
+      true,
+    )
+    expect(context.architectureExcerpt).toContain(
+      'Session lifecycle is centralized in SessionManager',
+    )
     expect(context.fileReferences.every((filePath) => filePath.includes('.agenclis-memory'))).toBe(
       true,
     )
@@ -358,5 +447,233 @@ describe('ProjectMemoryManager', () => {
     await expect(
       readFile(path.join(sharedRoot, 'project.json'), 'utf8'),
     ).resolves.toContain('"title": "agenclis"')
+  })
+
+  it('refreshes stored historical memory before transcript backfill', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
+    const manager = new ProjectMemoryManager(() => libraryRoot)
+    const project = buildProjectAt(repoRoot)
+    const memoryRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'remote-github.com-openai-agenclis',
+    )
+
+    await mkdir(path.join(memoryRoot, 'summaries'), { recursive: true })
+    await writeFile(
+      path.join(memoryRoot, 'project.json'),
+      JSON.stringify(
+        {
+          id: 'project-1',
+          title: 'Workspace copy',
+          createdAt: '2026-03-20T12:00:00.000Z',
+          updatedAt: '2026-03-20T12:00:00.000Z',
+          identity: {
+            repoRoot,
+            gitCommonDir: path.join(repoRoot, '.git'),
+            remoteFingerprint: 'github.com/openai/agenclis',
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(
+      path.join(memoryRoot, 'summaries', 'session-empty.json'),
+      JSON.stringify(
+        {
+          sessionId: 'session-empty',
+          projectId: 'project-1',
+          locationId: null,
+          generatedAt: '2026-03-20T12:00:00.000Z',
+          summary: 'This empty summary should be removed.',
+          sourceEventIds: [],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(
+      path.join(memoryRoot, 'summaries', 'session-valid.json'),
+      JSON.stringify(
+        {
+          sessionId: 'session-valid',
+          projectId: 'project-1',
+          locationId: null,
+          generatedAt: '2026-03-21T12:00:00.000Z',
+          summary: 'Historical import rebuilt the canonical latest summary.',
+          sourceEventIds: Array.from({ length: 40 }, (_, index) => `event-${index + 1}`),
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(
+      path.join(memoryRoot, 'summaries', 'latest.json'),
+      JSON.stringify(
+        {
+          sessionId: 'latest-broken',
+          projectId: 'project-1',
+          locationId: null,
+          generatedAt: '2026-03-22T12:00:00.000Z',
+          summary: 'Broken latest summary.',
+          sourceEventIds: [],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(
+      path.join(memoryRoot, 'facts.json'),
+      JSON.stringify(
+        [
+          {
+            id: 'fact-1',
+            projectId: 'project-1',
+            locationId: null,
+            kind: 'fact',
+            scope: 'project',
+            key: 'default-agent-cli',
+            content: 'Default managed CLI: codex',
+            confidence: 0.92,
+            status: 'active',
+            createdAt: '2026-03-20T12:00:00.000Z',
+            updatedAt: '2026-03-22T12:00:00.000Z',
+            sourceSessionId: 'session-valid',
+            sourceEventIds: Array.from({ length: 45 }, (_, index) => `fact-${index + 1}`),
+          },
+          {
+            id: 'fact-2',
+            projectId: 'project-1',
+            locationId: null,
+            kind: 'fact',
+            scope: 'project',
+            key: 'default-agent-cli',
+            content: 'Default managed CLI: claude',
+            confidence: 0.61,
+            status: 'active',
+            createdAt: '2026-03-20T12:00:00.000Z',
+            updatedAt: '2026-03-21T12:00:00.000Z',
+            sourceSessionId: 'session-valid',
+            sourceEventIds: ['fact-dup'],
+          },
+          {
+            id: 'fact-3',
+            projectId: 'project-1',
+            locationId: null,
+            kind: 'fact',
+            scope: 'project',
+            key: 'branch',
+            content: 'Current branch: fix/project-memory-import',
+            confidence: 0.7,
+            status: 'active',
+            createdAt: '2026-03-20T12:00:00.000Z',
+            updatedAt: '2026-03-20T12:00:00.000Z',
+            sourceSessionId: 'session-valid',
+            sourceEventIds: ['branch-1'],
+          },
+          {
+            id: 'fact-4',
+            projectId: 'project-1',
+            locationId: null,
+            kind: 'fact',
+            scope: 'project',
+            key: 'local-path',
+            content: `Open ${repoRoot}\\src\\App.tsx when debugging the renderer.`,
+            confidence: 0.7,
+            status: 'active',
+            createdAt: '2026-03-20T12:00:00.000Z',
+            updatedAt: '2026-03-20T12:00:00.000Z',
+            sourceSessionId: 'session-valid',
+            sourceEventIds: ['path-1'],
+          },
+        ],
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(path.join(memoryRoot, 'decisions.json'), '[]', 'utf8')
+    await writeFile(path.join(memoryRoot, 'preferences.json'), '[]', 'utf8')
+    await writeFile(path.join(memoryRoot, 'workflows.json'), '[]', 'utf8')
+
+    await expect(manager.refreshHistoricalImport([project])).resolves.toEqual({
+      cleanedProjectCount: 1,
+      removedEmptySummaryCount: 2,
+      prunedCandidateCount: 2,
+      regeneratedArchitectureCount: 1,
+    })
+
+    const latestSummary = JSON.parse(
+      await readFile(path.join(memoryRoot, 'summaries', 'latest.json'), 'utf8'),
+    ) as {
+      sessionId: string
+      summary: string
+      sourceEventIds: string[]
+    }
+    const facts = JSON.parse(
+      await readFile(path.join(memoryRoot, 'facts.json'), 'utf8'),
+    ) as Array<{
+      content: string
+      status: string
+      sourceEventIds: string[]
+    }>
+    const projectRecord = JSON.parse(
+      await readFile(path.join(memoryRoot, 'project.json'), 'utf8'),
+    ) as {
+      title: string
+      identity: {
+        repoRoot: string | null
+        gitCommonDir: string | null
+      }
+    }
+
+    expect(projectRecord.title).toBe('agenclis')
+    expect(projectRecord.identity.repoRoot).toBeNull()
+    expect(projectRecord.identity.gitCommonDir).toBeNull()
+    expect(latestSummary.sessionId).toBe('session-valid')
+    expect(latestSummary.summary).toContain('canonical latest summary')
+    expect(latestSummary.sourceEventIds).toHaveLength(32)
+    await expect(
+      readFile(path.join(memoryRoot, 'summaries', 'session-empty.json'), 'utf8'),
+    ).rejects.toThrow()
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: 'Default managed CLI: codex',
+          status: 'active',
+          sourceEventIds: expect.arrayContaining(['fact-1']),
+        }),
+        expect.objectContaining({
+          content: 'Default managed CLI: claude',
+          status: 'conflicted',
+        }),
+      ]),
+    )
+    expect(
+      facts.some((candidate) => candidate.content.includes('Current branch:')),
+    ).toBe(false)
+    expect(
+      facts.some((candidate) => candidate.content.includes(repoRoot)),
+    ).toBe(false)
+    await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.toContain(
+      'Historical import rebuilt the canonical latest summary.',
+    )
+    await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.not.toContain(
+      'Default managed CLI: claude',
+    )
+    await expect(
+      readFile(path.join(memoryRoot, 'architecture.md'), 'utf8'),
+    ).resolves.toContain('Renderer app shell')
+    await expect(
+      readFile(path.join(memoryRoot, 'architecture.json'), 'utf8'),
+    ).resolves.toContain('Session lifecycle is centralized in SessionManager')
   })
 })

@@ -896,11 +896,11 @@ export function SessionSidebar({
                               void onImportHistoricalProjectMemory()
                             }}
                           >
-                            {projectMemoryImporting ? 'Queueing…' : 'Import history'}
+                            {projectMemoryImporting ? 'Refreshing…' : 'Import history'}
                           </button>
                         </div>
                         <p className="sidebar-settings__caption">
-                          Queue stored Agent CLIs sessions for low-priority project-memory import.
+                          Refresh stored project memory, rebuild architecture snapshots, and queue stored Agent CLIs sessions for low-priority import.
                         </p>
                         {projectMemoryImportStatus ? (
                           <p className="sidebar-settings__caption">

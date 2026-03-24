@@ -105,4 +105,5 @@ export interface AssembledProjectContext {
   bootstrapMessage: string | null
   fileReferences: string[]
   summaryExcerpt: string | null
+  architectureExcerpt?: string | null
 }

@@ -34,6 +34,10 @@ export interface PersistTransientFileInput {
 
 export interface ProjectMemoryImportResult {
   queuedSessionCount: number
+  cleanedProjectCount: number
+  removedEmptySummaryCount: number
+  prunedCandidateCount: number
+  regeneratedArchitectureCount: number
 }
 
 export const IPC_CHANNELS = {
