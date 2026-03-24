@@ -255,6 +255,18 @@ describe('SessionSidebar', () => {
     expect(onRename).toHaveBeenCalledWith('session-1', 'triage ECG 205709')
   })
 
+  it('shows a session attention badge when a reply is needed', () => {
+    const project = buildProject()
+    project.sessions[0]!.runtime.attention = 'needs-user-decision'
+
+    renderSidebar({
+      projects: [project],
+    })
+
+    expect(screen.getByText('Reply')).toBeInTheDocument()
+    expect(screen.getByText("why you don't show session title")).toBeInTheDocument()
+  })
+
   it('keeps library setup feedback inline while hiding sync diagnostics', async () => {
     const user = userEvent.setup()
 

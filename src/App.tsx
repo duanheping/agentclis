@@ -33,6 +33,7 @@ import type {
   ProjectSnapshot,
   SessionSnapshot,
 } from './shared/session'
+import { formatWorkspaceWindowTitle } from './shared/sessionAttention'
 import { useSessionsStore } from './store/useSessionsStore'
 
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
@@ -50,6 +51,7 @@ const MIN_DESKTOP_CENTER_PANE_WIDTH = 420
 const RESIZER_KEYBOARD_STEP = 24
 const COMPACT_LAYOUT_MEDIA_QUERY = '(max-width: 980px)'
 const APP_BRAND_NAME = 'agentclis'
+const WINDOW_BRAND_NAME = 'Agent CLIs'
 type CreateDialogIntent = 'session' | 'project'
 type CreateDialogMode = 'default' | 'project-context'
 
@@ -687,6 +689,16 @@ function App() {
       // Ignore preference persistence failures and keep the in-memory state.
     }
   }, [showProjectPaths])
+
+  useEffect(() => {
+    document.title = formatWorkspaceWindowTitle(
+      {
+        projects,
+        activeSessionId,
+      },
+      WINDOW_BRAND_NAME,
+    )
+  }, [activeSessionId, projects])
 
   useEffect(() => {
     try {

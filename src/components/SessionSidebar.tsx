@@ -20,6 +20,7 @@ import {
   type ProjectSnapshot,
   type SessionSnapshot,
 } from '../shared/session'
+import { getSessionAttentionBadgeLabel } from '../shared/sessionAttention'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
@@ -615,6 +616,7 @@ export function SessionSidebar({
                     {project.sessions.map((session) => {
                       const active = session.config.id === activeSessionId
                       const editing = session.config.id === editingId
+                      const attention = session.runtime.attention ?? null
                       const sessionLocationLabel = findSessionLocationLabel(project, session)
 
                       return (
@@ -678,7 +680,16 @@ export function SessionSidebar({
                             <div className="session-item__body">
                               <div className="session-item__title-group">
                                 <div className="session-item__title">
-                                  {session.config.title}
+                                  {attention ? (
+                                    <span
+                                      className={`session-item__attention is-${attention}`}
+                                    >
+                                      {getSessionAttentionBadgeLabel(attention)}
+                                    </span>
+                                  ) : null}
+                                  <span className="session-item__title-label">
+                                    {session.config.title}
+                                  </span>
                                 </div>
                                 {sessionLocationLabel || showProjectPaths ? (
                                   <div className="session-item__command">
