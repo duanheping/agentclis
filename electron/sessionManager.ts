@@ -211,6 +211,16 @@ export class SessionManager {
       }
     }
 
+    if (this.splitLegacyMultiLocationProjects()) {
+      shouldPersist = true
+    }
+
+    for (const project of Array.from(this.projects.values())) {
+      if (this.ensureProjectPrimaryLocation(project.id)) {
+        shouldPersist = true
+      }
+    }
+
     for (const config of persisted.sessions ?? []) {
       const hydratedConfig = this.hydrateSessionConfig(config)
       this.configs.set(hydratedConfig.id, hydratedConfig)
@@ -1647,20 +1657,21 @@ export class SessionManager {
     rootPath: string,
     config: StoredSessionConfig,
   ): ProjectConfig {
+    const locationProjectId = config.locationId
+      ? this.locations.get(config.locationId)?.projectId
+      : undefined
+
     if (projectId) {
       const project = this.projects.get(projectId)
-      if (project) {
+      if (project && (!locationProjectId || locationProjectId === projectId)) {
         return project
       }
     }
 
-    if (config.locationId) {
-      const locationProjectId = this.locations.get(config.locationId)?.projectId
-      if (locationProjectId) {
-        const project = this.projects.get(locationProjectId)
-        if (project) {
-          return project
-        }
+    if (locationProjectId) {
+      const project = this.projects.get(locationProjectId)
+      if (project) {
+        return project
       }
     }
 
@@ -2122,6 +2133,83 @@ export class SessionManager {
         left.label.localeCompare(right.label)
       )
     })
+  }
+
+  private splitLegacyMultiLocationProjects(): boolean {
+    let changed = false
+
+    for (const project of Array.from(this.projects.values())) {
+      const locations = this.getOrderedLocations(project.id)
+      if (locations.length <= 1) {
+        continue
+      }
+
+      const primaryLocation =
+        (project.primaryLocationId
+          ? this.locations.get(project.primaryLocationId)
+          : null) ?? locations[0] ?? null
+      if (!primaryLocation) {
+        continue
+      }
+
+      const nextPrimaryProject: ProjectConfig = {
+        ...project,
+        rootPath: primaryLocation.rootPath,
+        title: this.deriveLocationProjectTitle(project, primaryLocation),
+        primaryLocationId: primaryLocation.id,
+        identity: {
+          repoRoot: primaryLocation.repoRoot ?? project.identity?.repoRoot ?? null,
+          gitCommonDir:
+            primaryLocation.gitCommonDir ?? project.identity?.gitCommonDir ?? null,
+          remoteFingerprint:
+            primaryLocation.remoteFingerprint ??
+            project.identity?.remoteFingerprint ??
+            null,
+        },
+      }
+      this.projects.set(project.id, nextPrimaryProject)
+
+      for (const location of locations) {
+        if (location.id === primaryLocation.id) {
+          continue
+        }
+
+        const nextProjectId = crypto.randomUUID()
+        const nextProject: ProjectConfig = {
+          id: nextProjectId,
+          title: this.deriveLocationProjectTitle(project, location),
+          rootPath: location.rootPath,
+          createdAt: location.createdAt || project.createdAt,
+          updatedAt: location.updatedAt || project.updatedAt,
+          primaryLocationId: location.id,
+          identity: {
+            repoRoot: location.repoRoot ?? project.identity?.repoRoot ?? null,
+            gitCommonDir: location.gitCommonDir ?? project.identity?.gitCommonDir ?? null,
+            remoteFingerprint:
+              location.remoteFingerprint ??
+              project.identity?.remoteFingerprint ??
+              null,
+          },
+        }
+
+        this.projects.set(nextProject.id, nextProject)
+        this.locations.set(location.id, {
+          ...location,
+          projectId: nextProject.id,
+        })
+        changed = true
+      }
+    }
+
+    return changed
+  }
+
+  private deriveLocationProjectTitle(
+    project: ProjectConfig,
+    location: ProjectLocation,
+  ): string {
+    const derivedFromLocationRoot = deriveProjectTitle(undefined, location.rootPath)
+    return derivedFromLocationRoot || project.title
   }
 
   private findProjectByRootPath(rootPath: string): ProjectConfig | undefined {
