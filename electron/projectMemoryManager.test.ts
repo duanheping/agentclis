@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import type { ProjectArchitectureSnapshot } from '../src/shared/projectArchitecture'
 import type {
   ProjectLocation,
   TranscriptEvent,
@@ -261,6 +262,171 @@ describe('ProjectMemoryManager', () => {
     )
   })
 
+  it('writes focused memory docs and prefers synthesized architecture when an architecture extractor is configured', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
+    const synthesizedArchitecture: ProjectArchitectureSnapshot = {
+      projectId: 'remote-github.com-openai-agenclis',
+      title: 'agenclis',
+      generatedAt: '2026-03-24T12:00:00.000Z',
+      systemOverview:
+        'Session work starts in the renderer, crosses the preload bridge, and is serialized by the main-process session coordinator.',
+      modules: [
+        {
+          id: 'custom-session-coordinator',
+          name: 'Session coordinator',
+          kind: 'manager',
+          paths: ['electron/sessionManager.ts'],
+          responsibility: 'Owns session startup, bootstrap injection, and transcript-driven memory capture scheduling.',
+          owns: ['session lifecycle', 'bootstrap injection'],
+          dependsOn: [],
+          usedBy: [],
+          publicInterfaces: ['createSession', 'restoreSession'],
+          keyTypes: ['SessionConfig'],
+          invariants: ['Bootstrap runs before user task execution.'],
+          changeGuidance: ['Keep bootstrap and capture ordering aligned.'],
+          testLocations: ['electron/sessionManager.test.ts'],
+          confidence: 0.97,
+        },
+      ],
+      interactions: [
+        {
+          id: 'renderer-to-session-coordinator',
+          from: 'renderer-app-shell',
+          to: 'custom-session-coordinator',
+          via: 'IPC bootstrap request',
+          purpose: 'Starts or restores managed sessions with project context.',
+          trigger: 'User opens or restores a session.',
+          failureModes: ['Bootstrap omitted before first prompt'],
+          notes: ['Main process serializes setup before terminal attach'],
+        },
+      ],
+      invariants: [
+        {
+          id: 'bootstrap-before-input',
+          statement: 'Project memory bootstrap must be injected before regular user input reaches a restored session.',
+          relatedModules: ['custom-session-coordinator'],
+        },
+      ],
+      glossary: [
+        {
+          term: 'bootstrap injection',
+          meaning: 'System-authored context written into the session before the user task runs.',
+        },
+      ],
+    }
+    const manager = new ProjectMemoryManager(
+      () => libraryRoot,
+      {
+        extract: async () => ({
+          summary: 'Captured rich task-acceleration memory.',
+          candidates: [
+            {
+              kind: 'troubleshooting-pattern',
+              scope: 'project',
+              key: 'bootstrap-race',
+              content:
+                'When project memory appeared missing on restored sessions, trace bootstrap injection order in electron/sessionManager.ts and confirm the system write happens before the first user prompt.',
+              confidence: 0.94,
+              sourceEventIds: ['event-1'],
+            },
+            {
+              kind: 'user-assist-pattern',
+              scope: 'project',
+              key: 'ask-for-expectation-gap',
+              content:
+                'If generated memory feels shallow, ask the user which missing categories matter most and rebuild the docs around those categories instead of adding more generic summaries.',
+              confidence: 0.92,
+              sourceEventIds: ['event-1'],
+            },
+            {
+              kind: 'component-workflow',
+              scope: 'project',
+              key: 'session-bootstrap-flow',
+              content:
+                'Session creation flows from renderer request to SessionManager, then into ProjectMemoryService. SessionManager injects the assembled bootstrap, starts transcript capture, and only then hands control to the terminal runtime.',
+              confidence: 0.95,
+              sourceEventIds: ['event-1', 'event-2'],
+            },
+            {
+              kind: 'project-convention',
+              scope: 'project',
+              key: 'shared-contract-source-of-truth',
+              content:
+                'Keep cross-process contracts in src/shared and update renderer, preload, and main-process call sites together when an IPC surface changes.',
+              confidence: 0.96,
+              sourceEventIds: ['event-1'],
+            },
+            {
+              kind: 'debug-approach',
+              scope: 'project',
+              key: 'session-bootstrap-debug',
+              content:
+                'Debug session bootstrap issues by reading assembleContext output, confirming the injected system message in SessionManager, and checking transcript capture order before changing UI behavior.',
+              confidence: 0.93,
+              sourceEventIds: ['event-2'],
+            },
+            {
+              kind: 'critical-file',
+              scope: 'project',
+              key: 'electron-session-manager-ts',
+              content:
+                'electron/sessionManager.ts is the session orchestration spine: it restores sessions, writes bootstrap context, and coordinates transcript-backed memory capture.',
+              confidence: 0.97,
+              sourceEventIds: ['event-1'],
+            },
+          ],
+        }),
+      },
+      {
+        extract: async () => synthesizedArchitecture,
+      },
+    )
+
+    await manager.captureSession({
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
+      transcript: buildTranscript(),
+    })
+
+    const memoryRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'remote-github.com-openai-agenclis',
+    )
+
+    await expect(readFile(path.join(memoryRoot, 'architecture.md'), 'utf8')).resolves.toContain(
+      'Session coordinator',
+    )
+    await expect(readFile(path.join(memoryRoot, 'architecture.md'), 'utf8')).resolves.toContain(
+      'bootstrap injection',
+    )
+    await expect(readFile(path.join(memoryRoot, 'troubleshooting.md'), 'utf8')).resolves.toContain(
+      'bootstrap injection order',
+    )
+    await expect(readFile(path.join(memoryRoot, 'collaboration.md'), 'utf8')).resolves.toContain(
+      'missing categories matter most',
+    )
+    await expect(
+      readFile(path.join(memoryRoot, 'component-workflows.md'), 'utf8'),
+    ).resolves.toContain('Session creation flows from renderer request to SessionManager')
+    await expect(readFile(path.join(memoryRoot, 'conventions.md'), 'utf8')).resolves.toContain(
+      'src/shared',
+    )
+    await expect(readFile(path.join(memoryRoot, 'debug-playbook.md'), 'utf8')).resolves.toContain(
+      'assembleContext output',
+    )
+    await expect(readFile(path.join(memoryRoot, 'critical-files.md'), 'utf8')).resolves.toContain(
+      'electron/sessionManager.ts',
+    )
+    await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.toContain(
+      '`troubleshooting.md`',
+    )
+  })
+
   it('assembles a short bootstrap context from canonical memory files', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)
@@ -275,6 +441,33 @@ describe('ProjectMemoryManager', () => {
             key: 'prefer-compact-ui',
             content: 'Prefer conservative UI changes.',
             confidence: 0.88,
+            sourceEventIds: ['event-1'],
+          },
+          {
+            kind: 'project-convention',
+            scope: 'project',
+            key: 'update-ipc-contracts-together',
+            content:
+              'When changing desktop actions, update src/shared/ipc.ts, electron/preload.ts, and electron/main.ts together to keep the IPC contract aligned.',
+            confidence: 0.94,
+            sourceEventIds: ['event-1'],
+          },
+          {
+            kind: 'critical-file',
+            scope: 'project',
+            key: 'electron-project-memory-manager-ts',
+            content:
+              'electron/projectMemoryManager.ts assembles the bootstrap, writes the canonical memory artifacts, and chooses which memory is shown to the agent.',
+            confidence: 0.93,
+            sourceEventIds: ['event-1'],
+          },
+          {
+            kind: 'component-workflow',
+            scope: 'project',
+            key: 'memory-bootstrap-flow',
+            content:
+              'ProjectMemoryService reads stored memory, ProjectMemoryManager assembles a query-aware bootstrap, and SessionManager injects that message before normal session output resumes.',
+            confidence: 0.92,
             sourceEventIds: ['event-1'],
           },
         ],
@@ -296,10 +489,16 @@ describe('ProjectMemoryManager', () => {
 
     expect(context.bootstrapMessage).toContain('Use the project memory for this logical project')
     expect(context.bootstrapMessage).toContain('Architecture overview:')
+    expect(context.bootstrapMessage).toContain('Project conventions:')
+    expect(context.bootstrapMessage).toContain('Critical files:')
+    expect(context.bootstrapMessage).toContain('Component workflows:')
     expect(context.bootstrapMessage).toContain('Relevant modules:')
     expect(context.bootstrapMessage).toContain('Session lifecycle manager')
     expect(context.bootstrapMessage).toContain('Current local checkout: agenclis')
     expect(context.fileReferences.some((filePath) => filePath.endsWith('architecture.md'))).toBe(
+      true,
+    )
+    expect(context.fileReferences.some((filePath) => filePath.endsWith('conventions.md'))).toBe(
       true,
     )
     expect(context.architectureExcerpt).toContain(

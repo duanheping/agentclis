@@ -30,15 +30,105 @@ import type {
   ProjectArchitectureSnapshot,
 } from '../src/shared/projectArchitecture'
 import type { ProjectConfig, SessionConfig } from '../src/shared/session'
+import type { ProjectArchitectureExtractor } from './projectArchitectureAgent'
 import { indexProjectArchitecture } from './projectArchitectureIndexer'
 
 const MEMORY_ROOT_DIRECTORY = '.agenclis-memory'
 const MAX_SOURCE_EVENT_IDS = 32
-const PROJECT_MEMORY_CANDIDATE_FILES = [
-  'facts.json',
-  'decisions.json',
-  'preferences.json',
-  'workflows.json',
+type ProjectMemorySnapshotCandidateKey = Exclude<
+  keyof ProjectMemorySnapshot,
+  'summary'
+>
+
+interface ProjectMemoryBucketDefinition {
+  kind: ProjectMemoryCandidateKind
+  snapshotKey: ProjectMemorySnapshotCandidateKey
+  fileName: string
+  sectionTitle: string
+  docFileName?: string
+  docTitle?: string
+  docDescription?: string
+}
+
+const PROJECT_MEMORY_BUCKETS: ProjectMemoryBucketDefinition[] = [
+  {
+    kind: 'fact',
+    snapshotKey: 'facts',
+    fileName: 'facts.json',
+    sectionTitle: 'Facts',
+  },
+  {
+    kind: 'decision',
+    snapshotKey: 'decisions',
+    fileName: 'decisions.json',
+    sectionTitle: 'Decisions',
+  },
+  {
+    kind: 'preference',
+    snapshotKey: 'preferences',
+    fileName: 'preferences.json',
+    sectionTitle: 'Preferences',
+  },
+  {
+    kind: 'workflow',
+    snapshotKey: 'workflows',
+    fileName: 'workflows.json',
+    sectionTitle: 'Task Workflows',
+  },
+  {
+    kind: 'troubleshooting-pattern',
+    snapshotKey: 'troubleshootingPatterns',
+    fileName: 'troubleshooting-patterns.json',
+    sectionTitle: 'Troubleshooting Patterns',
+    docFileName: 'troubleshooting.md',
+    docTitle: 'Troubleshooting',
+    docDescription: 'How the agent diagnosed and resolved recurring errors.',
+  },
+  {
+    kind: 'user-assist-pattern',
+    snapshotKey: 'userAssistPatterns',
+    fileName: 'user-assist-patterns.json',
+    sectionTitle: 'User Assist Patterns',
+    docFileName: 'collaboration.md',
+    docTitle: 'Collaboration',
+    docDescription: 'How user guidance unblocked the agent or corrected bad assumptions.',
+  },
+  {
+    kind: 'component-workflow',
+    snapshotKey: 'componentWorkflows',
+    fileName: 'component-workflows.json',
+    sectionTitle: 'Component Workflows',
+    docFileName: 'component-workflows.md',
+    docTitle: 'Component Workflows',
+    docDescription: 'Detailed runtime/control-flow behavior and cross-component interactions.',
+  },
+  {
+    kind: 'project-convention',
+    snapshotKey: 'projectConventions',
+    fileName: 'project-conventions.json',
+    sectionTitle: 'Project Conventions',
+    docFileName: 'conventions.md',
+    docTitle: 'Conventions',
+    docDescription: 'Project-specific conventions, edit boundaries, and integration contracts.',
+  },
+  {
+    kind: 'debug-approach',
+    snapshotKey: 'debugApproaches',
+    fileName: 'debug-approaches.json',
+    sectionTitle: 'Debug Approaches',
+    docFileName: 'debug-playbook.md',
+    docTitle: 'Debug Playbook',
+    docDescription: 'Effective debugging, validation, and diagnosis approaches for this repo.',
+  },
+  {
+    kind: 'critical-file',
+    snapshotKey: 'criticalFiles',
+    fileName: 'critical-files.json',
+    sectionTitle: 'Critical Files',
+    docFileName: 'critical-files.md',
+    docTitle: 'Critical Files',
+    docDescription: 'Files and folders to read first, with why they matter and what they contain.',
+  },
 ] as const
 const PROJECT_MEMORY_CANDIDATE_KIND_SET = new Set(PROJECT_MEMORY_CANDIDATE_KINDS)
 const PROJECT_MEMORY_SCOPE_SET = new Set(PROJECT_MEMORY_SCOPES)
@@ -173,6 +263,24 @@ function normalizeSourceEventIds(values: string[]): string[] {
   return uniqueStrings(
     values.map((value) => normalizeWhitespace(String(value))).filter(Boolean),
   ).slice(0, MAX_SOURCE_EVENT_IDS)
+}
+
+function createEmptySnapshot(
+  summary: SessionSummary | null = null,
+): ProjectMemorySnapshot {
+  return {
+    summary,
+    facts: [],
+    decisions: [],
+    preferences: [],
+    workflows: [],
+    troubleshootingPatterns: [],
+    userAssistPatterns: [],
+    componentWorkflows: [],
+    projectConventions: [],
+    debugApproaches: [],
+    criticalFiles: [],
+  }
 }
 
 function buildDeterministicSummary(
@@ -589,44 +697,119 @@ function buildStableFacts(
   return facts
 }
 
+function getActiveCandidates(
+  items: ProjectMemoryCandidate[],
+): ProjectMemoryCandidate[] {
+  return items.filter((item) => item.status === 'active')
+}
+
+function humanizeCandidateKey(value: string): string {
+  const normalized = value.replace(/[-_]+/g, ' ').trim()
+  if (!normalized) {
+    return 'Memory Item'
+  }
+
+  return normalized.replace(/\b\w/g, (match) => match.toUpperCase())
+}
+
+function buildCandidateListSection(
+  sections: string[],
+  title: string,
+  items: ProjectMemoryCandidate[],
+  limit = items.length,
+): void {
+  sections.push(`## ${title}`)
+  const activeItems = getActiveCandidates(items).slice(0, limit)
+  if (activeItems.length === 0) {
+    sections.push('No entries yet.', '')
+    return
+  }
+
+  for (const item of activeItems) {
+    sections.push(`- ${item.content}`)
+  }
+  sections.push('')
+}
+
+function buildFocusedMemoryMarkdown(input: {
+  projectTitle: string
+  title: string
+  intro: string
+  items: ProjectMemoryCandidate[]
+}): string {
+  const sections: string[] = [
+    `# ${input.projectTitle} ${input.title}`,
+    '',
+    input.intro,
+    '',
+  ]
+  const activeItems = getActiveCandidates(input.items)
+
+  if (activeItems.length === 0) {
+    sections.push('No entries yet.', '')
+    return `${sections.join('\n').trim()}\n`
+  }
+
+  for (const item of activeItems) {
+    sections.push(`## ${humanizeCandidateKey(item.key)}`)
+    if (item.scope === 'location') {
+      sections.push('Checkout-specific guidance.', '')
+    }
+    sections.push(item.content, '')
+  }
+
+  return `${sections.join('\n').trim()}\n`
+}
+
 function buildMemoryMarkdown(
   projectTitle: string,
   snapshot: ProjectMemorySnapshot,
+  architectureSnapshot?: ProjectArchitectureSnapshot,
 ): string {
   const sections: string[] = [
     `# ${projectTitle}`,
     '',
+    '## Memory Map',
+    'Start with the focused docs that match the task:',
+  ]
+
+  if (architectureSnapshot) {
+    sections.push('- `architecture.md`: system decomposition, ownership boundaries, and interaction map')
+  }
+
+  for (const bucket of PROJECT_MEMORY_BUCKETS.filter((item) => item.docFileName)) {
+    const items = getActiveCandidates(snapshot[bucket.snapshotKey])
+    if (items.length === 0) {
+      continue
+    }
+
+    sections.push(
+      `- \`${bucket.docFileName}\`: ${bucket.docDescription ?? bucket.sectionTitle}`,
+    )
+  }
+
+  sections.push(
+    '- `summaries/latest.md`: latest session summary captured for this logical project',
+    '',
     '## Latest Summary',
     snapshot.summary?.summary || 'No captured session summary yet.',
     '',
-  ]
-
-  const appendSection = (title: string, items: ProjectMemoryCandidate[]) => {
-    sections.push(`## ${title}`)
-    if (items.length === 0) {
-      sections.push('No entries yet.', '')
-      return
-    }
-
-    for (const item of items) {
-      sections.push(`- ${item.content}`)
-    }
-    sections.push('')
-  }
-
-  appendSection('Facts', snapshot.facts.filter((item) => item.status === 'active'))
-  appendSection(
-    'Decisions',
-    snapshot.decisions.filter((item) => item.status === 'active'),
   )
-  appendSection(
-    'Preferences',
-    snapshot.preferences.filter((item) => item.status === 'active'),
+
+  buildCandidateListSection(sections, 'Decisions', snapshot.decisions, 6)
+  buildCandidateListSection(sections, 'Project Conventions', snapshot.projectConventions, 6)
+  buildCandidateListSection(sections, 'Component Workflows', snapshot.componentWorkflows, 4)
+  buildCandidateListSection(
+    sections,
+    'Troubleshooting Highlights',
+    snapshot.troubleshootingPatterns,
+    4,
   )
-  appendSection(
-    'Workflows',
-    snapshot.workflows.filter((item) => item.status === 'active'),
-  )
+  buildCandidateListSection(sections, 'Debug Playbook', snapshot.debugApproaches, 4)
+  buildCandidateListSection(sections, 'Critical Files', snapshot.criticalFiles, 6)
+  buildCandidateListSection(sections, 'Task Workflows', snapshot.workflows, 4)
+  buildCandidateListSection(sections, 'Preferences', snapshot.preferences, 4)
+  buildCandidateListSection(sections, 'Facts', snapshot.facts, 4)
 
   return `${sections.join('\n').trim()}\n`
 }
@@ -637,14 +820,27 @@ function buildArchitectureMarkdown(
   const moduleNameById = new Map(
     snapshot.modules.map((module) => [module.id, module.name]),
   )
+  const startHereLines = snapshot.modules
+    .flatMap((module) =>
+      module.paths.slice(0, 1).map((repoPath) => `- ${repoPath}: ${module.responsibility}`),
+    )
+    .slice(0, 8)
   const sections: string[] = [
     `# ${snapshot.title} Architecture`,
     '',
     '## System Overview',
     snapshot.systemOverview || 'No architecture overview available yet.',
     '',
-    '## Modules',
   ]
+
+  sections.push('## Start Here')
+  if (startHereLines.length === 0) {
+    sections.push('No guided entry points recorded yet.', '')
+  } else {
+    sections.push(...startHereLines, '')
+  }
+
+  sections.push('## Modules')
 
   if (snapshot.modules.length === 0) {
     sections.push('No module cards available yet.', '')
@@ -889,11 +1085,17 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
 export class ProjectMemoryManager {
   private readonly getLibraryRoot: () => string
   private readonly extractor?: ProjectMemoryExtractor
+  private readonly architectureExtractor?: ProjectArchitectureExtractor
   private diagnosticReporter?: ProjectMemoryDiagnosticReporter
 
-  constructor(getLibraryRoot: () => string, extractor?: ProjectMemoryExtractor) {
+  constructor(
+    getLibraryRoot: () => string,
+    extractor?: ProjectMemoryExtractor,
+    architectureExtractor?: ProjectArchitectureExtractor,
+  ) {
     this.getLibraryRoot = getLibraryRoot
     this.extractor = extractor
+    this.architectureExtractor = architectureExtractor
   }
 
   setDiagnosticReporter(reporter: ProjectMemoryDiagnosticReporter): void {
@@ -956,33 +1158,25 @@ export class ProjectMemoryManager {
   private async readSnapshotFromDirectory(
     projectDirectory: string,
   ): Promise<ProjectMemorySnapshot> {
-    const [summary, facts, decisions, preferences, workflows] = await Promise.all([
+    const [summary, ...candidateSets] = await Promise.all([
       readJsonFile<SessionSummary | null>(
         path.join(projectDirectory, 'summaries', 'latest.json'),
         null,
       ),
-      readJsonFile(path.join(projectDirectory, 'facts.json'), [] as ProjectMemoryCandidate[]),
-      readJsonFile(
-        path.join(projectDirectory, 'decisions.json'),
-        [] as ProjectMemoryCandidate[],
-      ),
-      readJsonFile(
-        path.join(projectDirectory, 'preferences.json'),
-        [] as ProjectMemoryCandidate[],
-      ),
-      readJsonFile(
-        path.join(projectDirectory, 'workflows.json'),
-        [] as ProjectMemoryCandidate[],
+      ...PROJECT_MEMORY_BUCKETS.map((bucket) =>
+        readJsonFile(
+          path.join(projectDirectory, bucket.fileName),
+          [] as ProjectMemoryCandidate[],
+        ),
       ),
     ])
 
-    return {
-      summary: normalizePersistedSummary(summary),
-      facts,
-      decisions,
-      preferences,
-      workflows,
-    }
+    const snapshot = createEmptySnapshot(normalizePersistedSummary(summary))
+    PROJECT_MEMORY_BUCKETS.forEach((bucket, index) => {
+      snapshot[bucket.snapshotKey] = candidateSets[index] ?? []
+    })
+
+    return snapshot
   }
 
   private async listProjectDirectories(): Promise<string[]> {
@@ -1021,14 +1215,10 @@ export class ProjectMemoryManager {
       identity: input.identity,
     })
 
-    for (const fileName of PROJECT_MEMORY_CANDIDATE_FILES) {
-      const key = fileName.replace('.json', '') as keyof Omit<
-        ProjectMemorySnapshot,
-        'summary'
-      >
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
       await writeJsonFile(
-        path.join(input.projectDirectory, fileName),
-        input.snapshot[key],
+        path.join(input.projectDirectory, bucket.fileName),
+        input.snapshot[bucket.snapshotKey],
       )
     }
 
@@ -1063,9 +1253,28 @@ export class ProjectMemoryManager {
       )
     }
 
+    for (const bucket of PROJECT_MEMORY_BUCKETS.filter((item) => item.docFileName)) {
+      await writeFile(
+        path.join(input.projectDirectory, bucket.docFileName as string),
+        buildFocusedMemoryMarkdown({
+          projectTitle: input.projectTitle,
+          title: bucket.docTitle ?? bucket.sectionTitle,
+          intro:
+            bucket.docDescription ??
+            `${bucket.sectionTitle} captured for this logical project.`,
+          items: input.snapshot[bucket.snapshotKey],
+        }),
+        'utf8',
+      )
+    }
+
     await writeFile(
       path.join(input.projectDirectory, 'memory.md'),
-      buildMemoryMarkdown(input.projectTitle, input.snapshot),
+      buildMemoryMarkdown(
+        input.projectTitle,
+        input.snapshot,
+        input.architectureSnapshot,
+      ),
       'utf8',
     )
   }
@@ -1133,8 +1342,10 @@ export class ProjectMemoryManager {
     location: ProjectLocation | null,
     sessionId?: string,
   ): Promise<ProjectArchitectureSnapshot | null> {
+    let heuristicSnapshot: ProjectArchitectureSnapshot | null = null
+
     try {
-      return await indexProjectArchitecture({
+      heuristicSnapshot = await indexProjectArchitecture({
         projectId: deriveProjectMemoryKey(project),
         title: deriveProjectMemoryTitle(project),
         rootPath: location?.rootPath ?? project.rootPath,
@@ -1142,28 +1353,46 @@ export class ProjectMemoryManager {
     } catch (error) {
       this.reportDiagnostic({
         level: 'warning',
-        code: 'architecture-index-failed',
+        code: 'architecture-heuristic-index-failed',
         message:
           error instanceof Error
             ? error.message
-            : 'Architecture indexing failed.',
+            : 'Heuristic architecture indexing failed.',
         projectId: project.id,
         sessionId,
       })
-      return null
+    }
+
+    if (!this.architectureExtractor) {
+      return heuristicSnapshot
+    }
+
+    try {
+      const synthesizedSnapshot = await this.architectureExtractor.extract({
+        project,
+        location,
+        heuristicSnapshot,
+      })
+      return synthesizedSnapshot ?? heuristicSnapshot
+    } catch (error) {
+      this.reportDiagnostic({
+        level: 'warning',
+        code: 'architecture-agent-index-failed',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Primary-agent architecture synthesis failed.',
+        projectId: project.id,
+        sessionId,
+      })
+      return heuristicSnapshot
     }
   }
 
   async readSnapshot(project: ProjectConfig): Promise<ProjectMemorySnapshot> {
     const projectDirectory = this.getProjectDirectory(project)
     if (!projectDirectory) {
-      return {
-        summary: null,
-        facts: [],
-        decisions: [],
-        preferences: [],
-        workflows: [],
-      }
+      return createEmptySnapshot()
     }
 
     return await this.readSnapshotFromDirectory(projectDirectory)
@@ -1337,23 +1566,18 @@ export class ProjectMemoryManager {
           extractorResult.candidates,
         )
       : []
-
-    const facts = this.mergeCandidates(
-      snapshot.facts,
-      [...stableFacts, ...extractedCandidates.filter((candidate) => candidate.kind === 'fact')],
-    )
-    const decisions = this.mergeCandidates(
-      snapshot.decisions,
-      extractedCandidates.filter((candidate) => candidate.kind === 'decision'),
-    )
-    const preferences = this.mergeCandidates(
-      snapshot.preferences,
-      extractedCandidates.filter((candidate) => candidate.kind === 'preference'),
-    )
-    const workflows = this.mergeCandidates(
-      snapshot.workflows,
-      extractedCandidates.filter((candidate) => candidate.kind === 'workflow'),
-    )
+    const nextSnapshot = createEmptySnapshot(summary)
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
+      const incoming = extractedCandidates.filter(
+        (candidate) => candidate.kind === bucket.kind,
+      )
+      const mergedIncoming =
+        bucket.kind === 'fact' ? [...stableFacts, ...incoming] : incoming
+      nextSnapshot[bucket.snapshotKey] = this.mergeCandidates(
+        snapshot[bucket.snapshotKey],
+        mergedIncoming,
+      )
+    }
 
     await writeJsonFile(path.join(projectDirectory, 'summaries', `${input.session.id}.json`), summary)
     await this.writeCanonicalArtifacts({
@@ -1363,13 +1587,7 @@ export class ProjectMemoryManager {
       createdAt: input.project.createdAt,
       updatedAt: timestamp,
       identity: buildPortableProjectIdentity(input.project),
-      snapshot: {
-        summary,
-        facts,
-        decisions,
-        preferences,
-        workflows,
-      },
+      snapshot: nextSnapshot,
       architectureSnapshot: architectureSnapshot ?? undefined,
     })
   }
@@ -1430,35 +1648,22 @@ export class ProjectMemoryManager {
       result.removedEmptySummaryCount += normalizedSummaries.removedCount
 
       const fallbackProjectId = matchedProject?.id ?? projectId
-      const facts = normalizeCandidateSet(
-        await readJsonFile(path.join(projectDirectory, 'facts.json'), [] as unknown[]),
-        fallbackProjectId,
-        timestamp,
-      )
-      const decisions = normalizeCandidateSet(
-        await readJsonFile(path.join(projectDirectory, 'decisions.json'), [] as unknown[]),
-        fallbackProjectId,
-        timestamp,
-      )
-      const preferences = normalizeCandidateSet(
-        await readJsonFile(
-          path.join(projectDirectory, 'preferences.json'),
-          [] as unknown[],
-        ),
-        fallbackProjectId,
-        timestamp,
-      )
-      const workflows = normalizeCandidateSet(
-        await readJsonFile(path.join(projectDirectory, 'workflows.json'), [] as unknown[]),
-        fallbackProjectId,
-        timestamp,
-      )
-
-      result.prunedCandidateCount +=
-        facts.prunedCount +
-        decisions.prunedCount +
-        preferences.prunedCount +
-        workflows.prunedCount
+      const normalizedBuckets = new Map<
+        ProjectMemorySnapshotCandidateKey,
+        NormalizedCandidateSet
+      >()
+      for (const bucket of PROJECT_MEMORY_BUCKETS) {
+        const normalizedSet = normalizeCandidateSet(
+          await readJsonFile(
+            path.join(projectDirectory, bucket.fileName),
+            [] as unknown[],
+          ),
+          fallbackProjectId,
+          timestamp,
+        )
+        normalizedBuckets.set(bucket.snapshotKey, normalizedSet)
+        result.prunedCandidateCount += normalizedSet.prunedCount
+      }
 
       let architectureSnapshot: ProjectArchitectureSnapshot | undefined
       if (matchedProject) {
@@ -1481,13 +1686,11 @@ export class ProjectMemoryManager {
         identity: matchedProject
           ? buildPortableProjectIdentity(matchedProject)
           : normalizeStoredProjectIdentity(storedProject?.identity),
-        snapshot: {
-          summary: normalizedSummaries.latest,
-          facts: facts.candidates,
-          decisions: decisions.candidates,
-          preferences: preferences.candidates,
-          workflows: workflows.candidates,
-        },
+        snapshot: PROJECT_MEMORY_BUCKETS.reduce((snapshot, bucket) => {
+          snapshot[bucket.snapshotKey] =
+            normalizedBuckets.get(bucket.snapshotKey)?.candidates ?? []
+          return snapshot
+        }, createEmptySnapshot(normalizedSummaries.latest)),
         architectureSnapshot,
       })
 
@@ -1520,10 +1723,9 @@ export class ProjectMemoryManager {
     ])
     const hasMaterial =
       Boolean(snapshot.summary?.summary) ||
-      snapshot.facts.length > 0 ||
-      snapshot.decisions.length > 0 ||
-      snapshot.preferences.length > 0 ||
-      snapshot.workflows.length > 0 ||
+      PROJECT_MEMORY_BUCKETS.some(
+        (bucket) => snapshot[bucket.snapshotKey].length > 0,
+      ) ||
       Boolean(architectureSnapshot?.systemOverview) ||
       (architectureSnapshot?.modules.length ?? 0) > 0
     if (!hasMaterial) {
@@ -1559,6 +1761,36 @@ export class ProjectMemoryManager {
       locationId,
       input.query,
     ).slice(0, 4)
+    const relevantTroubleshooting = selectRelevantEntries(
+      snapshot.troubleshootingPatterns,
+      locationId,
+      input.query,
+    ).slice(0, 4)
+    const relevantUserAssistPatterns = selectRelevantEntries(
+      snapshot.userAssistPatterns,
+      locationId,
+      input.query,
+    ).slice(0, 3)
+    const relevantComponentWorkflows = selectRelevantEntries(
+      snapshot.componentWorkflows,
+      locationId,
+      input.query,
+    ).slice(0, 4)
+    const relevantProjectConventions = selectRelevantEntries(
+      snapshot.projectConventions,
+      locationId,
+      input.query,
+    ).slice(0, 4)
+    const relevantDebugApproaches = selectRelevantEntries(
+      snapshot.debugApproaches,
+      locationId,
+      input.query,
+    ).slice(0, 4)
+    const relevantCriticalFiles = selectRelevantEntries(
+      snapshot.criticalFiles,
+      locationId,
+      input.query,
+    ).slice(0, 5)
     const relevantModules = architectureSnapshot
       ? selectRelevantModules(architectureSnapshot.modules, input.query).slice(0, 3)
       : []
@@ -1575,33 +1807,43 @@ export class ProjectMemoryManager {
     )
     const fileReferences = [
       path.join(projectDirectory, 'memory.md'),
+      path.join(projectDirectory, 'summaries', 'latest.md'),
       ...(architectureSnapshot
         ? [
             path.join(projectDirectory, 'architecture.md'),
             path.join(projectDirectory, 'architecture.json'),
           ]
         : []),
-      path.join(projectDirectory, 'decisions.json'),
-      path.join(projectDirectory, 'preferences.json'),
-      path.join(projectDirectory, 'summaries', 'latest.md'),
+      ...PROJECT_MEMORY_BUCKETS.flatMap((bucket) => {
+        if (!bucket.docFileName || getActiveCandidates(snapshot[bucket.snapshotKey]).length === 0) {
+          return []
+        }
+
+        return [path.join(projectDirectory, bucket.docFileName)]
+      }),
     ]
     const summaryExcerpt = trimExcerpt(snapshot.summary?.summary ?? null, 240)
+    const formatPreview = (
+      items: ProjectMemoryCandidate[],
+      limit = 2,
+    ): string =>
+      items
+        .slice(0, limit)
+        .map((entry) => `- ${entry.content}`)
+        .join('\n')
     const projectFactPreview = relevantFacts
       .slice(0, 3)
       .map((entry) => `- ${entry.content}`)
       .join('\n')
-    const decisionPreview = relevantDecisions
-      .slice(0, 2)
-      .map((entry) => `- ${entry.content}`)
-      .join('\n')
-    const preferencePreview = relevantPreferences
-      .slice(0, 2)
-      .map((entry) => `- ${entry.content}`)
-      .join('\n')
-    const workflowPreview = relevantWorkflows
-      .slice(0, 2)
-      .map((entry) => `- ${entry.content}`)
-      .join('\n')
+    const decisionPreview = formatPreview(relevantDecisions)
+    const preferencePreview = formatPreview(relevantPreferences)
+    const workflowPreview = formatPreview(relevantWorkflows)
+    const troubleshootingPreview = formatPreview(relevantTroubleshooting)
+    const userAssistPreview = formatPreview(relevantUserAssistPatterns)
+    const componentWorkflowPreview = formatPreview(relevantComponentWorkflows)
+    const conventionPreview = formatPreview(relevantProjectConventions)
+    const debugPreview = formatPreview(relevantDebugApproaches)
+    const criticalFilePreview = formatPreview(relevantCriticalFiles, 3)
     const modulePreview = relevantModules
       .map((module) => {
         const pathLabel = module.paths[0] ? ` [${module.paths[0]}]` : ''
@@ -1628,6 +1870,16 @@ export class ProjectMemoryManager {
       locationLine,
       summaryExcerpt ? `Latest summary: ${summaryExcerpt}` : null,
       architectureExcerpt ? `Architecture overview: ${architectureExcerpt}` : null,
+      conventionPreview ? `Project conventions:\n${conventionPreview}` : null,
+      componentWorkflowPreview
+        ? `Component workflows:\n${componentWorkflowPreview}`
+        : null,
+      troubleshootingPreview
+        ? `Troubleshooting patterns:\n${troubleshootingPreview}`
+        : null,
+      debugPreview ? `Debug playbook:\n${debugPreview}` : null,
+      criticalFilePreview ? `Critical files:\n${criticalFilePreview}` : null,
+      userAssistPreview ? `User assist patterns:\n${userAssistPreview}` : null,
       projectFactPreview ? `Relevant facts:\n${projectFactPreview}` : null,
       decisionPreview ? `Active decisions:\n${decisionPreview}` : null,
       preferencePreview ? `Project preferences:\n${preferencePreview}` : null,

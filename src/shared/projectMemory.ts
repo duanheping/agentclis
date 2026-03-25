@@ -3,6 +3,12 @@ export const PROJECT_MEMORY_CANDIDATE_KINDS = [
   'decision',
   'preference',
   'workflow',
+  'troubleshooting-pattern',
+  'user-assist-pattern',
+  'component-workflow',
+  'project-convention',
+  'debug-approach',
+  'critical-file',
 ] as const
 
 export type ProjectMemoryCandidateKind =
@@ -96,6 +102,12 @@ export interface ProjectMemorySnapshot {
   decisions: ProjectMemoryCandidate[]
   preferences: ProjectMemoryCandidate[]
   workflows: ProjectMemoryCandidate[]
+  troubleshootingPatterns: ProjectMemoryCandidate[]
+  userAssistPatterns: ProjectMemoryCandidate[]
+  componentWorkflows: ProjectMemoryCandidate[]
+  projectConventions: ProjectMemoryCandidate[]
+  debugApproaches: ProjectMemoryCandidate[]
+  criticalFiles: ProjectMemoryCandidate[]
 }
 
 export interface AssembledProjectContext {

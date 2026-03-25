@@ -1,60 +1,25 @@
-import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
-
+import type {
+  ProjectMemoryCandidateKind,
+  ProjectMemoryScope,
+} from '../src/shared/projectMemory'
+import {
+  PROJECT_MEMORY_CANDIDATE_KINDS,
+  PROJECT_MEMORY_SCOPES,
+} from '../src/shared/projectMemory'
 import type { SkillAiMergeAgent } from '../src/shared/skills'
 import type {
   ProjectMemoryExtractor,
   ProjectMemoryExtractionResult,
 } from './projectMemoryManager'
+import { runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
 
-const VALID_CANDIDATE_KINDS = new Set([
-  'fact',
-  'decision',
-  'preference',
-  'workflow',
-])
-const VALID_CANDIDATE_SCOPES = new Set(['project', 'location'])
+const VALID_CANDIDATE_KINDS = new Set(PROJECT_MEMORY_CANDIDATE_KINDS)
+const VALID_CANDIDATE_SCOPES = new Set(PROJECT_MEMORY_SCOPES)
 export const MAX_PROJECT_MEMORY_PROMPT_BYTES = 240_000
 const MAX_TRANSCRIPT_DIGEST_BYTES = 120_000
 const MAX_TRANSCRIPT_EVENT_PREVIEW_BYTES = 90_000
 const MAX_TRANSCRIPT_EVENT_PREVIEW_LINES = 160
 const MAX_TRANSCRIPT_EVENT_PREVIEW_CHARS = 320
-const MAX_PROCESS_OUTPUT_BYTES = 4_000
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  if (maxBytes <= 0) {
-    return ''
-  }
-
-  if (Buffer.byteLength(value, 'utf8') <= maxBytes) {
-    return value
-  }
-
-  const suffix = '...'
-  const suffixBytes = Buffer.byteLength(suffix, 'utf8')
-  if (suffixBytes >= maxBytes) {
-    return suffix.slice(0, maxBytes)
-  }
-
-  let low = 0
-  let high = value.length
-  let best = ''
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2)
-    const candidate = value.slice(0, mid)
-    if (Buffer.byteLength(candidate, 'utf8') <= maxBytes - suffixBytes) {
-      best = candidate
-      low = mid + 1
-    } else {
-      high = mid - 1
-    }
-  }
-
-  return `${best.trimEnd()}${suffix}`
-}
 
 function buildTranscriptDigestForPrompt(
   normalizedTranscript: string,
@@ -150,30 +115,6 @@ function buildTranscriptPreviewForPrompt(
   return preview
 }
 
-function formatProcessOutput(label: string, output: string): string | null {
-  const trimmed = output.trim()
-  if (!trimmed) {
-    return null
-  }
-
-  return `${label}: ${truncateUtf8(trimmed, MAX_PROCESS_OUTPUT_BYTES)}`
-}
-
-function quoteWindowsArg(value: string): string {
-  if (!/[\s"]/u.test(value)) {
-    return value
-  }
-
-  const escaped = value
-    .replace(/(\\*)"/g, '$1$1\\"')
-    .replace(/(\\+)$/g, '$1$1')
-  return `"${escaped}"`
-}
-
-function joinCommandTokens(tokens: string[]): string {
-  return tokens.map((token) => quoteWindowsArg(token)).join(' ')
-}
-
 function buildSchema(): string {
   return JSON.stringify(
     {
@@ -200,11 +141,11 @@ function buildSchema(): string {
             properties: {
               kind: {
                 type: 'string',
-                enum: ['fact', 'decision', 'preference', 'workflow'],
+                enum: PROJECT_MEMORY_CANDIDATE_KINDS,
               },
               scope: {
                 type: 'string',
-                enum: ['project', 'location'],
+                enum: PROJECT_MEMORY_SCOPES,
               },
               key: {
                 type: 'string',
@@ -243,87 +184,45 @@ export function buildPrompt(
     MAX_TRANSCRIPT_EVENT_PREVIEW_BYTES,
   )
 
-  return truncateUtf8([
-    'You are extracting durable project memory from an Agent CLIs session transcript.',
-    'Return only structured JSON matching the provided schema.',
-    'Focus on information that is useful across future sessions.',
-    'Facts should be stable and verifiable.',
-    'Decisions should capture chosen technical directions or constraints.',
-    'Preferences should capture durable user or project defaults.',
-    'Workflows should capture repeatable task recipes.',
-    'Do not include transient errors, throwaway exploration, or machine-specific absolute paths.',
-    'If a memory only applies to the current local checkout, use scope="location".',
-    `Logical project title: ${input.project.title}`,
-    `Managed CLI session title: ${input.session.title}`,
-    `Current checkout label: ${input.location?.label ?? 'n/a'}`,
-    `Known remote fingerprint: ${input.project.identity?.remoteFingerprint ?? 'n/a'}`,
-    'Transcript digest:',
-    transcriptDigest,
-    '',
-    'Transcript events with ids:',
-    transcriptPreview,
-  ].join('\n'), MAX_PROJECT_MEMORY_PROMPT_BYTES)
-}
-
-async function runCommand(
-  command: string,
-  workingDirectory: string,
-  args: string[],
-  input: string | null,
-): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const child =
-      process.platform === 'win32'
-        ? spawn(
-            process.env.ComSpec || 'cmd.exe',
-            ['/Q', '/D', '/C', joinCommandTokens([command, ...args])],
-            {
-              cwd: workingDirectory,
-              stdio: 'pipe',
-              windowsHide: true,
-            },
-          )
-        : spawn(command, args, {
-            cwd: workingDirectory,
-            stdio: 'pipe',
-          })
-
-    let stdout = ''
-    let stderr = ''
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', (error) => {
-      reject(error)
-    })
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout)
-        return
-      }
-
-      reject(
-        new Error(
-          [
-            `${command} exited with code ${code ?? 'unknown'}.`,
-            formatProcessOutput('stderr', stderr),
-            formatProcessOutput('stdout', stdout),
-          ]
-            .filter(Boolean)
-            .join(' '),
-        ),
-      )
-    })
-
-    if (input !== null) {
-      child.stdin.write(input)
-    }
-    child.stdin.end()
-  })
+  return truncateUtf8(
+    [
+      'You are extracting durable project memory from an Agent CLIs session.',
+      'Return only structured JSON matching the provided schema.',
+      'The goal is to reduce analysis time in future sessions.',
+      'Use the transcript as the primary source, and inspect the repository when that helps sharpen the memory.',
+      'Do not modify the repository.',
+      'Prefer high-signal, project-specific guidance over generic summaries.',
+      'If evidence is weak, omit the item.',
+      'Memory kinds:',
+      '- fact: stable verifiable project facts that will stay useful',
+      '- decision: technical choices, constraints, or chosen approaches',
+      '- preference: durable user or team defaults',
+      '- workflow: repeatable task recipes for doing work in this repo',
+      '- troubleshooting-pattern: how the agent diagnosed and fixed an error, including the decisive signal and the resolution',
+      '- user-assist-pattern: how the user unblocked the task or corrected the agent, and when to ask for that help again',
+      '- component-workflow: how a concrete subsystem works end to end, including trigger, state transitions, collaborating components, and outputs',
+      '- project-convention: repo-specific conventions, edit boundaries, naming/layout rules, generated code rules, and integration contracts',
+      '- debug-approach: effective debugging or validation playbooks that worked for this project',
+      '- critical-file: a high-value file or folder to read first, with why it matters and what structure it contains',
+      'Rules:',
+      '- Keep every content field self-contained and directly usable by a future agent.',
+      '- Use relative repo paths when useful. Never include machine-specific absolute paths.',
+      '- Do not record branch names, temporary worktrees, or ephemeral environment details.',
+      '- sourceEventIds may be empty if the item mainly comes from repo inspection rather than a specific transcript event.',
+      '- Use scope="location" only if the guidance is specific to this local checkout.',
+      `Logical project title: ${input.project.title}`,
+      `Managed CLI session title: ${input.session.title}`,
+      `Current checkout label: ${input.location?.label ?? 'n/a'}`,
+      `Repository root: ${input.location?.rootPath ?? input.project.rootPath}`,
+      `Known remote fingerprint: ${input.project.identity?.remoteFingerprint ?? 'n/a'}`,
+      'Transcript digest:',
+      transcriptDigest,
+      '',
+      'Transcript events with ids:',
+      transcriptPreview,
+    ].join('\n'),
+    MAX_PROJECT_MEMORY_PROMPT_BYTES,
+  )
 }
 
 export function parseProjectMemoryResponse(
@@ -342,7 +241,14 @@ export function parseProjectMemoryResponse(
             return []
           }
 
-          const normalized = candidate as ProjectMemoryExtractionResult['candidates'][number]
+          const normalized = candidate as {
+            kind: ProjectMemoryCandidateKind
+            scope: ProjectMemoryScope
+            key: string
+            content: string
+            confidence: number
+            sourceEventIds: string[]
+          }
           if (
             !VALID_CANDIDATE_KINDS.has(normalized.kind) ||
             !VALID_CANDIDATE_SCOPES.has(normalized.scope) ||
@@ -361,86 +267,15 @@ export function parseProjectMemoryResponse(
               content: normalized.content,
               confidence: normalized.confidence,
               sourceEventIds: Array.isArray(normalized.sourceEventIds)
-                ? normalized.sourceEventIds.filter((value): value is string => typeof value === 'string')
+                ? normalized.sourceEventIds.filter(
+                    (value): value is string => typeof value === 'string',
+                  )
                 : [],
             },
           ]
         })
       : [],
   }
-}
-
-async function runCodexStructured(
-  workingDirectory: string,
-  schemaPath: string,
-  outputPath: string,
-  prompt: string,
-): Promise<string> {
-  await runCommand(
-    'codex',
-    workingDirectory,
-    [
-      'exec',
-      '--skip-git-repo-check',
-      '--full-auto',
-      '--color',
-      'never',
-      '--output-schema',
-      schemaPath,
-      '--output-last-message',
-      outputPath,
-      '-',
-    ],
-    prompt,
-  )
-
-  return await readFile(outputPath, 'utf8')
-}
-
-async function runClaudeStructured(
-  workingDirectory: string,
-  schema: string,
-  prompt: string,
-): Promise<string> {
-  return await runCommand(
-    'claude',
-    workingDirectory,
-    [
-      '--print',
-      '--output-format',
-      'json',
-      '--json-schema',
-      schema,
-      '--no-session-persistence',
-      '--permission-mode',
-      'dontAsk',
-    ],
-    prompt,
-  )
-}
-
-async function runCopilotStructured(
-  workingDirectory: string,
-  prompt: string,
-): Promise<string> {
-  return await runCommand(
-    'copilot',
-    workingDirectory,
-    [
-      '--output-format',
-      'json',
-      '--stream',
-      'off',
-      '--allow-all',
-      '--no-ask-user',
-      '--no-custom-instructions',
-      '--add-dir',
-      workingDirectory,
-      '--prompt',
-      `${prompt}\nReturn only JSON. Do not wrap it in markdown.`,
-    ],
-    null,
-  )
 }
 
 export class ProjectMemoryAgentExtractor implements ProjectMemoryExtractor {
@@ -460,28 +295,20 @@ export class ProjectMemoryAgentExtractor implements ProjectMemoryExtractor {
       }
     }
 
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-project-memory-'))
+    const agent = this.getAgent()
+    const schema = buildSchema()
+    const prompt = buildPrompt(input)
+    const rawOutput = await runStructuredAgent({
+      agent,
+      schema,
+      prompt,
+      contextDirectories: [
+        input.location?.rootPath ?? '',
+        input.project.identity?.repoRoot ?? '',
+        input.project.rootPath,
+      ],
+    })
 
-    try {
-      const agent = this.getAgent()
-      const schema = buildSchema()
-      const schemaPath = path.join(tempRoot, 'response-schema.json')
-      const outputPath = path.join(tempRoot, 'response.json')
-      await writeFile(schemaPath, `${schema}\n`, 'utf8')
-      const prompt = buildPrompt(input)
-
-      let rawOutput = ''
-      if (agent === 'codex') {
-        rawOutput = await runCodexStructured(tempRoot, schemaPath, outputPath, prompt)
-      } else if (agent === 'claude') {
-        rawOutput = await runClaudeStructured(tempRoot, schema, prompt)
-      } else {
-        rawOutput = await runCopilotStructured(tempRoot, prompt)
-      }
-
-      return parseProjectMemoryResponse(rawOutput)
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined)
-    }
+    return parseProjectMemoryResponse(rawOutput)
   }
 }

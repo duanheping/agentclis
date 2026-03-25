@@ -32,6 +32,7 @@ import {
   getProjectGitOverview,
   openProjectInTarget,
 } from './projectTools'
+import { ProjectArchitectureAgentExtractor } from './projectArchitectureAgent'
 import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'
 import { ProjectMemoryManager } from './projectMemoryManager'
 import { ProjectIdentityResolver } from './projectIdentity'
@@ -65,6 +66,9 @@ const transcriptStore = new TranscriptStore()
 const projectMemoryManager = new ProjectMemoryManager(
   () => skillLibraryManager.getSettings().libraryRoot,
   new ProjectMemoryAgentExtractor(
+    () => skillLibraryManager.getSettings().primaryMergeAgent,
+  ),
+  new ProjectArchitectureAgentExtractor(
     () => skillLibraryManager.getSettings().primaryMergeAgent,
   ),
 )
