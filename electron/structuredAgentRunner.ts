@@ -13,7 +13,7 @@ function formatProcessOutput(label: string, output: string): string | null {
     return null
   }
 
-  return `${label}: ${truncateUtf8(trimmed, MAX_PROCESS_OUTPUT_BYTES)}`
+  return `${label}: ${truncateUtf8Tail(trimmed, MAX_PROCESS_OUTPUT_BYTES)}`
 }
 
 function quoteWindowsArg(value: string): string {
@@ -123,6 +123,43 @@ export function truncateUtf8(value: string, maxBytes: number): string {
   }
 
   return `${best.trimEnd()}${suffix}`
+}
+
+export function truncateUtf8Tail(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) {
+    return ''
+  }
+
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) {
+    return value
+  }
+
+  const prefix = '...'
+  const prefixBytes = Buffer.byteLength(prefix, 'utf8')
+  if (prefixBytes >= maxBytes) {
+    return prefix.slice(0, maxBytes)
+  }
+
+  let low = 0
+  let high = value.length
+  let bestStart = value.length
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2)
+    const candidate = value.slice(mid)
+    if (Buffer.byteLength(candidate, 'utf8') <= maxBytes - prefixBytes) {
+      bestStart = mid
+      high = mid - 1
+    } else {
+      low = mid + 1
+    }
+  }
+
+  return `${prefix}${value.slice(bestStart).trimStart()}`
+}
+
+function quotePowerShellString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 async function listAccessibleDirectories(
@@ -261,4 +298,112 @@ export async function runStructuredAgent(input: {
   } finally {
     await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined)
   }
+}
+
+export interface PreparedStructuredAgent {
+  tempRoot: string
+  outputPath: string
+  startupCommand: string
+  cwd: string
+}
+
+export async function prepareStructuredAgent(input: {
+  agent: SkillAiMergeAgent
+  schema: string
+  prompt: string
+  contextDirectories?: string[]
+}): Promise<PreparedStructuredAgent> {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-structured-agent-'))
+  const contextDirectories = await listAccessibleDirectories(
+    input.contextDirectories ?? [],
+  )
+  const schemaPath = path.join(tempRoot, 'response-schema.json')
+  const outputPath = path.join(tempRoot, 'response.json')
+  const promptPath = path.join(tempRoot, 'prompt.txt')
+  const scriptPath = path.join(tempRoot, 'run.ps1')
+
+  await writeFile(schemaPath, `${input.schema}\n`, 'utf8')
+  await writeFile(promptPath, input.prompt, 'utf8')
+
+  const scriptContent = buildAnalysisScript({
+    agent: input.agent,
+    promptPath,
+    schemaPath,
+    outputPath,
+    contextDirectories,
+  })
+  await writeFile(scriptPath, scriptContent, 'utf8')
+
+  const startupCommand = `& ${quotePowerShellString(scriptPath)}; exit $LASTEXITCODE`
+
+  return {
+    tempRoot,
+    outputPath,
+    startupCommand,
+    cwd: input.agent === 'claude'
+      ? (contextDirectories[0] ?? tempRoot)
+      : tempRoot,
+  }
+}
+
+function buildAnalysisScript(input: {
+  agent: SkillAiMergeAgent
+  promptPath: string
+  schemaPath: string
+  outputPath: string
+  contextDirectories: string[]
+}): string {
+  const q = quotePowerShellString
+  const lines: string[] = ['$ErrorActionPreference = "Continue"']
+
+  if (input.agent === 'codex') {
+    const dirArgs = input.contextDirectories
+      .map((d) => `--add-dir ${q(d)}`)
+      .join(' ')
+    lines.push(
+      `$prompt = Get-Content -Raw ${q(input.promptPath)}`,
+      [
+        '$prompt | & codex exec',
+        '--skip-git-repo-check',
+        '--full-auto',
+        dirArgs,
+        `--output-schema ${q(input.schemaPath)}`,
+        `--output-last-message ${q(input.outputPath)}`,
+        '-',
+      ].filter(Boolean).join(' '),
+    )
+  } else if (input.agent === 'claude') {
+    lines.push(
+      `$schema = Get-Content -Raw ${q(input.schemaPath)}`,
+      `$prompt = Get-Content -Raw ${q(input.promptPath)}`,
+      [
+        '$prompt | & claude --print --output-format json',
+        '--json-schema $schema',
+        '--no-session-persistence --permission-mode dontAsk',
+        `| Tee-Object -FilePath ${q(input.outputPath)}`,
+      ].join(' '),
+    )
+  } else {
+    const dirArgs = input.contextDirectories
+      .map((d) => `--add-dir ${q(d)}`)
+      .join(' ')
+    lines.push(
+      `$prompt = (Get-Content -Raw ${q(input.promptPath)}) + "\`nReturn only JSON. Do not wrap it in markdown."`,
+      [
+        '& copilot --output-format json --stream off',
+        '--allow-all --no-ask-user --no-custom-instructions',
+        dirArgs,
+        '--prompt $prompt',
+        `| Tee-Object -FilePath ${q(input.outputPath)}`,
+      ].filter(Boolean).join(' '),
+    )
+  }
+
+  return lines.join('\n') + '\n'
+}
+
+export async function cleanupStructuredAgentTemp(
+  tempRoot: string,
+): Promise<void> {
+  await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined)
 }

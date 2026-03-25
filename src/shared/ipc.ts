@@ -60,6 +60,8 @@ export const IPC_CHANNELS = {
   updateSkillLibrarySettings: 'skills:update-settings',
   analyzeProjectArchitecture: 'project-memory:analyze-architecture',
   analyzeProjectSessions: 'project-memory:analyze-sessions',
+  startArchitectureAnalysisSession: 'project-memory:start-architecture-analysis',
+  startSessionsAnalysisSession: 'project-memory:start-sessions-analysis',
   getSkillSyncStatus: 'skills:get-status',
   syncSkills: 'skills:sync',
   resolveSkillConflict: 'skills:resolve-conflict',
@@ -108,6 +110,8 @@ export interface AgentCliApi {
   ): Promise<SkillLibrarySettings>
   analyzeProjectArchitecture(): Promise<ProjectArchitectureAnalysisResult>
   analyzeProjectSessions(): Promise<ProjectSessionsAnalysisResult>
+  startArchitectureAnalysisSession(): Promise<SessionSnapshot>
+  startSessionsAnalysisSession(): Promise<SessionSnapshot>
   getSkillSyncStatus(): Promise<SkillSyncStatus>
   syncSkills(): Promise<SkillSyncResult>
   resolveSkillConflict(

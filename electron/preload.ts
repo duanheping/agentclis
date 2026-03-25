@@ -52,6 +52,10 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.analyzeProjectArchitecture),
   analyzeProjectSessions: () =>
     ipcRenderer.invoke(IPC_CHANNELS.analyzeProjectSessions),
+  startArchitectureAnalysisSession: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.startArchitectureAnalysisSession),
+  startSessionsAnalysisSession: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.startSessionsAnalysisSession),
   getSkillSyncStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getSkillSyncStatus),
   syncSkills: () => ipcRenderer.invoke(IPC_CHANNELS.syncSkills),
   resolveSkillConflict: (skillName, sourceRoot) =>

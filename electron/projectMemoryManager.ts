@@ -31,13 +31,18 @@ import type {
   ProjectArchitectureSnapshot,
 } from '../src/shared/projectArchitecture'
 import type { ProjectConfig, SessionConfig } from '../src/shared/session'
-import type { ProjectArchitectureExtractor } from './projectArchitectureAgent'
+import {
+  finalizeArchitectureExtraction,
+  type ProjectArchitectureExtractor,
+} from './projectArchitectureAgent'
 import { indexProjectArchitecture } from './projectArchitectureIndexer'
+import { parseProjectMemoryResponse } from './projectMemoryAgent'
 import type {
   HistoricalProjectSessionDescriptor,
   ProjectSessionHistoryAnalyzer,
 } from './projectSessionHistoryAgent'
 import { truncateUtf8 } from './structuredAgentRunner'
+import type { PreparedStructuredAgent } from './structuredAgentRunner'
 
 const MEMORY_ROOT_DIRECTORY = '.agenclis-memory'
 const MAX_SOURCE_EVENT_IDS = 32
@@ -2088,6 +2093,215 @@ export class ProjectMemoryManager {
     return {
       analyzedProjectCount,
       analyzedSessionCount,
+    }
+  }
+
+  async prepareArchitectureAnalysis(
+    projects: ProjectConfig[],
+  ): Promise<{
+    project: ProjectConfig
+    prepared: PreparedStructuredAgent
+  } | null> {
+    if (!this.architectureExtractor?.prepare) {
+      return null
+    }
+
+    const projectByMemoryKey = buildLatestProjectsByMemoryKey(projects)
+    const project = projectByMemoryKey.values().next().value as ProjectConfig | undefined
+    if (!project) {
+      return null
+    }
+
+    const prepared = await this.architectureExtractor.prepare({
+      project,
+      location: null,
+      heuristicSnapshot: null,
+    })
+
+    return { project, prepared }
+  }
+
+  async finalizeArchitectureAnalysis(
+    project: ProjectConfig,
+    rawOutput: string,
+  ): Promise<ProjectArchitectureAnalysisResult> {
+    const projectDirectory = this.getProjectDirectory(project)
+    if (!projectDirectory) {
+      return { analyzedProjectCount: 0 }
+    }
+
+    const architectureSnapshot = finalizeArchitectureExtraction(rawOutput, project)
+    if (!architectureSnapshot) {
+      return { analyzedProjectCount: 0 }
+    }
+
+    const [snapshot, existingProjectRecord] = await Promise.all([
+      this.readSnapshot(project),
+      readJsonFile<StoredProjectRecord | null>(
+        path.join(projectDirectory, 'project.json'),
+        null,
+      ),
+    ])
+
+    await this.writeCanonicalArtifacts({
+      projectDirectory,
+      projectId: deriveProjectMemoryKey(project),
+      projectTitle: deriveProjectMemoryTitle(project),
+      createdAt:
+        existingProjectRecord?.createdAt?.trim() || project.createdAt,
+      updatedAt: new Date().toISOString(),
+      identity: buildPortableProjectIdentity(project),
+      snapshot,
+      architectureSnapshot,
+    })
+
+    return { analyzedProjectCount: 1 }
+  }
+
+  async prepareSessionsAnalysis(
+    inputs: HistoricalProjectSessionAnalysisInput[],
+  ): Promise<{
+    project: ProjectConfig
+    transcriptBaseRoot: string
+    sessions: HistoricalProjectSessionDescriptor[]
+    prepared: PreparedStructuredAgent
+  } | null> {
+    if (!this.historicalSessionAnalyzer?.prepare || inputs.length === 0) {
+      return null
+    }
+
+    const projectByMemoryKey = buildLatestProjectsByMemoryKey(
+      inputs.map((input) => input.project),
+    )
+    const groupedInputs = new Map<
+      string,
+      {
+        project: ProjectConfig
+        transcriptBaseRoot: string
+        sessions: HistoricalProjectSessionDescriptor[]
+      }
+    >()
+
+    for (const input of inputs) {
+      const memoryKey = deriveProjectMemoryKey(input.project)
+      const canonicalProject = projectByMemoryKey.get(memoryKey)
+      const currentGroup = groupedInputs.get(memoryKey)
+
+      if (!currentGroup) {
+        groupedInputs.set(memoryKey, {
+          project: canonicalProject ?? input.project,
+          transcriptBaseRoot: input.transcriptBaseRoot,
+          sessions: [...input.sessions],
+        })
+        continue
+      }
+
+      currentGroup.sessions.push(...input.sessions)
+    }
+
+    const firstGroup = groupedInputs.values().next().value as
+      | { project: ProjectConfig; transcriptBaseRoot: string; sessions: HistoricalProjectSessionDescriptor[] }
+      | undefined
+    if (!firstGroup || firstGroup.sessions.length === 0) {
+      return null
+    }
+
+    const projectDirectory = this.getProjectDirectory(firstGroup.project)
+    if (!projectDirectory) {
+      return null
+    }
+
+    const prepared = await this.historicalSessionAnalyzer.prepare({
+      project: firstGroup.project,
+      canonicalMemoryDirectory: projectDirectory,
+      transcriptBaseRoot: firstGroup.transcriptBaseRoot,
+      sessions: firstGroup.sessions.slice().sort((left, right) =>
+        right.session.updatedAt.localeCompare(left.session.updatedAt),
+      ),
+    })
+
+    return {
+      project: firstGroup.project,
+      transcriptBaseRoot: firstGroup.transcriptBaseRoot,
+      sessions: firstGroup.sessions,
+      prepared,
+    }
+  }
+
+  async finalizeSessionsAnalysis(
+    project: ProjectConfig,
+    sessions: HistoricalProjectSessionDescriptor[],
+    rawOutput: string,
+  ): Promise<ProjectSessionsAnalysisResult> {
+    const projectDirectory = this.getProjectDirectory(project)
+    if (!projectDirectory) {
+      return { analyzedProjectCount: 0, analyzedSessionCount: 0 }
+    }
+
+    const memoryKey = deriveProjectMemoryKey(project)
+    const analysis = parseProjectMemoryResponse(rawOutput)
+    const timestamp = new Date().toISOString()
+    const syntheticSession: SessionConfig = {
+      id: `historical-session-analysis:${memoryKey}`,
+      projectId: project.id,
+      locationId: undefined,
+      title: 'Historical Agent CLIs sessions analysis',
+      startupCommand: 'codex',
+      pendingFirstPromptTitle: false,
+      cwd: project.rootPath,
+      shell: 'analysis',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    const extractedCandidates = this.validateCandidates(
+      project,
+      syntheticSession,
+      null,
+      timestamp,
+      analysis.candidates,
+    )
+
+    const [snapshot, existingProjectRecord] = await Promise.all([
+      this.readSnapshot(project),
+      readJsonFile<StoredProjectRecord | null>(
+        path.join(projectDirectory, 'project.json'),
+        null,
+      ),
+    ])
+
+    const nextSnapshot = createEmptySnapshot(snapshot.summary)
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
+      const incoming = extractedCandidates.filter(
+        (candidate) => candidate.kind === bucket.kind,
+      )
+      nextSnapshot[bucket.snapshotKey] = this.mergeCandidates(
+        snapshot[bucket.snapshotKey],
+        incoming,
+      )
+    }
+
+    await this.writeCanonicalArtifacts({
+      projectDirectory,
+      projectId: memoryKey,
+      projectTitle: deriveProjectMemoryTitle(project),
+      createdAt:
+        existingProjectRecord?.createdAt?.trim() || project.createdAt,
+      updatedAt: timestamp,
+      identity: buildPortableProjectIdentity(project),
+      snapshot: nextSnapshot,
+      sessionsAnalysis: {
+        generatedAt: timestamp,
+        analyzedSessionCount: sessions.length,
+        analyzedSessionIds: sessions.map((entry) => entry.session.id),
+        summary:
+          trimExcerpt(analysis.summary, 1_200) ??
+          `Analyzed ${sessions.length} stored session${sessions.length === 1 ? '' : 's'} for durable project memory.`,
+      },
+    })
+
+    return {
+      analyzedProjectCount: 1,
+      analyzedSessionCount: sessions.length,
     }
   }
 

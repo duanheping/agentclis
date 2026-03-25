@@ -16,7 +16,12 @@ import {
 import type { ProjectConfig } from '../src/shared/session'
 import type { SkillAiMergeAgent } from '../src/shared/skills'
 import { loadProjectMemorySkill } from './projectMemorySkillLoader'
-import { runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
+import {
+  prepareStructuredAgent,
+  runStructuredAgent,
+  truncateUtf8,
+} from './structuredAgentRunner'
+import type { PreparedStructuredAgent } from './structuredAgentRunner'
 
 const MAX_ARCHITECTURE_PROMPT_BYTES = 240_000
 const MAX_HEURISTIC_DIGEST_BYTES = 48_000
@@ -49,6 +54,38 @@ export interface ProjectArchitectureExtractor {
     location: ProjectLocation | null
     heuristicSnapshot: ProjectArchitectureSnapshot | null
   }): Promise<ProjectArchitectureSnapshot | null>
+
+  prepare?(input: {
+    project: ProjectConfig
+    location: ProjectLocation | null
+    heuristicSnapshot: ProjectArchitectureSnapshot | null
+  }): Promise<PreparedStructuredAgent>
+}
+
+export function finalizeArchitectureExtraction(
+  rawOutput: string,
+  project: ProjectConfig,
+): ProjectArchitectureSnapshot | null {
+  const response = parseArchitectureResponse(rawOutput)
+
+  if (
+    !response.systemOverview &&
+    response.modules.length === 0 &&
+    response.interactions.length === 0
+  ) {
+    return null
+  }
+
+  return {
+    projectId: deriveArchitectureProjectId(project),
+    title: deriveArchitectureTitle(project),
+    generatedAt: new Date().toISOString(),
+    systemOverview: response.systemOverview,
+    modules: response.modules,
+    interactions: response.interactions,
+    invariants: response.invariants,
+    glossary: response.glossary,
+  }
 }
 
 const VALID_MODULE_KINDS = new Set(ARCHITECTURE_MODULE_KINDS)
@@ -552,5 +589,41 @@ export class ProjectArchitectureAgentExtractor
       invariants: response.invariants,
       glossary: response.glossary,
     }
+  }
+
+  async prepare(input: {
+    project: ProjectConfig
+    location: ProjectLocation | null
+    heuristicSnapshot: ProjectArchitectureSnapshot | null
+  }): Promise<PreparedStructuredAgent> {
+    const rootPath = input.location?.rootPath ?? input.project.rootPath
+    const [topLevelEntries, agentsExcerpt, readmeExcerpt, architectureDocExcerpt, skill] =
+      await Promise.all([
+      listTopLevelEntries(rootPath),
+      readFirstExistingExcerpt(rootPath, AGENTS_CANDIDATES),
+      readFirstExistingExcerpt(rootPath, README_CANDIDATES),
+      readFirstExistingExcerpt(rootPath, ARCHITECTURE_DOC_CANDIDATES),
+      loadProjectMemorySkill('project-memory-architecture-analysis'),
+    ])
+    const schema = buildSchema()
+    const prompt = buildPrompt({
+      ...input,
+      topLevelEntries,
+      agentsExcerpt,
+      readmeExcerpt,
+      architectureDocExcerpt,
+      skillGuidance: skill?.markdown ?? null,
+    })
+    return await prepareStructuredAgent({
+      agent: this.getAgent(),
+      schema,
+      prompt,
+      contextDirectories: [
+        input.location?.rootPath ?? '',
+        input.project.identity?.repoRoot ?? '',
+        input.project.rootPath,
+        skill?.directory ?? '',
+      ],
+    })
   }
 }

@@ -1,5 +1,5 @@
 import { readFileSync, type Dirent } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
+import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,7 +51,9 @@ import {
 } from './codexCli'
 import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
+import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
 import { createProjectSessionWorktree } from './projectWorktree'
+import { cleanupStructuredAgentTemp } from './structuredAgentRunner'
 import type { TranscriptStore } from './transcriptStore'
 import {
   buildShellArgs,
@@ -86,6 +88,14 @@ interface ExternalSessionAttentionTracker {
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
   projectId?: string
   pendingFirstPromptTitle?: boolean
+}
+
+interface PendingAnalysisSession {
+  kind: 'architecture' | 'sessions'
+  tempRoot: string
+  outputPath: string
+  project: ProjectConfig
+  sessions?: HistoricalProjectSessionDescriptor[]
 }
 
 const CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions')
@@ -143,6 +153,10 @@ interface SessionManagerServices {
     | 'analyzeHistoricalSessions'
     | 'assembleContext'
     | 'captureSession'
+    | 'prepareArchitectureAnalysis'
+    | 'finalizeArchitectureAnalysis'
+    | 'prepareSessionsAnalysis'
+    | 'finalizeSessionsAnalysis'
     | 'scheduleBackfillSessions'
     | 'dispose'
   > & {
@@ -195,6 +209,10 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
     removedEmptySummaryCount: 0,
     prunedCandidateCount: 0,
   }),
+  prepareArchitectureAnalysis: async () => null,
+  finalizeArchitectureAnalysis: async () => ({ analyzedProjectCount: 0 }),
+  prepareSessionsAnalysis: async () => null,
+  finalizeSessionsAnalysis: async () => ({ analyzedProjectCount: 0, analyzedSessionCount: 0 }),
   dispose: () => undefined,
 }
 
@@ -223,6 +241,7 @@ export class SessionManager {
   >()
   private readonly historicalExternalSessionRecovery = new Set<string>()
   private readonly suppressedExit = new Set<string>()
+  private readonly pendingAnalysisSessions = new Map<string, PendingAnalysisSession>()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
@@ -356,6 +375,105 @@ export class SessionManager {
       removedEmptySummaryCount: refreshResult?.removedEmptySummaryCount ?? 0,
       prunedCandidateCount: refreshResult?.prunedCandidateCount ?? 0,
     }
+  }
+
+  async startArchitectureAnalysisSession(): Promise<SessionSnapshot> {
+    await this.refreshStoredProjectIdentity()
+    const preparation = await this.projectMemory.prepareArchitectureAnalysis(
+      Array.from(this.projects.values()),
+    )
+    if (!preparation) {
+      throw new Error('No projects available for architecture analysis.')
+    }
+
+    const snapshot = await this.createAnalysisSession({
+      kind: 'architecture',
+      project: preparation.project,
+      startupCommand: preparation.prepared.startupCommand,
+      cwd: preparation.prepared.cwd,
+      tempRoot: preparation.prepared.tempRoot,
+      outputPath: preparation.prepared.outputPath,
+    })
+
+    return snapshot
+  }
+
+  async startSessionsAnalysisSession(): Promise<SessionSnapshot> {
+    await this.refreshStoredProjectIdentity()
+    await this.projectMemory.refreshHistoricalImport?.(
+      Array.from(this.projects.values()),
+      { regenerateArchitecture: false },
+    )
+    const preparation = await this.projectMemory.prepareSessionsAnalysis(
+      this.collectBackfillInputs(),
+    )
+    if (!preparation) {
+      throw new Error('No sessions available for analysis.')
+    }
+
+    const snapshot = await this.createAnalysisSession({
+      kind: 'sessions',
+      project: preparation.project,
+      sessions: preparation.sessions,
+      startupCommand: preparation.prepared.startupCommand,
+      cwd: preparation.prepared.cwd,
+      tempRoot: preparation.prepared.tempRoot,
+      outputPath: preparation.prepared.outputPath,
+    })
+
+    return snapshot
+  }
+
+  private async createAnalysisSession(input: {
+    kind: 'architecture' | 'sessions'
+    project: ProjectConfig
+    sessions?: HistoricalProjectSessionDescriptor[]
+    startupCommand: string
+    cwd: string
+    tempRoot: string
+    outputPath: string
+  }): Promise<SessionSnapshot> {
+    const now = new Date().toISOString()
+    const id = crypto.randomUUID()
+    const shell = resolveShellCommand()
+    const title = input.kind === 'architecture'
+      ? `Analyze architecture: ${input.project.title}`
+      : `Analyze sessions: ${input.project.title}`
+
+    const config: SessionConfig = {
+      id,
+      projectId: input.project.id,
+      title,
+      startupCommand: input.startupCommand,
+      pendingFirstPromptTitle: false,
+      cwd: input.cwd,
+      shell,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    this.pendingAnalysisSessions.set(id, {
+      kind: input.kind,
+      tempRoot: input.tempRoot,
+      outputPath: input.outputPath,
+      project: input.project,
+      sessions: input.sessions,
+    })
+
+    this.configs.set(id, config)
+    this.runtimes.set(id, buildRuntime(id))
+    this.touchProject(input.project.id, now)
+    this.activeSessionId = id
+    this.persist()
+    this.appendTranscriptEvent({
+      sessionId: id,
+      kind: 'system',
+      source: 'system',
+      chunk: `Analysis session created for ${input.project.title} (${input.kind}).`,
+    })
+
+    await this.startSession(config)
+    return this.snapshotFor(id)
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectSnapshot> {
@@ -560,6 +678,11 @@ export class SessionManager {
       this.stopExternalSessionAttentionTracking(sessionId)
     }
 
+    for (const pending of this.pendingAnalysisSessions.values()) {
+      void cleanupStructuredAgentTemp(pending.tempRoot)
+    }
+    this.pendingAnalysisSessions.clear()
+
     for (const config of Array.from(this.configs.values())) {
       void this.queueProjectMemoryCapture(config)
     }
@@ -695,6 +818,7 @@ export class SessionManager {
           source: 'system',
           chunk: `Session exited with code ${exitCode}.`,
         })
+        void this.finalizeAnalysisSessionIfNeeded(normalizedConfig.id, exitCode)
         void this.queueProjectMemoryCapture(normalizedConfig)
         this.events.onExit({
           sessionId: normalizedConfig.id,
@@ -772,6 +896,87 @@ export class SessionManager {
       terminal.kill()
     } catch {
       this.suppressedExit.delete(id)
+    }
+  }
+
+  private async finalizeAnalysisSessionIfNeeded(
+    sessionId: string,
+    exitCode: number,
+  ): Promise<void> {
+    const pending = this.pendingAnalysisSessions.get(sessionId)
+    if (!pending) {
+      return
+    }
+
+    this.pendingAnalysisSessions.delete(sessionId)
+
+    try {
+      if (exitCode !== 0) {
+        this.appendTranscriptEvent({
+          sessionId,
+          kind: 'system',
+          source: 'system',
+          chunk: `[agenclis] ${pending.kind} analysis agent exited with error (code ${exitCode}). Output was not processed.`,
+        })
+        return
+      }
+
+      let rawOutput: string
+      try {
+        rawOutput = await readFile(pending.outputPath, 'utf8')
+      } catch {
+        this.appendTranscriptEvent({
+          sessionId,
+          kind: 'system',
+          source: 'system',
+          chunk: `[agenclis] ${pending.kind} analysis completed but no output file was produced.`,
+        })
+        return
+      }
+
+      if (!rawOutput.trim()) {
+        this.appendTranscriptEvent({
+          sessionId,
+          kind: 'system',
+          source: 'system',
+          chunk: `[agenclis] ${pending.kind} analysis produced an empty output file.`,
+        })
+        return
+      }
+
+      if (pending.kind === 'architecture') {
+        const result = await this.projectMemory.finalizeArchitectureAnalysis(
+          pending.project,
+          rawOutput,
+        )
+        this.appendTranscriptEvent({
+          sessionId,
+          kind: 'system',
+          source: 'system',
+          chunk: `[agenclis] Architecture analysis complete. Analyzed ${result.analyzedProjectCount} project(s).`,
+        })
+      } else {
+        const result = await this.projectMemory.finalizeSessionsAnalysis(
+          pending.project,
+          pending.sessions ?? [],
+          rawOutput,
+        )
+        this.appendTranscriptEvent({
+          sessionId,
+          kind: 'system',
+          source: 'system',
+          chunk: `[agenclis] Sessions analysis complete. Analyzed ${result.analyzedSessionCount} session(s) across ${result.analyzedProjectCount} project(s).`,
+        })
+      }
+    } catch (error) {
+      this.appendTranscriptEvent({
+        sessionId,
+        kind: 'system',
+        source: 'system',
+        chunk: `[agenclis] Failed to finalize ${pending.kind} analysis: ${this.getErrorMessage(error)}`,
+      })
+    } finally {
+      void cleanupStructuredAgentTemp(pending.tempRoot)
     }
   }
 

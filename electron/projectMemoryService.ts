@@ -17,6 +17,8 @@ import type {
   ProjectMemoryRefreshResult,
   ProjectSessionsAnalysisResult,
 } from './projectMemoryManager'
+import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
+import type { PreparedStructuredAgent } from './structuredAgentRunner'
 import type { TranscriptStore } from './transcriptStore'
 
 type ProjectMemoryJobType = 'capture-session' | 'backfill-session'
@@ -300,6 +302,76 @@ export class ProjectMemoryService {
       ...result,
       skippedSessionCount,
     }
+  }
+
+  async prepareArchitectureAnalysis(
+    projects: ProjectConfig[],
+  ): Promise<{
+    project: ProjectConfig
+    prepared: PreparedStructuredAgent
+  } | null> {
+    return await this.manager.prepareArchitectureAnalysis(projects)
+  }
+
+  async finalizeArchitectureAnalysis(
+    project: ProjectConfig,
+    rawOutput: string,
+  ): Promise<ProjectArchitectureAnalysisResult> {
+    return await this.manager.finalizeArchitectureAnalysis(project, rawOutput)
+  }
+
+  async prepareSessionsAnalysis(
+    inputs: ProjectMemoryJobPayload[],
+  ): Promise<{
+    project: ProjectConfig
+    sessions: HistoricalProjectSessionDescriptor[]
+    prepared: PreparedStructuredAgent
+  } | null> {
+    const groupedByProject = new Map<string, HistoricalProjectSessionAnalysisInput>()
+
+    for (const input of inputs) {
+      const transcriptIndex = await this.transcriptStore.readIndex(input.session.id)
+      if (transcriptIndex.eventCount === 0) {
+        continue
+      }
+
+      const existing = groupedByProject.get(input.project.id)
+      const sessionDescriptor = {
+        session: input.session,
+        location: input.location,
+        transcriptEventCount: transcriptIndex.eventCount,
+        lastTranscriptEventAt: transcriptIndex.lastEventAt,
+        transcriptPath: this.transcriptStore.getTranscriptPath(input.session.id),
+        transcriptIndexPath: this.transcriptStore.getIndexPath(input.session.id),
+      }
+
+      if (!existing) {
+        groupedByProject.set(input.project.id, {
+          project: input.project,
+          transcriptBaseRoot: this.transcriptStore.getBaseRoot(),
+          sessions: [sessionDescriptor],
+        })
+        continue
+      }
+
+      existing.sessions.push(sessionDescriptor)
+    }
+
+    return await this.manager.prepareSessionsAnalysis(
+      Array.from(groupedByProject.values()),
+    )
+  }
+
+  async finalizeSessionsAnalysis(
+    project: ProjectConfig,
+    sessions: HistoricalProjectSessionDescriptor[],
+    rawOutput: string,
+  ): Promise<ProjectSessionsAnalysisResult> {
+    return await this.manager.finalizeSessionsAnalysis(
+      project,
+      sessions,
+      rawOutput,
+    )
   }
 
   resume(): void {

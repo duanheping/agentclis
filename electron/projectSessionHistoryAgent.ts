@@ -12,7 +12,12 @@ import type { ProjectConfig, SessionConfig } from '../src/shared/session'
 import type { SkillAiMergeAgent } from '../src/shared/skills'
 import { loadProjectMemorySkill } from './projectMemorySkillLoader'
 import { parseProjectMemoryResponse } from './projectMemoryAgent'
-import { runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
+import {
+  prepareStructuredAgent,
+  runStructuredAgent,
+  truncateUtf8,
+} from './structuredAgentRunner'
+import type { PreparedStructuredAgent } from './structuredAgentRunner'
 
 const MAX_PROJECT_SESSION_ANALYSIS_PROMPT_BYTES = 240_000
 const MAX_SESSION_CATALOG_BYTES = 100_000
@@ -48,6 +53,13 @@ export interface ProjectSessionHistoryAnalyzer {
     transcriptBaseRoot: string
     sessions: HistoricalProjectSessionDescriptor[]
   }): Promise<ProjectSessionHistoryAnalysisResult>
+
+  prepare?(input: {
+    project: ProjectConfig
+    canonicalMemoryDirectory: string
+    transcriptBaseRoot: string
+    sessions: HistoricalProjectSessionDescriptor[]
+  }): Promise<PreparedStructuredAgent>
 }
 
 function buildSchema(): string {
@@ -273,5 +285,44 @@ export class ProjectSessionHistoryAgentExtractor
     })
 
     return parseProjectMemoryResponse(rawOutput)
+  }
+
+  async prepare(input: {
+    project: ProjectConfig
+    canonicalMemoryDirectory: string
+    transcriptBaseRoot: string
+    sessions: HistoricalProjectSessionDescriptor[]
+  }): Promise<PreparedStructuredAgent> {
+    const locationRoots = [
+      ...new Set(
+        input.sessions
+          .map((descriptor) => descriptor.location?.rootPath ?? descriptor.session.cwd)
+          .filter(Boolean),
+      ),
+    ]
+    const rootPath = locationRoots[0] ?? input.project.rootPath
+    const [agentsExcerpt, readmeExcerpt, skill] = await Promise.all([
+      readFirstExistingExcerpt(rootPath, AGENTS_CANDIDATES),
+      readFirstExistingExcerpt(rootPath, README_CANDIDATES),
+      loadProjectMemorySkill('project-memory-sessions-analysis'),
+    ])
+
+    return await prepareStructuredAgent({
+      agent: this.getAgent(),
+      schema: buildSchema(),
+      prompt: buildPrompt({
+        ...input,
+        agentsExcerpt,
+        readmeExcerpt,
+        skillGuidance: skill?.markdown ?? null,
+      }),
+      contextDirectories: [
+        input.canonicalMemoryDirectory,
+        input.transcriptBaseRoot,
+        input.project.rootPath,
+        ...locationRoots,
+        skill?.directory ?? '',
+      ],
+    })
   }
 }

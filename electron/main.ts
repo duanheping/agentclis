@@ -435,6 +435,12 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.analyzeProjectSessions, async () =>
     sessionManager.analyzeHistoricalProjectSessions(),
   )
+  ipcMain.handle(IPC_CHANNELS.startArchitectureAnalysisSession, async () =>
+    sessionManager.startArchitectureAnalysisSession(),
+  )
+  ipcMain.handle(IPC_CHANNELS.startSessionsAnalysisSession, async () =>
+    sessionManager.startSessionsAnalysisSession(),
+  )
   ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
     skillLibraryManager.getStatus(),
   )

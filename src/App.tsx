@@ -14,10 +14,6 @@ import {
   terminalRegistry,
 } from './lib/terminalRegistry'
 import type {
-  ProjectArchitectureAnalysisResult,
-  ProjectSessionsAnalysisResult,
-} from './shared/ipc'
-import type {
   ProjectGitFileChange,
   ProjectGitOverview,
   ProjectOpenTarget,
@@ -187,84 +183,6 @@ function getDiffPanelMaxWidth(containerWidth: number): number {
 
 function formatCountLabel(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`
-}
-
-function buildProjectArchitectureAnalysisStatus(
-  result: ProjectArchitectureAnalysisResult,
-): string {
-  if (result.analyzedProjectCount === 0) {
-    return 'No stored projects were available for architecture analysis.'
-  }
-
-  return `Analyzed architecture for ${formatCountLabel(
-    result.analyzedProjectCount,
-    'project',
-    'projects',
-  )}.`
-}
-
-function buildProjectSessionsAnalysisStatus(
-  result: ProjectSessionsAnalysisResult,
-): string {
-  const parts: string[] = []
-
-  if (result.analyzedSessionCount > 0) {
-    parts.push(
-      `analyzed ${formatCountLabel(
-        result.analyzedSessionCount,
-        'stored session',
-        'stored sessions',
-      )} across ${formatCountLabel(
-        result.analyzedProjectCount,
-        'project',
-        'projects',
-      )}`,
-    )
-  }
-  if (result.cleanedProjectCount > 0) {
-    parts.push(
-      `refreshed ${formatCountLabel(
-        result.cleanedProjectCount,
-        'project memory snapshot',
-        'project memory snapshots',
-      )}`,
-    )
-  }
-  if (result.removedEmptySummaryCount > 0) {
-    parts.push(
-      `removed ${formatCountLabel(
-        result.removedEmptySummaryCount,
-        'empty summary',
-        'empty summaries',
-      )}`,
-    )
-  }
-  if (result.prunedCandidateCount > 0) {
-    parts.push(
-      `pruned ${formatCountLabel(
-        result.prunedCandidateCount,
-        'stale memory entry',
-        'stale memory entries',
-      )}`,
-    )
-  }
-  if (result.skippedSessionCount > 0) {
-    parts.push(
-      `skipped ${formatCountLabel(
-        result.skippedSessionCount,
-        'empty session',
-        'empty sessions',
-      )}`,
-    )
-  }
-
-  if (parts.length === 0) {
-    return 'No stored Agent CLIs sessions were available for analysis.'
-  }
-
-  const [firstPart, ...remainingParts] = parts
-  const sentence = [firstPart[0]?.toUpperCase(), firstPart.slice(1)].join('')
-  return `${[sentence, ...remainingParts].join(', ')}.`
 }
 
 function App() {
@@ -1246,9 +1164,10 @@ function App() {
     setSkillsErrorMessage(null)
 
     try {
-      const result = await agentCli.analyzeProjectArchitecture()
+      await agentCli.startArchitectureAnalysisSession()
+      await refreshWorkspace()
       setProjectArchitectureAnalysisStatus(
-        buildProjectArchitectureAnalysisStatus(result),
+        'Architecture analysis session started. Monitor progress in the terminal.',
       )
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
@@ -1268,9 +1187,10 @@ function App() {
     setSkillsErrorMessage(null)
 
     try {
-      const result = await agentCli.analyzeProjectSessions()
+      await agentCli.startSessionsAnalysisSession()
+      await refreshWorkspace()
       setProjectSessionsAnalysisStatus(
-        buildProjectSessionsAnalysisStatus(result),
+        'Sessions analysis started. Monitor progress in the terminal.',
       )
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))

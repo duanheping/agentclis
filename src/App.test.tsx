@@ -313,6 +313,8 @@ function createAgentCliMock(
       removedEmptySummaryCount: 2,
       prunedCandidateCount: 3,
     }),
+    startArchitectureAnalysisSession: vi.fn().mockResolvedValue({ config: {}, runtime: {} }),
+    startSessionsAnalysisSession: vi.fn().mockResolvedValue({ config: {}, runtime: {} }),
     syncSkills: vi.fn().mockImplementation(async () => {
       currentSkillStatus = {
         ...currentSkillStatus,
@@ -557,12 +559,12 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze architecture' }))
 
     await waitFor(() => {
-      expect(agentCli.analyzeProjectArchitecture).toHaveBeenCalledTimes(1)
+      expect(agentCli.startArchitectureAnalysisSession).toHaveBeenCalledTimes(1)
     })
 
     expect(
       screen.getByText(
-        'Analyzed architecture for 1 project.',
+        'Architecture analysis session started. Monitor progress in the terminal.',
       ),
     ).toBeInTheDocument()
   })
@@ -586,12 +588,12 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze sessions' }))
 
     await waitFor(() => {
-      expect(agentCli.analyzeProjectSessions).toHaveBeenCalledTimes(1)
+      expect(agentCli.startSessionsAnalysisSession).toHaveBeenCalledTimes(1)
     })
 
     expect(
       screen.getByText(
-        'Analyzed 2 stored sessions across 1 project, refreshed 1 project memory snapshot, removed 2 empty summaries, pruned 3 stale memory entries, skipped 1 empty session.',
+        'Sessions analysis started. Monitor progress in the terminal.',
       ),
     ).toBeInTheDocument()
   })
