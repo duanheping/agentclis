@@ -9,10 +9,13 @@ import type {
   SessionConfig,
 } from '../src/shared/session'
 import type {
+  HistoricalProjectSessionAnalysisInput,
+  ProjectArchitectureAnalysisResult,
   ProjectMemoryDiagnosticEntry,
   ProjectMemoryDiagnosticReporter,
   ProjectMemoryManager,
   ProjectMemoryRefreshResult,
+  ProjectSessionsAnalysisResult,
 } from './projectMemoryManager'
 import type { TranscriptStore } from './transcriptStore'
 
@@ -169,7 +172,10 @@ export class ProjectMemoryService {
   })
 
   private readonly manager: ProjectMemoryManager
-  private readonly transcriptStore: Pick<TranscriptStore, 'readEvents' | 'readIndex'>
+  private readonly transcriptStore: Pick<
+    TranscriptStore,
+    'getBaseRoot' | 'getIndexPath' | 'getTranscriptPath' | 'readEvents' | 'readIndex'
+  >
   private readonly lowPriorityDelayMs: number
   private readonly retryDelayMs: number
   private readonly maxAttempts: number
@@ -182,7 +188,10 @@ export class ProjectMemoryService {
 
   constructor(
     manager: ProjectMemoryManager,
-    transcriptStore: Pick<TranscriptStore, 'readEvents' | 'readIndex'>,
+    transcriptStore: Pick<
+      TranscriptStore,
+      'getBaseRoot' | 'getIndexPath' | 'getTranscriptPath' | 'readEvents' | 'readIndex'
+    >,
     options: ProjectMemoryServiceOptions = {},
   ) {
     this.manager = manager
@@ -235,8 +244,62 @@ export class ProjectMemoryService {
 
   async refreshHistoricalImport(
     projects: ProjectConfig[],
+    options?: {
+      regenerateArchitecture?: boolean
+    },
   ): Promise<ProjectMemoryRefreshResult> {
-    return await this.manager.refreshHistoricalImport(projects)
+    return await this.manager.refreshHistoricalImport(projects, options)
+  }
+
+  async analyzeHistoricalArchitecture(
+    projects: ProjectConfig[],
+  ): Promise<ProjectArchitectureAnalysisResult> {
+    return await this.manager.analyzeHistoricalArchitecture(projects)
+  }
+
+  async analyzeHistoricalSessions(
+    inputs: ProjectMemoryJobPayload[],
+  ): Promise<ProjectSessionsAnalysisResult & { skippedSessionCount: number }> {
+    const groupedByProject = new Map<string, HistoricalProjectSessionAnalysisInput>()
+    let skippedSessionCount = 0
+
+    for (const input of inputs) {
+      const transcriptIndex = await this.transcriptStore.readIndex(input.session.id)
+      if (transcriptIndex.eventCount === 0) {
+        skippedSessionCount += 1
+        continue
+      }
+
+      const existing = groupedByProject.get(input.project.id)
+      const sessionDescriptor = {
+        session: input.session,
+        location: input.location,
+        transcriptEventCount: transcriptIndex.eventCount,
+        lastTranscriptEventAt: transcriptIndex.lastEventAt,
+        transcriptPath: this.transcriptStore.getTranscriptPath(input.session.id),
+        transcriptIndexPath: this.transcriptStore.getIndexPath(input.session.id),
+      }
+
+      if (!existing) {
+        groupedByProject.set(input.project.id, {
+          project: input.project,
+          transcriptBaseRoot: this.transcriptStore.getBaseRoot(),
+          sessions: [sessionDescriptor],
+        })
+        continue
+      }
+
+      existing.sessions.push(sessionDescriptor)
+    }
+
+    const result = await this.manager.analyzeHistoricalSessions(
+      Array.from(groupedByProject.values()),
+    )
+
+    return {
+      ...result,
+      skippedSessionCount,
+    }
   }
 
   resume(): void {

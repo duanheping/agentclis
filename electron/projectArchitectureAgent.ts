@@ -15,11 +15,13 @@ import {
 } from '../src/shared/projectArchitecture'
 import type { ProjectConfig } from '../src/shared/session'
 import type { SkillAiMergeAgent } from '../src/shared/skills'
+import { loadProjectMemorySkill } from './projectMemorySkillLoader'
 import { runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
 
 const MAX_ARCHITECTURE_PROMPT_BYTES = 240_000
 const MAX_HEURISTIC_DIGEST_BYTES = 48_000
 const MAX_TEXT_EXCERPT_BYTES = 20_000
+const AGENTS_CANDIDATES = ['AGENTS.md']
 const ARCHITECTURE_DOC_CANDIDATES = [
   'architecture.md',
   'ARCHITECTURE.md',
@@ -411,8 +413,10 @@ function buildPrompt(input: {
   location: ProjectLocation | null
   heuristicSnapshot: ProjectArchitectureSnapshot | null
   topLevelEntries: string[]
+  agentsExcerpt: string | null
   readmeExcerpt: string | null
   architectureDocExcerpt: string | null
+  skillGuidance: string | null
 }): string {
   return truncateUtf8(
     [
@@ -427,6 +431,9 @@ function buildPrompt(input: {
       '- which files or modules matter first when changing behavior',
       'Prefer project-specific terminology and relative repo paths.',
       'If the evidence is weak, return fewer modules and interactions rather than inventing detail.',
+      '',
+      'Task skill guidance:',
+      input.skillGuidance ?? '(none found)',
       `Project title: ${input.project.title}`,
       `Repository root: ${input.location?.rootPath ?? input.project.rootPath}`,
       `Remote fingerprint: ${input.project.identity?.remoteFingerprint ?? 'n/a'}`,
@@ -434,6 +441,9 @@ function buildPrompt(input: {
       input.topLevelEntries.length > 0
         ? `Top-level entries: ${input.topLevelEntries.join(', ')}`
         : 'Top-level entries: unavailable',
+      '',
+      'Repository guidance excerpt:',
+      input.agentsExcerpt ?? '(none found)',
       '',
       'README excerpt:',
       input.readmeExcerpt ?? '(none found)',
@@ -494,17 +504,22 @@ export class ProjectArchitectureAgentExtractor
     heuristicSnapshot: ProjectArchitectureSnapshot | null
   }): Promise<ProjectArchitectureSnapshot | null> {
     const rootPath = input.location?.rootPath ?? input.project.rootPath
-    const [topLevelEntries, readmeExcerpt, architectureDocExcerpt] = await Promise.all([
+    const [topLevelEntries, agentsExcerpt, readmeExcerpt, architectureDocExcerpt, skill] =
+      await Promise.all([
       listTopLevelEntries(rootPath),
+      readFirstExistingExcerpt(rootPath, AGENTS_CANDIDATES),
       readFirstExistingExcerpt(rootPath, README_CANDIDATES),
       readFirstExistingExcerpt(rootPath, ARCHITECTURE_DOC_CANDIDATES),
+      loadProjectMemorySkill('project-memory-architecture-analysis'),
     ])
     const schema = buildSchema()
     const prompt = buildPrompt({
       ...input,
       topLevelEntries,
+      agentsExcerpt,
       readmeExcerpt,
       architectureDocExcerpt,
+      skillGuidance: skill?.markdown ?? null,
     })
     const rawOutput = await runStructuredAgent({
       agent: this.getAgent(),
@@ -514,6 +529,7 @@ export class ProjectArchitectureAgentExtractor
         input.location?.rootPath ?? '',
         input.project.identity?.repoRoot ?? '',
         input.project.rootPath,
+        skill?.directory ?? '',
       ],
     })
     const response = parseArchitectureResponse(rawOutput)

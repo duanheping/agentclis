@@ -32,12 +32,17 @@ export interface PersistTransientFileInput {
   data: ArrayBuffer
 }
 
-export interface ProjectMemoryImportResult {
-  queuedSessionCount: number
+export interface ProjectArchitectureAnalysisResult {
+  analyzedProjectCount: number
+}
+
+export interface ProjectSessionsAnalysisResult {
+  analyzedProjectCount: number
+  analyzedSessionCount: number
+  skippedSessionCount: number
   cleanedProjectCount: number
   removedEmptySummaryCount: number
   prunedCandidateCount: number
-  regeneratedArchitectureCount: number
 }
 
 export const IPC_CHANNELS = {
@@ -53,7 +58,8 @@ export const IPC_CHANNELS = {
   resizeSession: 'session:resize',
   getSkillLibrarySettings: 'skills:get-settings',
   updateSkillLibrarySettings: 'skills:update-settings',
-  importHistoricalProjectMemory: 'project-memory:import-history',
+  analyzeProjectArchitecture: 'project-memory:analyze-architecture',
+  analyzeProjectSessions: 'project-memory:analyze-sessions',
   getSkillSyncStatus: 'skills:get-status',
   syncSkills: 'skills:sync',
   resolveSkillConflict: 'skills:resolve-conflict',
@@ -100,7 +106,8 @@ export interface AgentCliApi {
   updateSkillLibrarySettings(
     settings: SkillLibrarySettings,
   ): Promise<SkillLibrarySettings>
-  importHistoricalProjectMemory(): Promise<ProjectMemoryImportResult>
+  analyzeProjectArchitecture(): Promise<ProjectArchitectureAnalysisResult>
+  analyzeProjectSessions(): Promise<ProjectSessionsAnalysisResult>
   getSkillSyncStatus(): Promise<SkillSyncStatus>
   syncSkills(): Promise<SkillSyncResult>
   resolveSkillConflict(

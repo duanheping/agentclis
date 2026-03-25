@@ -87,6 +87,24 @@ function buildSession(): SessionConfig {
   }
 }
 
+function buildTranscriptStore(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    getBaseRoot: vi.fn(() => 'C:\\transcripts'),
+    getIndexPath: vi.fn((sessionId: string) => `C:\\transcripts\\${sessionId}.index.json`),
+    getTranscriptPath: vi.fn((sessionId: string) => `C:\\transcripts\\${sessionId}.jsonl`),
+    readIndex: vi.fn(async () => ({
+      eventCount: 1,
+      lastEventAt: '2026-03-22T12:00:05.000Z',
+      projectId: 'project-1',
+      locationId: 'location-1',
+    })),
+    readEvents: vi.fn(async () => []),
+    ...overrides,
+  }
+}
+
 describe('ProjectMemoryService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -106,10 +124,7 @@ describe('ProjectMemoryService', () => {
       hasSessionSummary: vi.fn(),
       captureSession: vi.fn(),
     }
-    const transcriptStore = {
-      readIndex: vi.fn(),
-      readEvents: vi.fn(),
-    }
+    const transcriptStore = buildTranscriptStore()
     const service = new ProjectMemoryService(
       manager as never,
       transcriptStore,
@@ -137,7 +152,7 @@ describe('ProjectMemoryService', () => {
       hasSessionSummary: vi.fn(async () => false),
       captureSession: vi.fn(async () => undefined),
     }
-    const transcriptStore = {
+    const transcriptStore = buildTranscriptStore({
       readIndex: vi.fn(async () => ({
         eventCount: 3,
         lastEventAt: '2026-03-22T12:00:05.000Z',
@@ -156,7 +171,7 @@ describe('ProjectMemoryService', () => {
           chunk: 'Capture durable workflow memory',
         },
       ]),
-    }
+    })
     const service = new ProjectMemoryService(
       manager as never,
       transcriptStore,
@@ -194,15 +209,7 @@ describe('ProjectMemoryService', () => {
       hasSessionSummary: vi.fn(async () => false),
       captureSession: vi.fn(async () => undefined),
     }
-    const transcriptStore = {
-      readIndex: vi.fn(async () => ({
-        eventCount: 1,
-        lastEventAt: '2026-03-22T12:00:05.000Z',
-        projectId: 'project-1',
-        locationId: 'location-1',
-      })),
-      readEvents: vi.fn(async () => []),
-    }
+    const transcriptStore = buildTranscriptStore()
     const service = new ProjectMemoryService(
       manager as never,
       transcriptStore,
@@ -237,10 +244,7 @@ describe('ProjectMemoryService', () => {
       hasSessionSummary: vi.fn(),
       captureSession: vi.fn(),
     }
-    const transcriptStore = {
-      readIndex: vi.fn(),
-      readEvents: vi.fn(),
-    }
+    const transcriptStore = buildTranscriptStore()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const service = new ProjectMemoryService(
       manager as never,
@@ -269,6 +273,90 @@ describe('ProjectMemoryService', () => {
     )
 
     errorSpy.mockRestore()
+    service.dispose()
+  })
+
+  it('groups stored sessions by project before historical sessions analysis', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => true),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+      analyzeHistoricalSessions: vi.fn(async () => ({
+        analyzedProjectCount: 1,
+        analyzedSessionCount: 1,
+      })),
+    }
+    const transcriptStore = buildTranscriptStore({
+      readIndex: vi
+        .fn()
+        .mockResolvedValueOnce({
+          eventCount: 5,
+          lastEventAt: '2026-03-22T12:00:05.000Z',
+          projectId: 'project-1',
+          locationId: 'location-1',
+        })
+        .mockResolvedValueOnce({
+          eventCount: 0,
+          lastEventAt: null,
+          projectId: 'project-1',
+          locationId: 'location-1',
+        }),
+    })
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+    )
+    const firstSession = buildSession()
+    const secondSession = {
+      ...buildSession(),
+      id: 'session-2',
+      updatedAt: '2026-03-22T12:10:00.000Z',
+    }
+
+    await expect(
+      service.analyzeHistoricalSessions([
+        {
+          project: buildProject(),
+          location: buildLocation(),
+          session: firstSession,
+        },
+        {
+          project: buildProject(),
+          location: buildLocation(),
+          session: secondSession,
+        },
+      ]),
+    ).resolves.toEqual({
+      analyzedProjectCount: 1,
+      analyzedSessionCount: 1,
+      skippedSessionCount: 1,
+    })
+
+    expect(manager.analyzeHistoricalSessions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        project: expect.objectContaining({
+          id: 'project-1',
+        }),
+        transcriptBaseRoot: 'C:\\transcripts',
+        sessions: [
+          expect.objectContaining({
+            session: expect.objectContaining({
+              id: 'session-1',
+            }),
+            transcriptEventCount: 5,
+            transcriptPath: 'C:\\transcripts\\session-1.jsonl',
+            transcriptIndexPath: 'C:\\transcripts\\session-1.index.json',
+          }),
+        ],
+      }),
+    ])
+
     service.dispose()
   })
 })
