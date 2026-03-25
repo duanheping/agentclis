@@ -14,6 +14,8 @@ export const PROJECT_MEMORY_CANDIDATE_KINDS = [
 export type ProjectMemoryCandidateKind =
   (typeof PROJECT_MEMORY_CANDIDATE_KINDS)[number]
 
+export const PROJECT_MEMORY_EXTRACTION_VERSION = 2
+
 export const PROJECT_MEMORY_SCOPES = ['project', 'location'] as const
 
 export type ProjectMemoryScope = (typeof PROJECT_MEMORY_SCOPES)[number]
@@ -76,6 +78,7 @@ export interface SessionSummary {
   projectId: string
   locationId: string | null
   generatedAt: string
+  extractionVersion: number | null
   summary: string
   sourceEventIds: string[]
 }

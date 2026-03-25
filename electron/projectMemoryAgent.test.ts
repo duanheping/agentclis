@@ -134,5 +134,6 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('[older transcript omitted:')
     expect(prompt).toContain('[older events omitted:')
     expect(prompt).not.toContain('event-0 output/pty')
+    expect(prompt).toContain('Do not record ticket-specific progress state such as numbered PRs')
   })
 })

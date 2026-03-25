@@ -7,6 +7,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { ProjectArchitectureSnapshot } from '../src/shared/projectArchitecture'
+import { PROJECT_MEMORY_EXTRACTION_VERSION } from '../src/shared/projectMemory'
 import type {
   ProjectLocation,
   TranscriptEvent,
@@ -260,6 +261,9 @@ describe('ProjectMemoryManager', () => {
     await expect(readFile(path.join(memoryRoot, 'project.json'), 'utf8')).resolves.toContain(
       '"gitCommonDir": null',
     )
+    await expect(
+      readFile(path.join(memoryRoot, 'summaries', 'session-1.json'), 'utf8'),
+    ).resolves.toContain(`"extractionVersion": ${PROJECT_MEMORY_EXTRACTION_VERSION}`)
   })
 
   it('writes focused memory docs and prefers synthesized architecture when an architecture extractor is configured', async () => {
@@ -793,6 +797,21 @@ describe('ProjectMemoryManager', () => {
             sourceSessionId: 'session-valid',
             sourceEventIds: ['path-1'],
           },
+          {
+            id: 'fact-5',
+            projectId: 'project-1',
+            locationId: null,
+            kind: 'fact',
+            scope: 'project',
+            key: 'pr-status',
+            content: 'PR `#7366` was updated to record the passing Jenkins standalone validation result from `ECG-VMCU-TESTS_DEV/2748`.',
+            confidence: 0.74,
+            status: 'active',
+            createdAt: '2026-03-20T12:00:00.000Z',
+            updatedAt: '2026-03-20T12:00:00.000Z',
+            sourceSessionId: 'session-valid',
+            sourceEventIds: ['pr-1'],
+          },
         ],
         null,
         2,
@@ -806,13 +825,14 @@ describe('ProjectMemoryManager', () => {
     await expect(manager.refreshHistoricalImport([project])).resolves.toEqual({
       cleanedProjectCount: 1,
       removedEmptySummaryCount: 2,
-      prunedCandidateCount: 2,
+      prunedCandidateCount: 3,
       regeneratedArchitectureCount: 1,
     })
 
     const latestSummary = JSON.parse(
       await readFile(path.join(memoryRoot, 'summaries', 'latest.json'), 'utf8'),
     ) as {
+      extractionVersion: number | null
       sessionId: string
       summary: string
       sourceEventIds: string[]
@@ -838,8 +858,10 @@ describe('ProjectMemoryManager', () => {
     expect(projectRecord.identity.repoRoot).toBeNull()
     expect(projectRecord.identity.gitCommonDir).toBeNull()
     expect(latestSummary.sessionId).toBe('session-valid')
+    expect(latestSummary.extractionVersion).toBeNull()
     expect(latestSummary.summary).toContain('canonical latest summary')
     expect(latestSummary.sourceEventIds).toHaveLength(32)
+    await expect(manager.hasSessionSummary(project, 'session-valid')).resolves.toBe(false)
     await expect(
       readFile(path.join(memoryRoot, 'summaries', 'session-empty.json'), 'utf8'),
     ).rejects.toThrow()
@@ -861,6 +883,9 @@ describe('ProjectMemoryManager', () => {
     ).toBe(false)
     expect(
       facts.some((candidate) => candidate.content.includes(repoRoot)),
+    ).toBe(false)
+    expect(
+      facts.some((candidate) => candidate.content.includes('PR `#7366`')),
     ).toBe(false)
     await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.toContain(
       'Historical import rebuilt the canonical latest summary.',

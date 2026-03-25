@@ -208,6 +208,7 @@ export function buildPrompt(
       '- Keep every content field self-contained and directly usable by a future agent.',
       '- Use relative repo paths when useful. Never include machine-specific absolute paths.',
       '- Do not record branch names, temporary worktrees, or ephemeral environment details.',
+      '- Do not record ticket-specific progress state such as numbered PRs, current branch/commit state, force-push history, or Jenkins/build status updates.',
       '- sourceEventIds may be empty if the item mainly comes from repo inspection rather than a specific transcript event.',
       '- Use scope="location" only if the guidance is specific to this local checkout.',
       `Logical project title: ${input.project.title}`,
