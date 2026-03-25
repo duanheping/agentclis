@@ -47,6 +47,7 @@ const DEFAULT_TERMINAL_SPLIT_RATIO = 2 / 3
 const MIN_TERMINAL_PANE_HEIGHT = 160
 const TERMINAL_SPLIT_RESIZER_SIZE = 12
 const TERMINAL_SPLIT_KEYBOARD_STEP = 32
+const TERMINAL_SCROLLBACK_LINES = 50_000
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -335,8 +336,11 @@ function TerminalSurface({
       fontFamily: '"Cascadia Mono", Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.25,
-      scrollback: 5000,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
       allowTransparency: true,
+      windowsPty: {
+        backend: 'conpty',
+      },
       theme: {
         background: '#161616',
         foreground: '#e8e8ea',
