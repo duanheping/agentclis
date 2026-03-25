@@ -350,7 +350,7 @@ const MODULE_BLUEPRINTS: ArchitectureModuleBlueprint[] = [
     kind: 'service',
     paths: ['electron/projectMemoryAgent.ts'],
     responsibility:
-      'Builds a bounded transcript prompt and asks the configured model to extract durable facts, decisions, preferences, and workflows.',
+      'Builds a bounded transcript prompt and asks the configured model to extract durable memory such as troubleshooting patterns, component workflows, conventions, critical files, and other high-signal project guidance.',
     owns: [
       'transcript prompt shaping',
       'extractor response parsing',

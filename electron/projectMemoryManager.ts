@@ -9,6 +9,7 @@ import path from 'node:path'
 
 import {
   PROJECT_MEMORY_CANDIDATE_KINDS,
+  PROJECT_MEMORY_EXTRACTION_VERSION,
   PROJECT_MEMORY_SCOPES,
   PROJECT_MEMORY_STATUSES,
 } from '../src/shared/projectMemory'
@@ -146,6 +147,19 @@ const BRANCH_OR_COMMIT_REGEXES = [
   /\b(?:checked[ -]?out|checkout(?:ed)?|switched to|currently on|active)\s+branch\b/iu,
   /\bcommit\s+[a-f0-9]{7,40}\b/iu,
 ]
+const TRANSIENT_TASK_STATE_REGEXES = [
+  /\bpr\s*#\d+\b/iu,
+  /\bforce-push(?:ed)?\b/iu,
+  /\bcurrent checkout\b/iu,
+  /\bthis checkout\b/iu,
+  /\bopened as\b/iu,
+  /\bpublished as\b/iu,
+  /\bwas updated to\b/iu,
+  /\bnow records\b/iu,
+  /\bvalidation result\b/iu,
+  /\bbuild\s+[a-z0-9_-]+\/\d+\b/iu,
+  /\bjenkins[a-z0-9_-]*\/\d+\b/iu,
+] as const
 
 function createId(): string {
   return crypto.randomUUID()
@@ -422,7 +436,8 @@ function isEphemeralMemoryCandidate(
   return (
     containsAbsolutePath(content) ||
     WORKTREE_PATH_FRAGMENT_REGEX.test(combinedText) ||
-    BRANCH_OR_COMMIT_REGEXES.some((pattern) => pattern.test(combinedText))
+    BRANCH_OR_COMMIT_REGEXES.some((pattern) => pattern.test(combinedText)) ||
+    TRANSIENT_TASK_STATE_REGEXES.some((pattern) => pattern.test(combinedText))
   )
 }
 
@@ -482,9 +497,19 @@ function normalizePersistedSummary(value: unknown): SessionSummary | null {
       typeof candidate.generatedAt === 'string' && candidate.generatedAt.trim()
         ? candidate.generatedAt.trim()
         : new Date().toISOString(),
+    extractionVersion:
+      typeof candidate.extractionVersion === 'number' &&
+      Number.isInteger(candidate.extractionVersion) &&
+      candidate.extractionVersion > 0
+        ? candidate.extractionVersion
+        : null,
     summary,
     sourceEventIds,
   }
+}
+
+function isCurrentExtractionSummary(summary: SessionSummary | null): boolean {
+  return summary?.extractionVersion === PROJECT_MEMORY_EXTRACTION_VERSION
 }
 
 function normalizePersistedCandidate(
@@ -1410,7 +1435,7 @@ export class ProjectMemoryManager {
     const summary = normalizePersistedSummary(
       await readJsonFile<SessionSummary | null>(filePath, null),
     )
-    return summary !== null
+    return isCurrentExtractionSummary(summary)
   }
 
   private validateCandidates(
@@ -1427,7 +1452,13 @@ export class ProjectMemoryManager {
       const key = normalizeCandidateKey(candidate.key || content)
       const confidence = clampConfidence(candidate.confidence)
       const sourceEventIds = uniqueStrings(candidate.sourceEventIds)
-      if (!content || !key || confidence < 0.3 || isLowSignalCandidate(content)) {
+      if (
+        !content ||
+        !key ||
+        confidence < 0.3 ||
+        isLowSignalCandidate(content) ||
+        isEphemeralMemoryCandidate(key, content)
+      ) {
         continue
       }
 
@@ -1544,6 +1575,7 @@ export class ProjectMemoryManager {
       projectId: input.project.id,
       locationId: input.location?.id ?? null,
       generatedAt: timestamp,
+      extractionVersion: PROJECT_MEMORY_EXTRACTION_VERSION,
       summary:
         trimExcerpt(extractorResult?.summary ?? null, 600) ??
         buildDeterministicSummary(input.session, input.transcript),
