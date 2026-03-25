@@ -13,7 +13,10 @@ import {
   buildWindowsCommandPromptTerminalId,
   terminalRegistry,
 } from './lib/terminalRegistry'
-import type { ProjectMemoryImportResult } from './shared/ipc'
+import type {
+  ProjectArchitectureAnalysisResult,
+  ProjectSessionsAnalysisResult,
+} from './shared/ipc'
 import type {
   ProjectGitFileChange,
   ProjectGitOverview,
@@ -186,11 +189,38 @@ function formatCountLabel(count: number, singular: string, plural: string): stri
   return `${count} ${count === 1 ? singular : plural}`
 }
 
-function buildProjectMemoryImportStatus(
-  result: ProjectMemoryImportResult,
+function buildProjectArchitectureAnalysisStatus(
+  result: ProjectArchitectureAnalysisResult,
+): string {
+  if (result.analyzedProjectCount === 0) {
+    return 'No stored projects were available for architecture analysis.'
+  }
+
+  return `Analyzed architecture for ${formatCountLabel(
+    result.analyzedProjectCount,
+    'project',
+    'projects',
+  )}.`
+}
+
+function buildProjectSessionsAnalysisStatus(
+  result: ProjectSessionsAnalysisResult,
 ): string {
   const parts: string[] = []
 
+  if (result.analyzedSessionCount > 0) {
+    parts.push(
+      `analyzed ${formatCountLabel(
+        result.analyzedSessionCount,
+        'stored session',
+        'stored sessions',
+      )} across ${formatCountLabel(
+        result.analyzedProjectCount,
+        'project',
+        'projects',
+      )}`,
+    )
+  }
   if (result.cleanedProjectCount > 0) {
     parts.push(
       `refreshed ${formatCountLabel(
@@ -218,27 +248,18 @@ function buildProjectMemoryImportStatus(
       )}`,
     )
   }
-  if (result.regeneratedArchitectureCount > 0) {
+  if (result.skippedSessionCount > 0) {
     parts.push(
-      `regenerated architecture for ${formatCountLabel(
-        result.regeneratedArchitectureCount,
-        'project',
-        'projects',
+      `skipped ${formatCountLabel(
+        result.skippedSessionCount,
+        'empty session',
+        'empty sessions',
       )}`,
-    )
-  }
-  if (result.queuedSessionCount > 0) {
-    parts.push(
-      `queued ${formatCountLabel(
-        result.queuedSessionCount,
-        'session',
-        'sessions',
-      )} for background import`,
     )
   }
 
   if (parts.length === 0) {
-    return 'No stored project memory or sessions were available for import.'
+    return 'No stored Agent CLIs sessions were available for analysis.'
   }
 
   const [firstPart, ...remainingParts] = parts
@@ -304,8 +325,13 @@ function App() {
   const [skillsResolving, setSkillsResolving] = useState<string | null>(null)
   const [skillsGeneratingMerge, setSkillsGeneratingMerge] = useState<string | null>(null)
   const [skillsApplyingMerge, setSkillsApplyingMerge] = useState(false)
-  const [projectMemoryImporting, setProjectMemoryImporting] = useState(false)
-  const [projectMemoryImportStatus, setProjectMemoryImportStatus] =
+  const [projectArchitectureAnalyzing, setProjectArchitectureAnalyzing] =
+    useState(false)
+  const [projectSessionsAnalyzing, setProjectSessionsAnalyzing] =
+    useState(false)
+  const [projectArchitectureAnalysisStatus, setProjectArchitectureAnalysisStatus] =
+    useState<string | null>(null)
+  const [projectSessionsAnalysisStatus, setProjectSessionsAnalysisStatus] =
     useState<string | null>(null)
   const [skillAiMergeProposal, setSkillAiMergeProposal] =
     useState<SkillAiMergeProposal | null>(null)
@@ -535,7 +561,8 @@ function App() {
     const nextSettings = await agentCli.updateSkillLibrarySettings(settings)
     setSkillLibrarySettings(nextSettings)
     setSkillSyncStatus(await agentCli.getSkillSyncStatus())
-    setProjectMemoryImportStatus(null)
+    setProjectArchitectureAnalysisStatus(null)
+    setProjectSessionsAnalysisStatus(null)
     setSkillAiMergeProposal(null)
   }
 
@@ -1208,23 +1235,47 @@ function App() {
     }
   }
 
-  const handleImportHistoricalProjectMemory = async () => {
+  const handleAnalyzeProjectArchitecture = async () => {
     if (!agentCli) {
       setSkillsErrorMessage('Agent bridge is unavailable.')
       return
     }
 
-    setProjectMemoryImporting(true)
-    setProjectMemoryImportStatus(null)
+    setProjectArchitectureAnalyzing(true)
+    setProjectArchitectureAnalysisStatus(null)
     setSkillsErrorMessage(null)
 
     try {
-      const result = await agentCli.importHistoricalProjectMemory()
-      setProjectMemoryImportStatus(buildProjectMemoryImportStatus(result))
+      const result = await agentCli.analyzeProjectArchitecture()
+      setProjectArchitectureAnalysisStatus(
+        buildProjectArchitectureAnalysisStatus(result),
+      )
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
     } finally {
-      setProjectMemoryImporting(false)
+      setProjectArchitectureAnalyzing(false)
+    }
+  }
+
+  const handleAnalyzeProjectSessions = async () => {
+    if (!agentCli) {
+      setSkillsErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setProjectSessionsAnalyzing(true)
+    setProjectSessionsAnalysisStatus(null)
+    setSkillsErrorMessage(null)
+
+    try {
+      const result = await agentCli.analyzeProjectSessions()
+      setProjectSessionsAnalysisStatus(
+        buildProjectSessionsAnalysisStatus(result),
+      )
+    } catch (error) {
+      setSkillsErrorMessage(getErrorMessage(error))
+    } finally {
+      setProjectSessionsAnalyzing(false)
     }
   }
 
@@ -1474,8 +1525,10 @@ function App() {
           skillsResolving={skillsResolving}
           skillsGeneratingMerge={skillsGeneratingMerge}
           skillsApplyingMerge={skillsApplyingMerge}
-          projectMemoryImporting={projectMemoryImporting}
-          projectMemoryImportStatus={projectMemoryImportStatus}
+          projectArchitectureAnalyzing={projectArchitectureAnalyzing}
+          projectSessionsAnalyzing={projectSessionsAnalyzing}
+          projectArchitectureAnalysisStatus={projectArchitectureAnalysisStatus}
+          projectSessionsAnalysisStatus={projectSessionsAnalysisStatus}
           skillAiMergeProposal={skillAiMergeProposal}
           skillsErrorMessage={skillsErrorMessage}
           onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
@@ -1484,7 +1537,8 @@ function App() {
           onSetPrimaryMergeAgent={handleSetPrimaryMergeAgent}
           onSetReviewMergeAgent={handleSetReviewMergeAgent}
           onSyncSkills={handleSyncSkills}
-          onImportHistoricalProjectMemory={handleImportHistoricalProjectMemory}
+          onAnalyzeProjectArchitecture={handleAnalyzeProjectArchitecture}
+          onAnalyzeProjectSessions={handleAnalyzeProjectSessions}
           onResolveSkillConflict={handleResolveSkillConflict}
           onGenerateSkillAiMerge={handleGenerateSkillAiMerge}
           onApplySkillAiMerge={handleApplySkillAiMerge}

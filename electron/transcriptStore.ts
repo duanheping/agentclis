@@ -21,11 +21,15 @@ export class TranscriptStore {
     this.baseRoot = baseRoot
   }
 
-  private getTranscriptPath(sessionId: string): string {
+  getBaseRoot(): string {
+    return this.baseRoot
+  }
+
+  getTranscriptPath(sessionId: string): string {
     return path.join(this.baseRoot, 'transcripts', `${sessionId}.jsonl`)
   }
 
-  private getIndexPath(sessionId: string): string {
+  getIndexPath(sessionId: string): string {
     return path.join(this.baseRoot, 'transcript-index', `${sessionId}.json`)
   }
 

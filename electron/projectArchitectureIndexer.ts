@@ -1153,7 +1153,7 @@ function buildDocumentedArchitectureSnapshot(
   input: ProjectArchitectureIndexInput,
   document: ArchitectureDocumentSnapshot,
 ): ProjectArchitectureSnapshot {
-  const modules =
+  const modules: ArchitectureModuleCard[] =
     document.sections.length > 0
       ? document.sections.map((section, index) => ({
           id: `documented-${slugify(section.heading) || `section-${index + 1}`}`,
@@ -1523,7 +1523,7 @@ function buildGenericModules(
     .filter((entry) => isTestLikeName(entry.name))
     .map((entry) => entry.repoPath)
 
-  const modules = chosenEntries.map((entry) => ({
+  const modules: ArchitectureModuleCard[] = chosenEntries.map((entry) => ({
     id: `top-level-${slugify(entry.name)}`,
     name: humanizeName(entry.name),
     kind: guessModuleKind(entry.name),

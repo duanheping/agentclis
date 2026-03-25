@@ -43,8 +43,10 @@ interface SessionSidebarProps {
   skillsResolving: string | null
   skillsGeneratingMerge: string | null
   skillsApplyingMerge: boolean
-  projectMemoryImporting: boolean
-  projectMemoryImportStatus: string | null
+  projectArchitectureAnalyzing: boolean
+  projectSessionsAnalyzing: boolean
+  projectArchitectureAnalysisStatus: string | null
+  projectSessionsAnalysisStatus: string | null
   skillAiMergeProposal: SkillAiMergeProposal | null
   skillsErrorMessage: string | null
   onPickSkillLibraryRoot: () => Promise<void>
@@ -53,7 +55,8 @@ interface SessionSidebarProps {
   onSetPrimaryMergeAgent: (agent: SkillAiMergeAgent) => Promise<void>
   onSetReviewMergeAgent: (agent: SkillAiReviewAgent) => Promise<void>
   onSyncSkills: () => Promise<void>
-  onImportHistoricalProjectMemory: () => Promise<void>
+  onAnalyzeProjectArchitecture: () => Promise<void>
+  onAnalyzeProjectSessions: () => Promise<void>
   onResolveSkillConflict: (
     skillName: string,
     sourceRoot: SkillSyncRoot,
@@ -367,8 +370,10 @@ export function SessionSidebar({
   skillsResolving,
   skillsGeneratingMerge,
   skillsApplyingMerge,
-  projectMemoryImporting,
-  projectMemoryImportStatus,
+  projectArchitectureAnalyzing,
+  projectSessionsAnalyzing,
+  projectArchitectureAnalysisStatus,
+  projectSessionsAnalysisStatus,
   skillAiMergeProposal,
   skillsErrorMessage,
   onPickSkillLibraryRoot,
@@ -377,7 +382,8 @@ export function SessionSidebar({
   onSetPrimaryMergeAgent,
   onSetReviewMergeAgent,
   onSyncSkills,
-  onImportHistoricalProjectMemory,
+  onAnalyzeProjectArchitecture,
+  onAnalyzeProjectSessions,
   onResolveSkillConflict,
   onGenerateSkillAiMerge,
   onApplySkillAiMerge,
@@ -530,6 +536,8 @@ export function SessionSidebar({
           issue.code,
         ),
     ) ?? []
+  const projectMemoryBusy =
+    projectArchitectureAnalyzing || projectSessionsAnalyzing
 
   return (
     <>
@@ -894,33 +902,59 @@ export function SessionSidebar({
                           <span className="sidebar-settings__field-label">
                             Project memory
                           </span>
+                        </div>
+                        <p className="sidebar-settings__caption">
+                          Use the primary agent with the bundled project-memory skills to analyze repo architecture or all stored Agent CLIs sessions for each logical project.
+                        </p>
+                        <div className="sidebar-settings__actions">
                           <button
                             type="button"
-                            className="ghost-button sidebar-settings__sync-button"
+                            className="ghost-button sidebar-settings__action"
                             disabled={
                               skillsLoading ||
                               skillsBusy ||
-                              projectMemoryImporting ||
+                              projectMemoryBusy ||
                               !skillLibrarySettings.libraryRoot.trim()
                             }
                             onClick={() => {
-                              void onImportHistoricalProjectMemory()
+                              void onAnalyzeProjectArchitecture()
                             }}
                           >
-                            {projectMemoryImporting ? 'Refreshing…' : 'Import history'}
+                            {projectArchitectureAnalyzing
+                              ? 'Analyzing architecture…'
+                              : 'Analyze architecture'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button sidebar-settings__action"
+                            disabled={
+                              skillsLoading ||
+                              skillsBusy ||
+                              projectMemoryBusy ||
+                              !skillLibrarySettings.libraryRoot.trim()
+                            }
+                            onClick={() => {
+                              void onAnalyzeProjectSessions()
+                            }}
+                          >
+                            {projectSessionsAnalyzing
+                              ? 'Analyzing sessions…'
+                              : 'Analyze sessions'}
                           </button>
                         </div>
-                        <p className="sidebar-settings__caption">
-                          Refresh stored project memory, rebuild architecture snapshots, and queue stored Agent CLIs sessions for low-priority import.
-                        </p>
-                        {projectMemoryImportStatus ? (
+                        {projectArchitectureAnalysisStatus ? (
                           <p className="sidebar-settings__caption">
-                            {projectMemoryImportStatus}
+                            {projectArchitectureAnalysisStatus}
+                          </p>
+                        ) : null}
+                        {projectSessionsAnalysisStatus ? (
+                          <p className="sidebar-settings__caption">
+                            {projectSessionsAnalysisStatus}
                           </p>
                         ) : null}
                         {!skillLibrarySettings.libraryRoot.trim() ? (
                           <p className="sidebar-settings__caption">
-                            Choose a library root before importing history.
+                            Choose a library root before running project analysis.
                           </p>
                         ) : null}
                       </div>

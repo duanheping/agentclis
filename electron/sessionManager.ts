@@ -6,7 +6,10 @@ import path from 'node:path'
 
 import Store from 'electron-store'
 
-import type { ProjectMemoryImportResult } from '../src/shared/ipc'
+import type {
+  ProjectArchitectureAnalysisResult,
+  ProjectSessionsAnalysisResult,
+} from '../src/shared/ipc'
 import {
   buildRuntime,
   type CreateProjectInput,
@@ -136,7 +139,12 @@ interface SessionManagerServices {
   transcriptStore?: Pick<TranscriptStore, 'append'>
   projectMemory?: Pick<
     ProjectMemoryService,
-    'assembleContext' | 'captureSession' | 'scheduleBackfillSessions' | 'dispose'
+    | 'analyzeHistoricalArchitecture'
+    | 'analyzeHistoricalSessions'
+    | 'assembleContext'
+    | 'captureSession'
+    | 'scheduleBackfillSessions'
+    | 'dispose'
   > & {
     refreshHistoricalImport?: ProjectMemoryService['refreshHistoricalImport']
   }
@@ -175,6 +183,17 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
     removedEmptySummaryCount: 0,
     prunedCandidateCount: 0,
     regeneratedArchitectureCount: 0,
+  }),
+  analyzeHistoricalArchitecture: async () => ({
+    analyzedProjectCount: 0,
+  }),
+  analyzeHistoricalSessions: async () => ({
+    analyzedProjectCount: 0,
+    analyzedSessionCount: 0,
+    skippedSessionCount: 0,
+    cleanedProjectCount: 0,
+    removedEmptySummaryCount: 0,
+    prunedCandidateCount: 0,
   }),
   dispose: () => undefined,
 }
@@ -310,27 +329,32 @@ export class SessionManager {
     }, BACKGROUND_MEMORY_BACKFILL_DELAY_MS)
   }
 
-  async queueHistoricalProjectMemoryImport(): Promise<ProjectMemoryImportResult> {
+  async analyzeHistoricalProjectArchitecture(): Promise<ProjectArchitectureAnalysisResult> {
     await this.refreshStoredProjectIdentity()
-    const refreshResult =
-      (
-        await this.projectMemory.refreshHistoricalImport?.(
-          Array.from(this.projects.values()),
-        )
-      ) ?? {
-        cleanedProjectCount: 0,
-        removedEmptySummaryCount: 0,
-        prunedCandidateCount: 0,
-        regeneratedArchitectureCount: 0,
-      }
-    const inputs = this.collectBackfillInputs()
-    if (inputs.length > 0) {
-      this.projectMemory.scheduleBackfillSessions(inputs)
-    }
+    return await this.projectMemory.analyzeHistoricalArchitecture(
+      Array.from(this.projects.values()),
+    )
+  }
+
+  async analyzeHistoricalProjectSessions(): Promise<ProjectSessionsAnalysisResult> {
+    await this.refreshStoredProjectIdentity()
+    const refreshResult = await this.projectMemory.refreshHistoricalImport?.(
+      Array.from(this.projects.values()),
+      {
+        regenerateArchitecture: false,
+      },
+    )
+    const analysisResult = await this.projectMemory.analyzeHistoricalSessions(
+      this.collectBackfillInputs(),
+    )
 
     return {
-      queuedSessionCount: inputs.length,
-      ...refreshResult,
+      analyzedProjectCount: analysisResult.analyzedProjectCount,
+      analyzedSessionCount: analysisResult.analyzedSessionCount,
+      skippedSessionCount: analysisResult.skippedSessionCount,
+      cleanedProjectCount: refreshResult?.cleanedProjectCount ?? 0,
+      removedEmptySummaryCount: refreshResult?.removedEmptySummaryCount ?? 0,
+      prunedCandidateCount: refreshResult?.prunedCandidateCount ?? 0,
     }
   }
 

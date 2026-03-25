@@ -35,6 +35,7 @@ import {
 import { ProjectArchitectureAgentExtractor } from './projectArchitectureAgent'
 import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'
 import { ProjectMemoryManager } from './projectMemoryManager'
+import { ProjectSessionHistoryAgentExtractor } from './projectSessionHistoryAgent'
 import { ProjectIdentityResolver } from './projectIdentity'
 import { ProjectMemoryService } from './projectMemoryService'
 import { SkillLibraryManager } from './skillLibraryManager'
@@ -69,6 +70,9 @@ const projectMemoryManager = new ProjectMemoryManager(
     () => skillLibraryManager.getSettings().primaryMergeAgent,
   ),
   new ProjectArchitectureAgentExtractor(
+    () => skillLibraryManager.getSettings().primaryMergeAgent,
+  ),
+  new ProjectSessionHistoryAgentExtractor(
     () => skillLibraryManager.getSettings().primaryMergeAgent,
   ),
 )
@@ -425,8 +429,11 @@ function registerIpcHandlers(): void {
       return nextSettings
     },
   )
-  ipcMain.handle(IPC_CHANNELS.importHistoricalProjectMemory, async () =>
-    sessionManager.queueHistoricalProjectMemoryImport(),
+  ipcMain.handle(IPC_CHANNELS.analyzeProjectArchitecture, async () =>
+    sessionManager.analyzeHistoricalProjectArchitecture(),
+  )
+  ipcMain.handle(IPC_CHANNELS.analyzeProjectSessions, async () =>
+    sessionManager.analyzeHistoricalProjectSessions(),
   )
   ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
     skillLibraryManager.getStatus(),

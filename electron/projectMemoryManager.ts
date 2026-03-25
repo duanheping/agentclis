@@ -33,9 +33,16 @@ import type {
 import type { ProjectConfig, SessionConfig } from '../src/shared/session'
 import type { ProjectArchitectureExtractor } from './projectArchitectureAgent'
 import { indexProjectArchitecture } from './projectArchitectureIndexer'
+import type {
+  HistoricalProjectSessionDescriptor,
+  ProjectSessionHistoryAnalyzer,
+} from './projectSessionHistoryAgent'
+import { truncateUtf8 } from './structuredAgentRunner'
 
 const MEMORY_ROOT_DIRECTORY = '.agenclis-memory'
 const MAX_SOURCE_EVENT_IDS = 32
+const HISTORICAL_SESSIONS_ANALYSIS_JSON = 'sessions-analysis.json'
+const HISTORICAL_SESSIONS_ANALYSIS_MD = 'sessions-analysis.md'
 type ProjectMemorySnapshotCandidateKey = Exclude<
   keyof ProjectMemorySnapshot,
   'summary'
@@ -149,7 +156,9 @@ const BRANCH_OR_COMMIT_REGEXES = [
 ]
 const TRANSIENT_TASK_STATE_REGEXES = [
   /\bpr\s*#\d+\b/iu,
+  /\bcommitted as\b/iu,
   /\bforce-push(?:ed)?\b/iu,
+  /\bpushed on branch\b/iu,
   /\bcurrent checkout\b/iu,
   /\bthis checkout\b/iu,
   /\bopened as\b/iu,
@@ -223,6 +232,28 @@ export interface ProjectMemoryRefreshResult {
   removedEmptySummaryCount: number
   prunedCandidateCount: number
   regeneratedArchitectureCount: number
+}
+
+export interface ProjectArchitectureAnalysisResult {
+  analyzedProjectCount: number
+}
+
+export interface HistoricalProjectSessionAnalysisInput {
+  project: ProjectConfig
+  sessions: HistoricalProjectSessionDescriptor[]
+  transcriptBaseRoot: string
+}
+
+export interface ProjectSessionsAnalysisResult {
+  analyzedProjectCount: number
+  analyzedSessionCount: number
+}
+
+interface HistoricalSessionsAnalysisRecord {
+  generatedAt: string
+  analyzedSessionCount: number
+  analyzedSessionIds: string[]
+  summary: string
 }
 
 function slugify(value: string): string {
@@ -301,6 +332,11 @@ function buildDeterministicSummary(
   session: SessionConfig,
   transcript: TranscriptEvent[],
 ): string {
+  const normalizedTitle = normalizeWhitespace(stripAnsi(session.title))
+  const summarySubject =
+    normalizedTitle && !containsAbsolutePath(normalizedTitle)
+      ? `"${truncateUtf8(normalizedTitle, 120)}"`
+      : 'this session'
   const latestUserInput = [...transcript]
     .reverse()
     .find((event) => event.kind === 'input' && event.source === 'user' && event.chunk)
@@ -308,10 +344,10 @@ function buildDeterministicSummary(
   const normalizedInput = latestUserInput ? normalizeWhitespace(stripAnsi(latestUserInput)) : ''
 
   if (normalizedInput) {
-    return `Session "${session.title}" focused on ${normalizedInput.slice(0, 180)}.`
+    return `${summarySubject === 'this session' ? 'This session' : `Session ${summarySubject}`} focused on ${normalizedInput.slice(0, 180)}.`
   }
 
-  return `Session "${session.title}" recorded ${transcript.length} transcript event${transcript.length === 1 ? '' : 's'}.`
+  return `${summarySubject === 'this session' ? 'This session' : `Session ${summarySubject}`} recorded ${transcript.length} transcript event${transcript.length === 1 ? '' : 's'}.`
 }
 
 function buildNormalizedTranscript(transcript: TranscriptEvent[]): string {
@@ -376,6 +412,22 @@ function deriveProjectMemoryTitle(project: ProjectConfig): string {
 
   const repoName = remoteFingerprint.split('/').filter(Boolean).at(-1)
   return repoName ? repoName.replace(/\.git$/i, '') : project.title
+}
+
+function buildLatestProjectsByMemoryKey(
+  projects: ProjectConfig[],
+): Map<string, ProjectConfig> {
+  const projectByMemoryKey = new Map<string, ProjectConfig>()
+
+  for (const project of projects) {
+    const memoryKey = deriveProjectMemoryKey(project)
+    const current = projectByMemoryKey.get(memoryKey)
+    if (!current || project.updatedAt.localeCompare(current.updatedAt) > 0) {
+      projectByMemoryKey.set(memoryKey, project)
+    }
+  }
+
+  return projectByMemoryKey
 }
 
 function buildPortableProjectIdentity(project: ProjectConfig): ProjectIdentity {
@@ -709,7 +761,7 @@ function buildStableFacts(
   }
 
   pushFact('default-agent-cli', `Default managed CLI: ${session.startupCommand}`, 0.9)
-  pushFact('shell', `Preferred shell: ${session.shell}`, 0.8)
+  pushFact('shell', `Preferred shell: ${path.basename(session.shell) || session.shell}`, 0.8)
 
   if (project.identity?.remoteFingerprint) {
     pushFact(
@@ -786,10 +838,72 @@ function buildFocusedMemoryMarkdown(input: {
   return `${sections.join('\n').trim()}\n`
 }
 
+function normalizeHistoricalSessionsAnalysisRecord(
+  value: unknown,
+): HistoricalSessionsAnalysisRecord | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const candidate = value as Partial<HistoricalSessionsAnalysisRecord>
+  const summary =
+    typeof candidate.summary === 'string'
+      ? normalizeWhitespace(candidate.summary)
+      : ''
+  const analyzedSessionIds = Array.isArray(candidate.analyzedSessionIds)
+    ? candidate.analyzedSessionIds
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : []
+
+  if (!summary || analyzedSessionIds.length === 0) {
+    return null
+  }
+
+  return {
+    generatedAt:
+      typeof candidate.generatedAt === 'string' && candidate.generatedAt.trim()
+        ? candidate.generatedAt.trim()
+        : new Date().toISOString(),
+    analyzedSessionCount:
+      typeof candidate.analyzedSessionCount === 'number' &&
+      Number.isInteger(candidate.analyzedSessionCount) &&
+      candidate.analyzedSessionCount > 0
+        ? candidate.analyzedSessionCount
+        : analyzedSessionIds.length,
+    analyzedSessionIds: [...new Set(analyzedSessionIds)],
+    summary,
+  }
+}
+
+function buildHistoricalSessionsAnalysisMarkdown(input: {
+  projectTitle: string
+  analysis: HistoricalSessionsAnalysisRecord
+}): string {
+  const sections = [
+    `# ${input.projectTitle} Sessions Analysis`,
+    '',
+    'Holistic synthesis from stored Agent CLIs sessions for this logical project.',
+    '',
+    `Analyzed ${input.analysis.analyzedSessionCount} session${input.analysis.analyzedSessionCount === 1 ? '' : 's'}.`,
+    '',
+    '## Summary',
+    input.analysis.summary,
+    '',
+    '## Source Sessions',
+    ...input.analysis.analyzedSessionIds.map((sessionId) => `- ${sessionId}`),
+    '',
+  ]
+
+  return `${sections.join('\n').trim()}\n`
+}
+
 function buildMemoryMarkdown(
   projectTitle: string,
   snapshot: ProjectMemorySnapshot,
   architectureSnapshot?: ProjectArchitectureSnapshot,
+  sessionsAnalysis?: HistoricalSessionsAnalysisRecord | null,
 ): string {
   const sections: string[] = [
     `# ${projectTitle}`,
@@ -813,6 +927,12 @@ function buildMemoryMarkdown(
     )
   }
 
+  if (sessionsAnalysis) {
+    sections.push(
+      '- `sessions-analysis.md`: holistic synthesis from stored Agent CLIs sessions for this logical project',
+    )
+  }
+
   sections.push(
     '- `summaries/latest.md`: latest session summary captured for this logical project',
     '',
@@ -820,6 +940,14 @@ function buildMemoryMarkdown(
     snapshot.summary?.summary || 'No captured session summary yet.',
     '',
   )
+
+  if (sessionsAnalysis) {
+    sections.push(
+      '## Historical Sessions Analysis',
+      sessionsAnalysis.summary,
+      '',
+    )
+  }
 
   buildCandidateListSection(sections, 'Decisions', snapshot.decisions, 6)
   buildCandidateListSection(sections, 'Project Conventions', snapshot.projectConventions, 6)
@@ -1111,16 +1239,19 @@ export class ProjectMemoryManager {
   private readonly getLibraryRoot: () => string
   private readonly extractor?: ProjectMemoryExtractor
   private readonly architectureExtractor?: ProjectArchitectureExtractor
+  private readonly historicalSessionAnalyzer?: ProjectSessionHistoryAnalyzer
   private diagnosticReporter?: ProjectMemoryDiagnosticReporter
 
   constructor(
     getLibraryRoot: () => string,
     extractor?: ProjectMemoryExtractor,
     architectureExtractor?: ProjectArchitectureExtractor,
+    historicalSessionAnalyzer?: ProjectSessionHistoryAnalyzer,
   ) {
     this.getLibraryRoot = getLibraryRoot
     this.extractor = extractor
     this.architectureExtractor = architectureExtractor
+    this.historicalSessionAnalyzer = historicalSessionAnalyzer
   }
 
   setDiagnosticReporter(reporter: ProjectMemoryDiagnosticReporter): void {
@@ -1180,6 +1311,17 @@ export class ProjectMemoryManager {
       : null
   }
 
+  private async readHistoricalSessionsAnalysisFromDirectory(
+    projectDirectory: string,
+  ): Promise<HistoricalSessionsAnalysisRecord | null> {
+    return normalizeHistoricalSessionsAnalysisRecord(
+      await readJsonFile<HistoricalSessionsAnalysisRecord | null>(
+        path.join(projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_JSON),
+        null,
+      ),
+    )
+  }
+
   private async readSnapshotFromDirectory(
     projectDirectory: string,
   ): Promise<ProjectMemorySnapshot> {
@@ -1230,7 +1372,21 @@ export class ProjectMemoryManager {
     identity: ProjectIdentity
     snapshot: ProjectMemorySnapshot
     architectureSnapshot?: ProjectArchitectureSnapshot
+    sessionsAnalysis?: HistoricalSessionsAnalysisRecord | null
   }): Promise<void> {
+    const architectureSnapshot =
+      input.architectureSnapshot ??
+      (await readJsonFile<ProjectArchitectureSnapshot | null>(
+        path.join(input.projectDirectory, 'architecture.json'),
+        null,
+      ))
+    const sessionsAnalysis =
+      typeof input.sessionsAnalysis === 'undefined'
+        ? await this.readHistoricalSessionsAnalysisFromDirectory(
+            input.projectDirectory,
+          )
+        : input.sessionsAnalysis
+
     await mkdir(path.join(input.projectDirectory, 'summaries'), { recursive: true })
     await writeJsonFile(path.join(input.projectDirectory, 'project.json'), {
       id: input.projectId,
@@ -1266,15 +1422,39 @@ export class ProjectMemoryManager {
       })
     }
 
-    if (input.architectureSnapshot) {
+    if (architectureSnapshot) {
       await writeJsonFile(
         path.join(input.projectDirectory, 'architecture.json'),
-        input.architectureSnapshot,
+        architectureSnapshot,
       )
       await writeFile(
         path.join(input.projectDirectory, 'architecture.md'),
-        buildArchitectureMarkdown(input.architectureSnapshot),
+        buildArchitectureMarkdown(architectureSnapshot),
         'utf8',
+      )
+    }
+
+    if (sessionsAnalysis) {
+      await writeJsonFile(
+        path.join(input.projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_JSON),
+        sessionsAnalysis,
+      )
+      await writeFile(
+        path.join(input.projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_MD),
+        buildHistoricalSessionsAnalysisMarkdown({
+          projectTitle: input.projectTitle,
+          analysis: sessionsAnalysis,
+        }),
+        'utf8',
+      )
+    } else {
+      await rm(
+        path.join(input.projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_JSON),
+        { force: true },
+      )
+      await rm(
+        path.join(input.projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_MD),
+        { force: true },
       )
     }
 
@@ -1298,7 +1478,8 @@ export class ProjectMemoryManager {
       buildMemoryMarkdown(
         input.projectTitle,
         input.snapshot,
-        input.architectureSnapshot,
+        architectureSnapshot ?? undefined,
+        sessionsAnalysis,
       ),
       'utf8',
     )
@@ -1626,6 +1807,9 @@ export class ProjectMemoryManager {
 
   async refreshHistoricalImport(
     projects: ProjectConfig[],
+    options: {
+      regenerateArchitecture?: boolean
+    } = {},
   ): Promise<ProjectMemoryRefreshResult> {
     const projectDirectories = await this.listProjectDirectories()
     if (projectDirectories.length === 0) {
@@ -1638,14 +1822,8 @@ export class ProjectMemoryManager {
     }
 
     const timestamp = new Date().toISOString()
-    const projectByMemoryKey = new Map<string, ProjectConfig>()
-    for (const project of projects) {
-      const memoryKey = deriveProjectMemoryKey(project)
-      const current = projectByMemoryKey.get(memoryKey)
-      if (!current || project.updatedAt.localeCompare(current.updatedAt) > 0) {
-        projectByMemoryKey.set(memoryKey, project)
-      }
-    }
+    const projectByMemoryKey = buildLatestProjectsByMemoryKey(projects)
+    const regenerateArchitecture = options.regenerateArchitecture ?? true
 
     const result: ProjectMemoryRefreshResult = {
       cleanedProjectCount: 0,
@@ -1698,7 +1876,7 @@ export class ProjectMemoryManager {
       }
 
       let architectureSnapshot: ProjectArchitectureSnapshot | undefined
-      if (matchedProject) {
+      if (matchedProject && regenerateArchitecture) {
         const indexedArchitecture = await this.indexArchitectureForProject(
           matchedProject,
           null,
@@ -1732,6 +1910,187 @@ export class ProjectMemoryManager {
     return result
   }
 
+  async analyzeHistoricalArchitecture(
+    projects: ProjectConfig[],
+  ): Promise<ProjectArchitectureAnalysisResult> {
+    const projectByMemoryKey = buildLatestProjectsByMemoryKey(projects)
+    if (projectByMemoryKey.size === 0) {
+      return {
+        analyzedProjectCount: 0,
+      }
+    }
+
+    let analyzedProjectCount = 0
+
+    for (const project of projectByMemoryKey.values()) {
+      const projectDirectory = this.getProjectDirectory(project)
+      if (!projectDirectory) {
+        continue
+      }
+
+      const [snapshot, existingProjectRecord, architectureSnapshot] = await Promise.all([
+        this.readSnapshot(project),
+        readJsonFile<StoredProjectRecord | null>(
+          path.join(projectDirectory, 'project.json'),
+          null,
+        ),
+        this.indexArchitectureForProject(project, null),
+      ])
+
+      if (!architectureSnapshot) {
+        continue
+      }
+
+      await this.writeCanonicalArtifacts({
+        projectDirectory,
+        projectId: deriveProjectMemoryKey(project),
+        projectTitle: deriveProjectMemoryTitle(project),
+        createdAt:
+          existingProjectRecord?.createdAt?.trim() || project.createdAt,
+        updatedAt: new Date().toISOString(),
+        identity: buildPortableProjectIdentity(project),
+        snapshot,
+        architectureSnapshot,
+      })
+      analyzedProjectCount += 1
+    }
+
+    return {
+      analyzedProjectCount,
+    }
+  }
+
+  async analyzeHistoricalSessions(
+    inputs: HistoricalProjectSessionAnalysisInput[],
+  ): Promise<ProjectSessionsAnalysisResult> {
+    if (!this.historicalSessionAnalyzer || inputs.length === 0) {
+      return {
+        analyzedProjectCount: 0,
+        analyzedSessionCount: 0,
+      }
+    }
+
+    const projectByMemoryKey = buildLatestProjectsByMemoryKey(
+      inputs.map((input) => input.project),
+    )
+    const groupedInputs = new Map<
+      string,
+      {
+        project: ProjectConfig
+        transcriptBaseRoot: string
+        sessions: HistoricalProjectSessionDescriptor[]
+      }
+    >()
+
+    for (const input of inputs) {
+      const memoryKey = deriveProjectMemoryKey(input.project)
+      const canonicalProject = projectByMemoryKey.get(memoryKey)
+      const currentGroup = groupedInputs.get(memoryKey)
+
+      if (!currentGroup) {
+        groupedInputs.set(memoryKey, {
+          project: canonicalProject ?? input.project,
+          transcriptBaseRoot: input.transcriptBaseRoot,
+          sessions: [...input.sessions],
+        })
+        continue
+      }
+
+      currentGroup.sessions.push(...input.sessions)
+    }
+
+    let analyzedProjectCount = 0
+    let analyzedSessionCount = 0
+
+    for (const [memoryKey, groupedInput] of groupedInputs) {
+      const projectDirectory = this.getProjectDirectory(groupedInput.project)
+      if (!projectDirectory) {
+        continue
+      }
+
+      const currentSessions = groupedInput.sessions
+        .slice()
+        .sort((left, right) =>
+          right.session.updatedAt.localeCompare(left.session.updatedAt),
+        )
+      if (currentSessions.length === 0) {
+        continue
+      }
+
+      const [snapshot, existingProjectRecord, analysis] = await Promise.all([
+        this.readSnapshot(groupedInput.project),
+        readJsonFile<StoredProjectRecord | null>(
+          path.join(projectDirectory, 'project.json'),
+          null,
+        ),
+        this.historicalSessionAnalyzer.analyze({
+          project: groupedInput.project,
+          canonicalMemoryDirectory: projectDirectory,
+          transcriptBaseRoot: groupedInput.transcriptBaseRoot,
+          sessions: currentSessions,
+        }),
+      ])
+
+      const timestamp = new Date().toISOString()
+      const syntheticSession: SessionConfig = {
+        id: `historical-session-analysis:${memoryKey}`,
+        projectId: groupedInput.project.id,
+        locationId: undefined,
+        title: 'Historical Agent CLIs sessions analysis',
+        startupCommand: 'codex',
+        pendingFirstPromptTitle: false,
+        cwd: groupedInput.project.rootPath,
+        shell: 'analysis',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      const extractedCandidates = this.validateCandidates(
+        groupedInput.project,
+        syntheticSession,
+        null,
+        timestamp,
+        analysis.candidates,
+      )
+      const nextSnapshot = createEmptySnapshot(snapshot.summary)
+      for (const bucket of PROJECT_MEMORY_BUCKETS) {
+        const incoming = extractedCandidates.filter(
+          (candidate) => candidate.kind === bucket.kind,
+        )
+        nextSnapshot[bucket.snapshotKey] = this.mergeCandidates(
+          snapshot[bucket.snapshotKey],
+          incoming,
+        )
+      }
+
+      await this.writeCanonicalArtifacts({
+        projectDirectory,
+        projectId: memoryKey,
+        projectTitle: deriveProjectMemoryTitle(groupedInput.project),
+        createdAt:
+          existingProjectRecord?.createdAt?.trim() || groupedInput.project.createdAt,
+        updatedAt: timestamp,
+        identity: buildPortableProjectIdentity(groupedInput.project),
+        snapshot: nextSnapshot,
+        sessionsAnalysis: {
+          generatedAt: timestamp,
+          analyzedSessionCount: currentSessions.length,
+          analyzedSessionIds: currentSessions.map((entry) => entry.session.id),
+          summary:
+            trimExcerpt(analysis.summary, 1_200) ??
+            `Analyzed ${currentSessions.length} stored session${currentSessions.length === 1 ? '' : 's'} for durable project memory.`,
+        },
+      })
+
+      analyzedProjectCount += 1
+      analyzedSessionCount += currentSessions.length
+    }
+
+    return {
+      analyzedProjectCount,
+      analyzedSessionCount,
+    }
+  }
+
   async assembleContext(input: {
     project: ProjectConfig
     location: ProjectLocation | null
@@ -1749,9 +2108,10 @@ export class ProjectMemoryManager {
       }
     }
 
-    const [snapshot, architectureSnapshot] = await Promise.all([
+    const [snapshot, architectureSnapshot, sessionsAnalysis] = await Promise.all([
       this.readSnapshot(input.project),
       this.readArchitectureSnapshot(input.project),
+      this.readHistoricalSessionsAnalysisFromDirectory(projectDirectory),
     ])
     const hasMaterial =
       Boolean(snapshot.summary?.summary) ||
@@ -1759,7 +2119,8 @@ export class ProjectMemoryManager {
         (bucket) => snapshot[bucket.snapshotKey].length > 0,
       ) ||
       Boolean(architectureSnapshot?.systemOverview) ||
-      (architectureSnapshot?.modules.length ?? 0) > 0
+      (architectureSnapshot?.modules.length ?? 0) > 0 ||
+      Boolean(sessionsAnalysis?.summary)
     if (!hasMaterial) {
       return {
         projectId: input.project.id,
@@ -1837,9 +2198,13 @@ export class ProjectMemoryManager {
       architectureSnapshot?.systemOverview ?? null,
       260,
     )
+    const sessionsAnalysisExcerpt = trimExcerpt(sessionsAnalysis?.summary ?? null, 260)
     const fileReferences = [
       path.join(projectDirectory, 'memory.md'),
       path.join(projectDirectory, 'summaries', 'latest.md'),
+      ...(sessionsAnalysis
+        ? [path.join(projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_MD)]
+        : []),
       ...(architectureSnapshot
         ? [
             path.join(projectDirectory, 'architecture.md'),
@@ -1901,6 +2266,9 @@ export class ProjectMemoryManager {
       ...fileReferences.map((filePath) => `- ${filePath}`),
       locationLine,
       summaryExcerpt ? `Latest summary: ${summaryExcerpt}` : null,
+      sessionsAnalysisExcerpt
+        ? `Historical sessions analysis: ${sessionsAnalysisExcerpt}`
+        : null,
       architectureExcerpt ? `Architecture overview: ${architectureExcerpt}` : null,
       conventionPreview ? `Project conventions:\n${conventionPreview}` : null,
       componentWorkflowPreview

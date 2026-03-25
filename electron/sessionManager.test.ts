@@ -220,6 +220,46 @@ vi.mock('./projectWorktree', () => ({
 
 import { SessionManager } from './sessionManager'
 
+function buildProjectMemoryContext(
+  projectId = 'project-1',
+  locationId = 'location-1',
+) {
+  return {
+    projectId,
+    locationId,
+    generatedAt: '2026-03-22T12:00:10.000Z',
+    bootstrapMessage: null,
+    fileReferences: [],
+    summaryExcerpt: null,
+  }
+}
+
+function buildProjectMemoryServiceMock(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    assembleContext: vi.fn(async () => buildProjectMemoryContext()),
+    captureSession: vi.fn(async () => undefined),
+    scheduleBackfillSessions: vi.fn(() => undefined),
+    refreshHistoricalImport: vi.fn(async () => ({
+      cleanedProjectCount: 0,
+      removedEmptySummaryCount: 0,
+      prunedCandidateCount: 0,
+      regeneratedArchitectureCount: 0,
+    })),
+    analyzeHistoricalArchitecture: vi.fn(async () => ({
+      analyzedProjectCount: 0,
+    })),
+    analyzeHistoricalSessions: vi.fn(async () => ({
+      analyzedProjectCount: 0,
+      analyzedSessionCount: 0,
+      skippedSessionCount: 0,
+    })),
+    dispose: vi.fn(() => undefined),
+    ...overrides,
+  }
+}
+
 describe('SessionManager restore policy', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -1094,25 +1134,15 @@ describe('SessionManager logical project identity and project context', () => {
       activeSessionId: 'session-b',
     })
 
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-a',
-        locationId: 'location-a',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => buildProjectMemoryContext('project-a', 'location-a')),
       refreshHistoricalImport: vi.fn(async () => ({
         cleanedProjectCount: 1,
         removedEmptySummaryCount: 2,
         prunedCandidateCount: 3,
         regeneratedArchitectureCount: 1,
       })),
-      dispose: vi.fn(() => undefined),
-    }
+    })
 
     const manager = new SessionManager(
       {
@@ -1227,25 +1257,15 @@ describe('SessionManager logical project identity and project context', () => {
       activeSessionId: 'session-b',
     })
 
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-a',
-        locationId: 'location-a',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => buildProjectMemoryContext('project-a', 'location-a')),
       refreshHistoricalImport: vi.fn(async () => ({
         cleanedProjectCount: 1,
         removedEmptySummaryCount: 2,
         prunedCandidateCount: 3,
         regeneratedArchitectureCount: 1,
       })),
-      dispose: vi.fn(() => undefined),
-    }
+    })
 
     const manager = new SessionManager(
       {
@@ -1350,20 +1370,14 @@ describe('SessionManager logical project identity and project context', () => {
       }),
       readEvents: vi.fn(async () => structuredClone(transcriptEvents)),
     }
-    const projectMemory = {
+    const projectMemory = buildProjectMemoryServiceMock({
       assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
+        ...buildProjectMemoryContext(),
         bootstrapMessage: 'Use the project memory.\nRead:\n- memory.md',
         fileReferences: ['memory.md'],
         summaryExcerpt: 'Latest summary',
       })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
-      dispose: vi.fn(() => undefined),
-    }
+    })
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1434,25 +1448,14 @@ describe('SessionManager logical project identity and project context', () => {
         transcriptEvents.push(event)
       }),
     }
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
+    const projectMemory = buildProjectMemoryServiceMock({
       refreshHistoricalImport: vi.fn(async () => ({
         cleanedProjectCount: 1,
         removedEmptySummaryCount: 2,
         prunedCandidateCount: 3,
         regeneratedArchitectureCount: 1,
       })),
-      dispose: vi.fn(() => undefined),
-    }
+    })
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1504,20 +1507,7 @@ describe('SessionManager logical project identity and project context', () => {
   })
 
   it('queues project memory capture for open sessions during shutdown', async () => {
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
-      dispose: vi.fn(() => undefined),
-    }
+    const projectMemory = buildProjectMemoryServiceMock()
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1613,20 +1603,7 @@ describe('SessionManager logical project identity and project context', () => {
       activeSessionId: null,
     })
 
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
-      dispose: vi.fn(() => undefined),
-    }
+    const projectMemory = buildProjectMemoryServiceMock()
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1729,20 +1706,7 @@ describe('SessionManager logical project identity and project context', () => {
       activeSessionId: 'session-a',
     })
 
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
-      dispose: vi.fn(() => undefined),
-    }
+    const projectMemory = buildProjectMemoryServiceMock()
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1788,20 +1752,7 @@ describe('SessionManager logical project identity and project context', () => {
   })
 
   it('can schedule low-priority project-memory backfill for an existing active session', async () => {
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
-      mergeProjects: vi.fn(async () => undefined),
-      dispose: vi.fn(() => undefined),
-    }
+    const projectMemory = buildProjectMemoryServiceMock()
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1847,7 +1798,7 @@ describe('SessionManager logical project identity and project context', () => {
     ])
   })
 
-  it('queues a dedicated historical project-memory import on demand', async () => {
+  it('analyzes stored project architecture on demand', async () => {
     mocks.setPersistedState({
       projects: [
         {
@@ -1907,25 +1858,11 @@ describe('SessionManager logical project identity and project context', () => {
       activeSessionId: 'session-a',
     })
 
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-1',
-        locationId: 'location-1',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
+    const projectMemory = buildProjectMemoryServiceMock({
+      analyzeHistoricalArchitecture: vi.fn(async () => ({
+        analyzedProjectCount: 1,
       })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
-      refreshHistoricalImport: vi.fn(async () => ({
-        cleanedProjectCount: 1,
-        removedEmptySummaryCount: 2,
-        prunedCandidateCount: 3,
-        regeneratedArchitectureCount: 1,
-      })),
-      dispose: vi.fn(() => undefined),
-    }
+    })
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -1952,34 +1889,20 @@ describe('SessionManager logical project identity and project context', () => {
       },
     )
 
-    await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toEqual({
-      queuedSessionCount: 2,
-      cleanedProjectCount: 1,
-      removedEmptySummaryCount: 2,
-      prunedCandidateCount: 3,
-      regeneratedArchitectureCount: 1,
+    await expect(manager.analyzeHistoricalProjectArchitecture()).resolves.toEqual({
+      analyzedProjectCount: 1,
     })
-    expect(projectMemory.refreshHistoricalImport).toHaveBeenCalledWith([
+    expect(identityResolver.inspect).toHaveBeenCalledTimes(1)
+    expect(projectMemory.analyzeHistoricalArchitecture).toHaveBeenCalledWith([
       expect.objectContaining({
         id: 'project-1',
       }),
     ])
-    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledTimes(1)
-    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
-      expect.objectContaining({
-        session: expect.objectContaining({
-          id: 'session-b',
-        }),
-      }),
-      expect.objectContaining({
-        session: expect.objectContaining({
-          id: 'session-a',
-        }),
-      }),
-    ])
+    expect(projectMemory.refreshHistoricalImport).not.toHaveBeenCalled()
+    expect(projectMemory.scheduleBackfillSessions).not.toHaveBeenCalled()
   })
 
-  it('refreshes repo identity before manual history import without collapsing clone projects', async () => {
+  it('refreshes repo identity before stored sessions analysis without collapsing clone projects', async () => {
     mocks.setPersistedState({
       projects: [
         {
@@ -2064,25 +1987,20 @@ describe('SessionManager logical project identity and project context', () => {
       activeSessionId: 'session-b',
     })
 
-    const projectMemory = {
-      assembleContext: vi.fn(async () => ({
-        projectId: 'project-a',
-        locationId: 'location-a',
-        generatedAt: '2026-03-22T12:00:10.000Z',
-        bootstrapMessage: null,
-        fileReferences: [],
-        summaryExcerpt: null,
-      })),
-      captureSession: vi.fn(async () => undefined),
-      scheduleBackfillSessions: vi.fn(() => undefined),
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => buildProjectMemoryContext('project-a', 'location-a')),
       refreshHistoricalImport: vi.fn(async () => ({
         cleanedProjectCount: 2,
         removedEmptySummaryCount: 0,
         prunedCandidateCount: 0,
         regeneratedArchitectureCount: 2,
       })),
-      dispose: vi.fn(() => undefined),
-    }
+      analyzeHistoricalSessions: vi.fn(async () => ({
+        analyzedProjectCount: 2,
+        analyzedSessionCount: 2,
+        skippedSessionCount: 0,
+      })),
+    })
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
         rootPath,
@@ -2109,12 +2027,13 @@ describe('SessionManager logical project identity and project context', () => {
       },
     )
 
-    await expect(manager.queueHistoricalProjectMemoryImport()).resolves.toEqual({
-      queuedSessionCount: 2,
+    await expect(manager.analyzeHistoricalProjectSessions()).resolves.toEqual({
+      analyzedProjectCount: 2,
+      analyzedSessionCount: 2,
+      skippedSessionCount: 0,
       cleanedProjectCount: 2,
       removedEmptySummaryCount: 0,
       prunedCandidateCount: 0,
-      regeneratedArchitectureCount: 2,
     })
 
     expect(identityResolver.inspect).toHaveBeenCalledTimes(2)
@@ -2125,8 +2044,10 @@ describe('SessionManager logical project identity and project context', () => {
       expect.objectContaining({
         id: 'project-b',
       }),
-    ])
-    expect(projectMemory.scheduleBackfillSessions).toHaveBeenCalledWith([
+    ], {
+      regenerateArchitecture: false,
+    })
+    expect(projectMemory.analyzeHistoricalSessions).toHaveBeenCalledWith([
       expect.objectContaining({
         project: expect.objectContaining({
           id: 'project-a',
@@ -2146,5 +2067,6 @@ describe('SessionManager logical project identity and project context', () => {
         }),
       }),
     ])
+    expect(projectMemory.scheduleBackfillSessions).not.toHaveBeenCalled()
   })
 })

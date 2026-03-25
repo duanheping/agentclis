@@ -154,8 +154,10 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       skillsResolving={null}
       skillsGeneratingMerge={null}
       skillsApplyingMerge={false}
-      projectMemoryImporting={false}
-      projectMemoryImportStatus={null}
+      projectArchitectureAnalyzing={false}
+      projectSessionsAnalyzing={false}
+      projectArchitectureAnalysisStatus={null}
+      projectSessionsAnalysisStatus={null}
       skillAiMergeProposal={null}
       skillsErrorMessage={null}
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
@@ -164,7 +166,8 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       onSetPrimaryMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSetReviewMergeAgent={vi.fn().mockResolvedValue(undefined)}
       onSyncSkills={vi.fn().mockResolvedValue(undefined)}
-      onImportHistoricalProjectMemory={vi.fn().mockResolvedValue(undefined)}
+      onAnalyzeProjectArchitecture={vi.fn().mockResolvedValue(undefined)}
+      onAnalyzeProjectSessions={vi.fn().mockResolvedValue(undefined)}
       onResolveSkillConflict={vi.fn().mockResolvedValue(undefined)}
       onGenerateSkillAiMerge={vi.fn().mockResolvedValue(undefined)}
       onApplySkillAiMerge={vi.fn().mockResolvedValue(undefined)}
@@ -219,18 +222,32 @@ describe('SessionSidebar', () => {
     )
   })
 
-  it('forwards the dedicated project-memory history import action', async () => {
+  it('forwards the dedicated project architecture analysis action', async () => {
     const user = userEvent.setup()
-    const onImportHistoricalProjectMemory = vi.fn().mockResolvedValue(undefined)
+    const onAnalyzeProjectArchitecture = vi.fn().mockResolvedValue(undefined)
 
     renderSidebar({
-      onImportHistoricalProjectMemory,
+      onAnalyzeProjectArchitecture,
     })
 
     await user.click(screen.getByRole('button', { name: 'Settings' }))
-    await user.click(screen.getByRole('button', { name: 'Import history' }))
+    await user.click(screen.getByRole('button', { name: 'Analyze architecture' }))
 
-    expect(onImportHistoricalProjectMemory).toHaveBeenCalledTimes(1)
+    expect(onAnalyzeProjectArchitecture).toHaveBeenCalledTimes(1)
+  })
+
+  it('forwards the stored sessions analysis action', async () => {
+    const user = userEvent.setup()
+    const onAnalyzeProjectSessions = vi.fn().mockResolvedValue(undefined)
+
+    renderSidebar({
+      onAnalyzeProjectSessions,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Analyze sessions' }))
+
+    expect(onAnalyzeProjectSessions).toHaveBeenCalledTimes(1)
   })
 
   it('allows spaces while renaming a session', async () => {

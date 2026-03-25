@@ -302,12 +302,16 @@ function createAgentCliMock(
     getSkillSyncStatus: vi
       .fn()
       .mockImplementation(async () => structuredClone(currentSkillStatus)),
-    importHistoricalProjectMemory: vi.fn().mockResolvedValue({
-      queuedSessionCount: 2,
+    analyzeProjectArchitecture: vi.fn().mockResolvedValue({
+      analyzedProjectCount: 1,
+    }),
+    analyzeProjectSessions: vi.fn().mockResolvedValue({
+      analyzedProjectCount: 1,
+      analyzedSessionCount: 2,
+      skippedSessionCount: 1,
       cleanedProjectCount: 1,
       removedEmptySummaryCount: 2,
       prunedCandidateCount: 3,
-      regeneratedArchitectureCount: 1,
     }),
     syncSkills: vi.fn().mockImplementation(async () => {
       currentSkillStatus = {
@@ -534,7 +538,7 @@ describe('App skills settings', () => {
     )
   })
 
-  it('queues a dedicated historical project-memory import from the settings panel', async () => {
+  it('runs project architecture analysis from the settings panel', async () => {
     const user = userEvent.setup()
     const { agentCli } = createAgentCliMock()
 
@@ -550,15 +554,44 @@ describe('App skills settings', () => {
       expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Import history' }))
+    await user.click(screen.getByRole('button', { name: 'Analyze architecture' }))
 
     await waitFor(() => {
-      expect(agentCli.importHistoricalProjectMemory).toHaveBeenCalledTimes(1)
+      expect(agentCli.analyzeProjectArchitecture).toHaveBeenCalledTimes(1)
     })
 
     expect(
       screen.getByText(
-        'Refreshed 1 project memory snapshot, removed 2 empty summaries, pruned 3 stale memory entries, regenerated architecture for 1 project, queued 2 sessions for background import.',
+        'Analyzed architecture for 1 project.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('runs stored sessions analysis from the settings panel', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Create a project or session to get started.')
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Choose' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Analyze sessions' }))
+
+    await waitFor(() => {
+      expect(agentCli.analyzeProjectSessions).toHaveBeenCalledTimes(1)
+    })
+
+    expect(
+      screen.getByText(
+        'Analyzed 2 stored sessions across 1 project, refreshed 1 project memory snapshot, removed 2 empty summaries, pruned 3 stale memory entries, skipped 1 empty session.',
       ),
     ).toBeInTheDocument()
   })
