@@ -4,9 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionSnapshot } from '../shared/session'
 
 const mockFit = vi.hoisted(() => vi.fn())
+const mockTerminalConstructor = vi.hoisted(() => vi.fn())
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class MockTerminal {
+    constructor(options?: unknown) {
+      mockTerminalConstructor(options)
+    }
+
     cols = 80
     rows = 24
     element = document.createElement('div')
@@ -119,6 +124,7 @@ describe('TerminalWorkspace', () => {
   beforeEach(() => {
     window.localStorage.clear()
     mockFit.mockClear()
+    mockTerminalConstructor.mockClear()
 
     vi.stubGlobal(
       'requestAnimationFrame',
@@ -226,5 +232,24 @@ describe('TerminalWorkspace', () => {
     expect(
       parseFloat(stack!.style.getPropertyValue('--terminal-split-bottom-size')),
     ).toBeCloseTo(18.92, 1)
+  })
+
+  it('configures terminals for long ConPTY-backed sessions', () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    expect(mockTerminalConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scrollback: 50_000,
+        windowsPty: {
+          backend: 'conpty',
+        },
+      }),
+    )
   })
 })
