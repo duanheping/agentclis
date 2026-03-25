@@ -1,4 +1,6 @@
 import path from 'node:path'
+import { createRequire } from 'node:module'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -43,6 +45,12 @@ import { SessionManager } from './sessionManager'
 import { TransientFileStore } from './transientFileStore'
 import { TranscriptStore } from './transcriptStore'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
+import { resolveShellCommand, buildShellArgs, supportsInlineShellCommand } from './windowsShell'
+import { cleanupStructuredAgentTemp } from './structuredAgentRunner'
+
+type IPty = import('node-pty').IPty
+const requireNative = createRequire(import.meta.url)
+const nodePty = requireNative('node-pty') as typeof import('node-pty')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -109,6 +117,177 @@ const windowsCommandPromptManager = new WindowsCommandPromptManager({
     mainWindow?.webContents.send(IPC_CHANNELS.windowsCommandPromptExit, event)
   },
 })
+
+let analysisWindow: BrowserWindow | null = null
+let analysisTerminal: IPty | null = null
+let analysisContext: {
+  kind: 'architecture' | 'sessions'
+  tempRoot: string
+  outputPath: string
+} | null = null
+
+async function openAnalysisWindow(
+  kind: 'architecture' | 'sessions',
+): Promise<void> {
+  await sessionManager.ensureProjectIdentity()
+
+  let preparation: Awaited<ReturnType<typeof projectMemoryService.prepareArchitectureAnalysis>>
+    | Awaited<ReturnType<typeof projectMemoryService.prepareSessionsAnalysis>>
+
+  if (kind === 'architecture') {
+    preparation = await projectMemoryService.prepareArchitectureAnalysis(
+      sessionManager.getProjectConfigs(),
+    )
+  } else {
+    await projectMemoryService.refreshHistoricalImport(
+      sessionManager.getProjectConfigs(),
+      { regenerateArchitecture: false },
+    )
+    preparation = await projectMemoryService.prepareSessionsAnalysis(
+      sessionManager.getBackfillInputs(),
+    )
+  }
+
+  if (!preparation) {
+    throw new Error(
+      kind === 'architecture'
+        ? 'No projects available for architecture analysis.'
+        : 'No sessions available for analysis.',
+    )
+  }
+
+  closeAnalysisTerminal()
+
+  analysisContext = {
+    kind,
+    tempRoot: preparation.prepared.tempRoot,
+    outputPath: preparation.prepared.outputPath,
+  }
+
+  if (analysisWindow && !analysisWindow.isDestroyed()) {
+    analysisWindow.show()
+    analysisWindow.focus()
+  } else {
+    const title = kind === 'architecture'
+      ? 'Architecture Analysis'
+      : 'Sessions Analysis'
+    analysisWindow = new BrowserWindow({
+      ...createWindowOptions(title, 1060, 720),
+      minWidth: 700,
+      minHeight: 400,
+    })
+    analysisWindow.removeMenu()
+    await loadRendererWindow(analysisWindow, 'analysis')
+    analysisWindow.on('closed', () => {
+      analysisWindow = null
+      closeAnalysisTerminal()
+    })
+  }
+
+  const shellCommand = resolveShellCommand()
+  const launchesInline = supportsInlineShellCommand(shellCommand)
+  const terminal = nodePty.spawn(
+    shellCommand,
+    buildShellArgs(shellCommand, launchesInline ? preparation.prepared.startupCommand : undefined),
+    {
+      name: 'xterm-color',
+      cols: 120,
+      rows: 36,
+      cwd: preparation.prepared.cwd,
+      useConpty: true,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    },
+  )
+
+  analysisTerminal = terminal
+
+  terminal.onData((chunk) => {
+    analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalData, { chunk })
+  })
+
+  terminal.onExit(({ exitCode }) => {
+    analysisTerminal = null
+    void finalizeAnalysis(exitCode)
+  })
+
+  if (!launchesInline) {
+    setTimeout(() => {
+      terminal.write(`${preparation!.prepared.startupCommand}\r`)
+    }, 60)
+  }
+}
+
+function closeAnalysisTerminal(): void {
+  if (analysisTerminal) {
+    try { analysisTerminal.kill() } catch { /* ignore */ }
+    analysisTerminal = null
+  }
+  if (analysisContext) {
+    void cleanupStructuredAgentTemp(analysisContext.tempRoot)
+    analysisContext = null
+  }
+}
+
+async function finalizeAnalysis(exitCode: number): Promise<void> {
+  const ctx = analysisContext
+  analysisContext = null
+  if (!ctx) return
+
+  let message: string
+  try {
+    if (exitCode !== 0) {
+      message = `Analysis agent exited with code ${exitCode}. Output was not processed.`
+    } else {
+      let rawOutput: string
+      try {
+        rawOutput = await readFile(ctx.outputPath, 'utf8')
+      } catch {
+        message = 'Analysis completed but no output file was produced.'
+        return
+      }
+
+      if (!rawOutput.trim()) {
+        message = 'Analysis produced an empty output file.'
+        return
+      }
+
+      if (ctx.kind === 'architecture') {
+        const result = await projectMemoryService.finalizeArchitectureAnalysis(
+          (await getFirstProject())!,
+          rawOutput,
+        )
+        message = `Architecture analysis complete. Analyzed ${result.analyzedProjectCount} project(s).`
+      } else {
+        const firstPrep = await projectMemoryService.prepareSessionsAnalysis(
+          sessionManager.getBackfillInputs(),
+        )
+        if (firstPrep) {
+          const result = await projectMemoryService.finalizeSessionsAnalysis(
+            firstPrep.project,
+            firstPrep.sessions,
+            rawOutput,
+          )
+          message = `Sessions analysis complete. Analyzed ${result.analyzedSessionCount} session(s) across ${result.analyzedProjectCount} project(s).`
+        } else {
+          message = 'Sessions analysis output processed but no matching project found.'
+        }
+      }
+    }
+  } catch (error) {
+    message = `Failed to finalize analysis: ${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    void cleanupStructuredAgentTemp(ctx.tempRoot)
+  }
+
+  analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalExit, {
+    exitCode,
+    message: message!,
+  })
+}
+
+async function getFirstProject() {
+  return sessionManager.getProjectConfigs()[0] ?? null
+}
 
 function getPreloadPath(): string {
   return path.join(__dirname, 'preload.mjs')
@@ -196,13 +375,13 @@ function updateMainWindowShell(): void {
 
 async function loadRendererWindow(
   window: BrowserWindow,
-  view: 'main' | 'skill-sync',
+  view: 'main' | 'skill-sync' | 'analysis',
 ): Promise<void> {
   if (process.env.VITE_DEV_SERVER_URL) {
     const url = new URL(process.env.VITE_DEV_SERVER_URL)
 
-    if (view === 'skill-sync') {
-      url.searchParams.set('view', 'skill-sync')
+    if (view !== 'main') {
+      url.searchParams.set('view', view)
     }
 
     await window.loadURL(url.toString())
@@ -210,7 +389,7 @@ async function loadRendererWindow(
   }
 
   await window.loadFile(path.join(__dirname, '../dist/index.html'), {
-    search: view === 'skill-sync' ? '?view=skill-sync' : '',
+    search: view !== 'main' ? `?view=${view}` : '',
   })
 }
 
@@ -435,12 +614,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.analyzeProjectSessions, async () =>
     sessionManager.analyzeHistoricalProjectSessions(),
   )
-  ipcMain.handle(IPC_CHANNELS.startArchitectureAnalysisSession, async () =>
-    sessionManager.startArchitectureAnalysisSession(),
+  ipcMain.handle(IPC_CHANNELS.openArchitectureAnalysisWindow, async () =>
+    openAnalysisWindow('architecture'),
   )
-  ipcMain.handle(IPC_CHANNELS.startSessionsAnalysisSession, async () =>
-    sessionManager.startSessionsAnalysisSession(),
+  ipcMain.handle(IPC_CHANNELS.openSessionsAnalysisWindow, async () =>
+    openAnalysisWindow('sessions'),
   )
+  ipcMain.handle(IPC_CHANNELS.analysisTerminalWrite, (_event, data: string) => {
+    analysisTerminal?.write(data)
+  })
+  ipcMain.handle(IPC_CHANNELS.analysisTerminalResize, (_event, cols: number, rows: number) => {
+    if (analysisTerminal && cols >= 2 && rows >= 1) {
+      analysisTerminal.resize(Math.floor(cols), Math.floor(rows))
+    }
+  })
   ipcMain.handle(IPC_CHANNELS.getSkillSyncStatus, () =>
     skillLibraryManager.getStatus(),
   )

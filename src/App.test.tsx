@@ -315,6 +315,12 @@ function createAgentCliMock(
     }),
     startArchitectureAnalysisSession: vi.fn().mockResolvedValue({ config: {}, runtime: {} }),
     startSessionsAnalysisSession: vi.fn().mockResolvedValue({ config: {}, runtime: {} }),
+    openArchitectureAnalysisWindow: vi.fn().mockResolvedValue(undefined),
+    openSessionsAnalysisWindow: vi.fn().mockResolvedValue(undefined),
+    onAnalysisTerminalData: vi.fn().mockReturnValue(() => {}),
+    onAnalysisTerminalExit: vi.fn().mockReturnValue(() => {}),
+    writeToAnalysisTerminal: vi.fn().mockResolvedValue(undefined),
+    resizeAnalysisTerminal: vi.fn().mockResolvedValue(undefined),
     syncSkills: vi.fn().mockImplementation(async () => {
       currentSkillStatus = {
         ...currentSkillStatus,
@@ -559,12 +565,12 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze architecture' }))
 
     await waitFor(() => {
-      expect(agentCli.startArchitectureAnalysisSession).toHaveBeenCalledTimes(1)
+      expect(agentCli.openArchitectureAnalysisWindow).toHaveBeenCalledTimes(1)
     })
 
     expect(
       screen.getByText(
-        'Architecture analysis session started. Monitor progress in the terminal.',
+        'Architecture analysis window opened.',
       ),
     ).toBeInTheDocument()
   })
@@ -588,12 +594,12 @@ describe('App skills settings', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze sessions' }))
 
     await waitFor(() => {
-      expect(agentCli.startSessionsAnalysisSession).toHaveBeenCalledTimes(1)
+      expect(agentCli.openSessionsAnalysisWindow).toHaveBeenCalledTimes(1)
     })
 
     expect(
       screen.getByText(
-        'Sessions analysis started. Monitor progress in the terminal.',
+        'Sessions analysis window opened.',
       ),
     ).toBeInTheDocument()
   })

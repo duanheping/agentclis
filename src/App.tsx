@@ -1164,10 +1164,9 @@ function App() {
     setSkillsErrorMessage(null)
 
     try {
-      await agentCli.startArchitectureAnalysisSession()
-      await refreshWorkspace()
+      await agentCli.openArchitectureAnalysisWindow()
       setProjectArchitectureAnalysisStatus(
-        'Architecture analysis session started. Monitor progress in the terminal.',
+        'Architecture analysis window opened.',
       )
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
@@ -1187,10 +1186,9 @@ function App() {
     setSkillsErrorMessage(null)
 
     try {
-      await agentCli.startSessionsAnalysisSession()
-      await refreshWorkspace()
+      await agentCli.openSessionsAnalysisWindow()
       setProjectSessionsAnalysisStatus(
-        'Sessions analysis started. Monitor progress in the terminal.',
+        'Sessions analysis window opened.',
       )
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))

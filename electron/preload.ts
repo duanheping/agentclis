@@ -52,10 +52,18 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.analyzeProjectArchitecture),
   analyzeProjectSessions: () =>
     ipcRenderer.invoke(IPC_CHANNELS.analyzeProjectSessions),
-  startArchitectureAnalysisSession: () =>
-    ipcRenderer.invoke(IPC_CHANNELS.startArchitectureAnalysisSession),
-  startSessionsAnalysisSession: () =>
-    ipcRenderer.invoke(IPC_CHANNELS.startSessionsAnalysisSession),
+  openArchitectureAnalysisWindow: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.openArchitectureAnalysisWindow),
+  openSessionsAnalysisWindow: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.openSessionsAnalysisWindow),
+  onAnalysisTerminalData: (listener) =>
+    createListener<{ chunk: string }>(IPC_CHANNELS.analysisTerminalData, listener),
+  onAnalysisTerminalExit: (listener) =>
+    createListener<{ exitCode: number; message: string }>(IPC_CHANNELS.analysisTerminalExit, listener),
+  writeToAnalysisTerminal: (data) =>
+    ipcRenderer.invoke(IPC_CHANNELS.analysisTerminalWrite, data),
+  resizeAnalysisTerminal: (cols, rows) =>
+    ipcRenderer.invoke(IPC_CHANNELS.analysisTerminalResize, cols, rows),
   getSkillSyncStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getSkillSyncStatus),
   syncSkills: () => ipcRenderer.invoke(IPC_CHANNELS.syncSkills),
   resolveSkillConflict: (skillName, sourceRoot) =>

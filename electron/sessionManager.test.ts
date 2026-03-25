@@ -255,10 +255,6 @@ function buildProjectMemoryServiceMock(
       analyzedSessionCount: 0,
       skippedSessionCount: 0,
     })),
-    prepareArchitectureAnalysis: vi.fn().mockResolvedValue(null),
-    finalizeArchitectureAnalysis: vi.fn().mockResolvedValue({ analyzedProjectCount: 0 }),
-    prepareSessionsAnalysis: vi.fn().mockResolvedValue(null),
-    finalizeSessionsAnalysis: vi.fn().mockResolvedValue({ analyzedProjectCount: 0, analyzedSessionCount: 0 }),
     dispose: vi.fn(() => undefined),
     ...overrides,
   }

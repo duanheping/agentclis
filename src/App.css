@@ -3199,3 +3199,42 @@
     align-items: stretch;
   }
 }
+
+.analysis-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #161616;
+  overflow: hidden;
+}
+
+.analysis-window__header {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 16px;
+  background: #1b2026;
+  -webkit-app-region: drag;
+}
+
+.analysis-window__title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #b0b0b4;
+  letter-spacing: 0.02em;
+}
+
+.analysis-window__terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 0;
+}
+
+.analysis-window__terminal .xterm {
+  height: 100%;
+  padding: 0;
+}
+
+.analysis-window__terminal .xterm-viewport {
+  border-radius: 0;
+}
