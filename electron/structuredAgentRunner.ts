@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { unlinkSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -38,35 +39,53 @@ async function runCommand(
   input: string | null,
 ): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    const child =
-      process.platform === 'win32'
-        ? spawn(
-            process.env.ComSpec || 'cmd.exe',
-            ['/Q', '/D', '/C', joinCommandTokens([command, ...args])],
-            {
-              cwd: workingDirectory,
-              stdio: 'pipe',
-              windowsHide: true,
-            },
-          )
-        : spawn(command, args, {
-            cwd: workingDirectory,
-            stdio: 'pipe',
-          })
+    let child: ReturnType<typeof spawn>
+    let cleanupScript: (() => void) | null = null
+
+    if (process.platform === 'win32') {
+      // Write the command to a temp batch script to avoid the ~32KB
+      // Windows command-line length limit (ENAMETOOLONG).
+      const scriptDir = os.tmpdir()
+      const scriptName = `agenclis-cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.cmd`
+      const scriptPath = path.join(scriptDir, scriptName)
+      const scriptContent = `@echo off\n${joinCommandTokens([command, ...args])}\n`
+      writeFileSync(scriptPath, scriptContent, 'utf8')
+
+      cleanupScript = () => {
+        try { unlinkSync(scriptPath) } catch { /* ignore */ }
+      }
+
+      child = spawn(
+        process.env.ComSpec || 'cmd.exe',
+        ['/Q', '/D', '/C', scriptPath],
+        {
+          cwd: workingDirectory,
+          stdio: 'pipe',
+          windowsHide: true,
+        },
+      )
+    } else {
+      child = spawn(command, args, {
+        cwd: workingDirectory,
+        stdio: 'pipe',
+      })
+    }
 
     let stdout = ''
     let stderr = ''
 
-    child.stdout.on('data', (chunk) => {
+    child.stdout!.on('data', (chunk) => {
       stdout += chunk.toString()
     })
-    child.stderr.on('data', (chunk) => {
+    child.stderr!.on('data', (chunk) => {
       stderr += chunk.toString()
     })
     child.on('error', (error) => {
+      cleanupScript?.()
       reject(error)
     })
     child.on('close', (code) => {
+      cleanupScript?.()
       if (code === 0) {
         resolve(stdout)
         return
@@ -86,9 +105,9 @@ async function runCommand(
     })
 
     if (input !== null) {
-      child.stdin.write(input)
+      child.stdin!.write(input)
     }
-    child.stdin.end()
+    child.stdin!.end()
   })
 }
 
@@ -236,6 +255,16 @@ async function runCopilotStructured(input: {
   prompt: string
   contextDirectories: string[]
 }): Promise<string> {
+  // Copilot's --prompt puts the full text on the process command line,
+  // which is limited to ~32K chars on Windows. Write the real prompt
+  // to a file and tell copilot to read it from there.
+  const promptPath = path.join(input.tempRoot, 'copilot-prompt.txt')
+  await writeFile(
+    promptPath,
+    `${input.prompt}\nReturn only JSON. Do not wrap it in markdown.`,
+    'utf8',
+  )
+
   return await runCommand(
     'copilot',
     input.tempRoot,
@@ -249,7 +278,7 @@ async function runCopilotStructured(input: {
       '--no-custom-instructions',
       ...input.contextDirectories.flatMap((directory) => ['--add-dir', directory]),
       '--prompt',
-      `${input.prompt}\nReturn only JSON. Do not wrap it in markdown.`,
+      `Read and follow the detailed instructions in the file at ${promptPath} exactly. Return only JSON matching the schema described there.`,
     ],
     null,
   )
@@ -323,7 +352,10 @@ export async function prepareStructuredAgent(input: {
   const scriptPath = path.join(tempRoot, 'run.ps1')
 
   await writeFile(schemaPath, `${input.schema}\n`, 'utf8')
-  await writeFile(promptPath, input.prompt, 'utf8')
+  const promptSuffix = input.agent === 'copilot'
+    ? '\nReturn only JSON. Do not wrap it in markdown.'
+    : ''
+  await writeFile(promptPath, `${input.prompt}${promptSuffix}`, 'utf8')
 
   const scriptContent = buildAnalysisScript({
     agent: input.agent,
@@ -387,13 +419,15 @@ function buildAnalysisScript(input: {
     const dirArgs = input.contextDirectories
       .map((d) => `--add-dir ${q(d)}`)
       .join(' ')
+    // Copilot's --prompt puts the full text on the process command line,
+    // which is limited to ~32K chars on Windows. Use a short --prompt
+    // that tells copilot to read the real instructions from the file.
     lines.push(
-      `$prompt = (Get-Content -Raw ${q(input.promptPath)}) + "\`nReturn only JSON. Do not wrap it in markdown."`,
       [
         '& copilot --output-format json --stream off',
         '--allow-all --no-ask-user --no-custom-instructions',
         dirArgs,
-        '--prompt $prompt',
+        `--prompt ${q(`Read and follow the detailed instructions in the file at ${input.promptPath} exactly. Return only JSON matching the schema described there.`)}`,
         `| Tee-Object -FilePath ${q(input.outputPath)}`,
       ].filter(Boolean).join(' '),
     )
