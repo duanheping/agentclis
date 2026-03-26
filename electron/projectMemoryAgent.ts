@@ -11,7 +11,7 @@ import type {
   ProjectMemoryExtractor,
   ProjectMemoryExtractionResult,
 } from './projectMemoryManager'
-import { runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
+import { extractJsonObject, runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
 
 const VALID_CANDIDATE_KINDS = new Set(PROJECT_MEMORY_CANDIDATE_KINDS)
 const VALID_CANDIDATE_SCOPES = new Set(PROJECT_MEMORY_SCOPES)
@@ -229,7 +229,7 @@ export function buildPrompt(
 export function parseProjectMemoryResponse(
   rawOutput: string,
 ): ProjectMemoryExtractionResult {
-  const parsed = JSON.parse(rawOutput) as Partial<ProjectMemoryExtractionResult>
+  const parsed = JSON.parse(extractJsonObject(rawOutput)) as Partial<ProjectMemoryExtractionResult>
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Project memory extraction returned invalid JSON.')
   }

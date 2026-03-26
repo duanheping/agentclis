@@ -2101,24 +2101,27 @@ export class ProjectMemoryManager {
   ): Promise<{
     project: ProjectConfig
     prepared: PreparedStructuredAgent
-  } | null> {
+  }[]> {
     if (!this.architectureExtractor?.prepare) {
-      return null
+      return []
     }
 
     const projectByMemoryKey = buildLatestProjectsByMemoryKey(projects)
-    const project = projectByMemoryKey.values().next().value as ProjectConfig | undefined
-    if (!project) {
-      return null
+    const results: {
+      project: ProjectConfig
+      prepared: PreparedStructuredAgent
+    }[] = []
+
+    for (const project of projectByMemoryKey.values()) {
+      const prepared = await this.architectureExtractor.prepare({
+        project,
+        location: null,
+        heuristicSnapshot: null,
+      })
+      results.push({ project, prepared })
     }
 
-    const prepared = await this.architectureExtractor.prepare({
-      project,
-      location: null,
-      heuristicSnapshot: null,
-    })
-
-    return { project, prepared }
+    return results
   }
 
   async finalizeArchitectureAnalysis(
@@ -2165,9 +2168,9 @@ export class ProjectMemoryManager {
     transcriptBaseRoot: string
     sessions: HistoricalProjectSessionDescriptor[]
     prepared: PreparedStructuredAgent
-  } | null> {
+  }[]> {
     if (!this.historicalSessionAnalyzer?.prepare || inputs.length === 0) {
-      return null
+      return []
     }
 
     const projectByMemoryKey = buildLatestProjectsByMemoryKey(
@@ -2199,33 +2202,41 @@ export class ProjectMemoryManager {
       currentGroup.sessions.push(...input.sessions)
     }
 
-    const firstGroup = groupedInputs.values().next().value as
-      | { project: ProjectConfig; transcriptBaseRoot: string; sessions: HistoricalProjectSessionDescriptor[] }
-      | undefined
-    if (!firstGroup || firstGroup.sessions.length === 0) {
-      return null
+    const results: {
+      project: ProjectConfig
+      transcriptBaseRoot: string
+      sessions: HistoricalProjectSessionDescriptor[]
+      prepared: PreparedStructuredAgent
+    }[] = []
+
+    for (const group of groupedInputs.values()) {
+      if (group.sessions.length === 0) {
+        continue
+      }
+
+      const projectDirectory = this.getProjectDirectory(group.project)
+      if (!projectDirectory) {
+        continue
+      }
+
+      const prepared = await this.historicalSessionAnalyzer.prepare({
+        project: group.project,
+        canonicalMemoryDirectory: projectDirectory,
+        transcriptBaseRoot: group.transcriptBaseRoot,
+        sessions: group.sessions.slice().sort((left, right) =>
+          right.session.updatedAt.localeCompare(left.session.updatedAt),
+        ),
+      })
+
+      results.push({
+        project: group.project,
+        transcriptBaseRoot: group.transcriptBaseRoot,
+        sessions: group.sessions,
+        prepared,
+      })
     }
 
-    const projectDirectory = this.getProjectDirectory(firstGroup.project)
-    if (!projectDirectory) {
-      return null
-    }
-
-    const prepared = await this.historicalSessionAnalyzer.prepare({
-      project: firstGroup.project,
-      canonicalMemoryDirectory: projectDirectory,
-      transcriptBaseRoot: firstGroup.transcriptBaseRoot,
-      sessions: firstGroup.sessions.slice().sort((left, right) =>
-        right.session.updatedAt.localeCompare(left.session.updatedAt),
-      ),
-    })
-
-    return {
-      project: firstGroup.project,
-      transcriptBaseRoot: firstGroup.transcriptBaseRoot,
-      sessions: firstGroup.sessions,
-      prepared,
-    }
+    return results
   }
 
   async finalizeSessionsAnalysis(

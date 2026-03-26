@@ -309,7 +309,7 @@ export class ProjectMemoryService {
   ): Promise<{
     project: ProjectConfig
     prepared: PreparedStructuredAgent
-  } | null> {
+  }[]> {
     return await this.manager.prepareArchitectureAnalysis(projects)
   }
 
@@ -326,7 +326,7 @@ export class ProjectMemoryService {
     project: ProjectConfig
     sessions: HistoricalProjectSessionDescriptor[]
     prepared: PreparedStructuredAgent
-  } | null> {
+  }[]> {
     const groupedByProject = new Map<string, HistoricalProjectSessionAnalysisInput>()
 
     for (const input of inputs) {

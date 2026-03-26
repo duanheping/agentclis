@@ -17,6 +17,7 @@ import type { ProjectConfig } from '../src/shared/session'
 import type { SkillAiMergeAgent } from '../src/shared/skills'
 import { loadProjectMemorySkill } from './projectMemorySkillLoader'
 import {
+  extractJsonObject,
   prepareStructuredAgent,
   runStructuredAgent,
   truncateUtf8,
@@ -496,7 +497,7 @@ function buildPrompt(input: {
 }
 
 function parseArchitectureResponse(rawOutput: string): ArchitectureAgentResponse {
-  const parsed = JSON.parse(rawOutput) as Partial<ArchitectureAgentResponse>
+  const parsed = JSON.parse(extractJsonObject(rawOutput)) as Partial<ArchitectureAgentResponse>
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Architecture extraction returned invalid JSON.')
   }

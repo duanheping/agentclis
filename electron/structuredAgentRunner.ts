@@ -445,3 +445,72 @@ export async function cleanupStructuredAgentTemp(
 ): Promise<void> {
   await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined)
 }
+
+/**
+ * Extract the first top-level JSON object from agent output that may
+ * contain markdown code fences, trailing text, or concatenated objects.
+ */
+export function extractJsonObject(raw: string): string {
+  const trimmed = raw.trim()
+
+  // Strip markdown code fences wrapping the JSON
+  const fenceMatch = trimmed.match(
+    /^```(?:json)?\s*\n([\s\S]*?)\n\s*```/,
+  )
+  const body = fenceMatch ? fenceMatch[1].trim() : trimmed
+
+  // Fast path: try parsing the whole body first
+  try {
+    JSON.parse(body)
+    return body
+  } catch {
+    // fall through to brace-matching
+  }
+
+  // Find the first '{' and walk forward counting braces to locate
+  // the end of the top-level object.
+  const start = body.indexOf('{')
+  if (start === -1) {
+    return body
+  }
+
+  let depth = 0
+  let inString = false
+  let escape = false
+
+  for (let i = start; i < body.length; i++) {
+    const ch = body[i]
+
+    if (escape) {
+      escape = false
+      continue
+    }
+
+    if (ch === '\\' && inString) {
+      escape = true
+      continue
+    }
+
+    if (ch === '"') {
+      inString = !inString
+      continue
+    }
+
+    if (inString) {
+      continue
+    }
+
+    if (ch === '{') {
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0) {
+        return body.slice(start, i + 1)
+      }
+    }
+  }
+
+  // Could not find balanced braces — return the body as-is and let
+  // the caller's JSON.parse surface the original error.
+  return body
+}
