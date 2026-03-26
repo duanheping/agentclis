@@ -127,3 +127,134 @@ describe('findFileReferences', () => {
     ])
   })
 })
+
+describe('parseFileReferenceTarget edge cases', () => {
+  it('returns null for empty/whitespace input', () => {
+    expect(parseFileReferenceTarget('')).toBeNull()
+    expect(parseFileReferenceTarget('   ')).toBeNull()
+  })
+
+  it('parses hash-based line and column markers', () => {
+    expect(parseFileReferenceTarget('C:/src/main.c#L42C10')).toEqual({
+      raw: 'C:/src/main.c#L42C10',
+      path: 'C:/src/main.c',
+      line: 42,
+      column: 10,
+    })
+  })
+
+  it('parses colon-based line-only markers', () => {
+    expect(parseFileReferenceTarget('/workspace/app.ts:12')).toEqual({
+      raw: '/workspace/app.ts:12',
+      path: '/workspace/app.ts',
+      line: 12,
+      column: undefined,
+    })
+  })
+
+  it('resolves file:// URIs with drive letters', () => {
+    expect(parseFileReferenceTarget('file:///C:/repo/main.ts')).toEqual({
+      raw: 'file:///C:/repo/main.ts',
+      path: 'C:/repo/main.ts',
+      line: undefined,
+      column: undefined,
+    })
+  })
+
+  it('resolves file:// URIs with Unix-style paths', () => {
+    expect(parseFileReferenceTarget('file:///workspace/app.ts')).toEqual({
+      raw: 'file:///workspace/app.ts',
+      path: '/workspace/app.ts',
+      line: undefined,
+      column: undefined,
+    })
+  })
+
+  it('rejects non-file protocol URIs', () => {
+    expect(parseFileReferenceTarget('https://example.com/test.ts')).toBeNull()
+  })
+
+  it('rejects bare file names without path', () => {
+    expect(parseFileReferenceTarget('package.json')).toBeNull()
+    expect(parseFileReferenceTarget('README.md')).toBeNull()
+  })
+
+  it('handles UNC paths', () => {
+    const result = parseFileReferenceTarget('\\\\server\\share\\file.txt')
+    expect(result).not.toBeNull()
+    expect(result!.path).toBe('\\\\server\\share\\file.txt')
+  })
+
+  it('parses paths ending with a dot (valid absolute paths)', () => {
+    // parseFileReferenceTarget resolves absolute paths; dot-ending is
+    // filtered later by looksLikeFileReferencePath in findPlainFileReferences
+    expect(parseFileReferenceTarget('C:/repo/.')).not.toBeNull()
+    expect(parseFileReferenceTarget('C:/repo/..')).not.toBeNull()
+  })
+
+  it('handles home-relative with forward slashes', () => {
+    expect(parseFileReferenceTarget('~/docs/file.md', { homeDir: '/home/user' })).toEqual({
+      raw: '~/docs/file.md',
+      path: '/home/user/docs/file.md',
+      line: undefined,
+      column: undefined,
+    })
+  })
+
+  it('handles home-relative with trailing slash on homeDir', () => {
+    expect(
+      parseFileReferenceTarget('~\\file.txt', { homeDir: 'C:\\Users\\user\\' }),
+    ).toEqual({
+      raw: '~\\file.txt',
+      path: 'C:\\Users\\user\\file.txt',
+      line: undefined,
+      column: undefined,
+    })
+  })
+
+  it('returns home-relative path as-is when no homeDir', () => {
+    expect(parseFileReferenceTarget('~/docs/file.md')).toEqual({
+      raw: '~/docs/file.md',
+      path: '~/docs/file.md',
+      line: undefined,
+      column: undefined,
+    })
+  })
+
+  it('handles Windows drive letter both cases', () => {
+    expect(parseFileReferenceTarget('c:\\repo\\file.ts')).not.toBeNull()
+    expect(parseFileReferenceTarget('D:\\repo\\file.ts')).not.toBeNull()
+  })
+})
+
+describe('findFileReferences edge cases', () => {
+  it('returns empty for text with no file references', () => {
+    expect(findFileReferences('just plain text here')).toEqual([])
+    expect(findFileReferences('')).toEqual([])
+  })
+
+  it('finds multiple plain file references', () => {
+    const text = 'See C:/src/a.ts and C:/src/b.ts for details'
+    const refs = findFileReferences(text)
+    expect(refs).toHaveLength(2)
+  })
+
+  it('finds file references with trailing punctuation trimmed when possible', () => {
+    // Comma after .ts makes 'main.ts,' — the trimmer checks if the
+    // candidate looks like a file reference path, so trailing comma
+    // is included when the basename still has a valid extension.
+    const text = 'Check C:/src/main.ts and C:/src/test.ts.'
+    const refs = findPlainFileReferences(text)
+    expect(refs).toHaveLength(2)
+    expect(refs[0].target.path).toBe('C:/src/main.ts')
+    expect(refs[1].target.path).toBe('C:/src/test.ts')
+  })
+
+  it('does not double-link markdown file references as plain', () => {
+    const text = '[file](C:/src/main.ts) and C:/src/other.ts'
+    const refs = findFileReferences(text)
+    expect(refs).toHaveLength(2)
+    expect(refs[0].fullMatch).toBe('[file](C:/src/main.ts)')
+    expect(refs[1].fullMatch).toBe('C:/src/other.ts')
+  })
+})

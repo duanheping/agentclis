@@ -42,4 +42,51 @@ describe('windowsShell', () => {
       .toBe(true)
     expect(supportsInlineShellCommand('C:\\custom\\bash.exe')).toBe(false)
   })
+
+  it('parseWhereOutput returns null for empty input', () => {
+    expect(parseWhereOutput('')).toBeNull()
+    expect(parseWhereOutput('\n\r\n  ')).toBeNull()
+  })
+
+  it('parseWhereOutput trims leading whitespace', () => {
+    expect(parseWhereOutput('  C:\\Program Files\\pwsh.exe\r\n'))
+      .toBe('C:\\Program Files\\pwsh.exe')
+  })
+
+  it('buildShellArgs returns -NoLogo for pwsh without startup command', () => {
+    expect(buildShellArgs('C:\\Program Files\\PowerShell\\7\\pwsh.exe'))
+      .toEqual(['-NoLogo'])
+  })
+
+  it('buildShellArgs returns empty for cmd without startup command', () => {
+    expect(buildShellArgs('C:\\Windows\\System32\\cmd.exe'))
+      .toEqual([])
+  })
+
+  it('buildShellArgs returns -NoLogo for powershell.exe without startup command', () => {
+    expect(buildShellArgs('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'))
+      .toEqual(['-NoLogo'])
+  })
+
+  it('buildShellArgs handles whitespace-only startup command as no command', () => {
+    expect(buildShellArgs('C:\\Program Files\\PowerShell\\7\\pwsh.exe', '   '))
+      .toEqual(['-NoLogo'])
+  })
+
+  it('buildShellArgs handles powershell.exe with startup command', () => {
+    expect(buildShellArgs('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'codex'))
+      .toEqual(['-NoLogo', '-NoExit', '-Command', 'codex'])
+  })
+
+  it('buildShellArgs returns -NoLogo for unknown shell with startup command', () => {
+    expect(buildShellArgs('C:\\custom\\bash.exe', 'some cmd'))
+      .toEqual(['-NoLogo'])
+  })
+
+  it('supportsInlineShellCommand is case-insensitive on shell path', () => {
+    expect(supportsInlineShellCommand('C:\\WINDOWS\\System32\\CMD.EXE'))
+      .toBe(true)
+    expect(supportsInlineShellCommand('C:\\PROGRAM FILES\\POWERSHELL\\7\\PWSH.EXE'))
+      .toBe(true)
+  })
 })

@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import type { ListSessionsResponse } from './session'
 import {
+  classifySessionAttentionFromText,
   extractCodexAttentionFromSessionLine,
   extractCopilotAttentionFromSessionLine,
   formatWorkspaceWindowTitle,
+  getSessionAttentionBadgeLabel,
+  getSessionAttentionTitleLabel,
   selectHighestPriorityAttentionSession,
 } from './sessionAttention'
 
@@ -104,6 +107,169 @@ describe('sessionAttention', () => {
     )
     expect(formatWorkspaceWindowTitle(workspace, 'Agent CLIs')).toBe(
       'Reply needed: ship fix - Agent CLIs',
+    )
+  })
+
+  it('returns null from Codex extractor for invalid JSON', () => {
+    expect(extractCodexAttentionFromSessionLine('not json at all')).toBeNull()
+    expect(extractCodexAttentionFromSessionLine('{malformed')).toBeNull()
+  })
+
+  it('returns null from Codex extractor for wrong type field', () => {
+    const line = '{"type":"something_else","payload":{}}'
+    expect(extractCodexAttentionFromSessionLine(line)).toBeNull()
+  })
+
+  it('returns null from Codex extractor when content is empty', () => {
+    const line = '{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}'
+    expect(extractCodexAttentionFromSessionLine(line)).toBeNull()
+  })
+
+  it('returns null from Codex extractor when payload is non-object', () => {
+    expect(extractCodexAttentionFromSessionLine('{"type":"response_item","payload":null}')).toBeNull()
+    expect(extractCodexAttentionFromSessionLine('"just a string"')).toBeNull()
+  })
+
+  it('returns null from Copilot extractor for invalid JSON', () => {
+    expect(extractCopilotAttentionFromSessionLine('')).toBeNull()
+    expect(extractCopilotAttentionFromSessionLine('{bad}')).toBeNull()
+  })
+
+  it('returns null from Copilot extractor for wrong type', () => {
+    expect(extractCopilotAttentionFromSessionLine('{"type":"tool.call","data":{}}')).toBeNull()
+  })
+
+  it('returns null from Copilot extractor when toolRequests is missing', () => {
+    const line = '{"type":"assistant.message","data":{"content":"hello"}}'
+    expect(extractCopilotAttentionFromSessionLine(line)).toBeNull()
+  })
+
+  it('returns null from Copilot extractor when content is empty', () => {
+    const line = '{"type":"assistant.message","data":{"content":"","toolRequests":[]}}'
+    expect(extractCopilotAttentionFromSessionLine(line)).toBeNull()
+  })
+
+  it('classifies text with question mark as needs-user-decision', () => {
+    expect(classifySessionAttentionFromText('Should I continue?')).toBe('needs-user-decision')
+  })
+
+  it('classifies empty/whitespace text as task-complete', () => {
+    expect(classifySessionAttentionFromText('')).toBe('task-complete')
+    expect(classifySessionAttentionFromText('   ')).toBe('task-complete')
+  })
+
+  it('detects all NEEDS_USER_DECISION_PATTERNS', () => {
+    expect(classifySessionAttentionFromText('Do you want me to apply this?')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Would you like me to proceed?')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Should I create the file?')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('I need your input on this.')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Let me know which option works.')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Reply with your preference.')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Please choose an option.')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Which approach do you prefer?')).toBe('needs-user-decision')
+    expect(classifySessionAttentionFromText('Please confirm the changes.')).toBe('needs-user-decision')
+  })
+
+  it('classifies neutral statements as task-complete', () => {
+    expect(classifySessionAttentionFromText('I have completed the fix.')).toBe('task-complete')
+    expect(classifySessionAttentionFromText('All changes applied successfully.')).toBe('task-complete')
+  })
+
+  it('returns correct badge labels', () => {
+    expect(getSessionAttentionBadgeLabel('needs-user-decision')).toBe('Reply')
+    expect(getSessionAttentionBadgeLabel('task-complete')).toBe('Done')
+  })
+
+  it('returns correct title labels', () => {
+    expect(getSessionAttentionTitleLabel('needs-user-decision')).toBe('Reply needed')
+    expect(getSessionAttentionTitleLabel('task-complete')).toBe('Task complete')
+  })
+
+  it('selectHighestPriorityAttentionSession returns null when no sessions have attention', () => {
+    const workspace: ListSessionsResponse = {
+      projects: [{
+        config: {
+          id: 'p1', title: 'P', rootPath: 'C:\\p', createdAt: '', updatedAt: '',
+        },
+        sessions: [{
+          config: {
+            id: 's1', projectId: 'p1', title: 'S', startupCommand: 'codex',
+            pendingFirstPromptTitle: false, cwd: 'C:\\p', shell: 'pwsh.exe',
+            createdAt: '', updatedAt: '',
+          },
+          runtime: { sessionId: 's1', status: 'running', attention: null, lastActiveAt: '' },
+        }],
+      }],
+      activeSessionId: 's1',
+    }
+    expect(selectHighestPriorityAttentionSession(workspace)).toBeNull()
+  })
+
+  it('selectHighestPriorityAttentionSession breaks tie by most recent lastActiveAt', () => {
+    const workspace: ListSessionsResponse = {
+      projects: [{
+        config: {
+          id: 'p1', title: 'P', rootPath: 'C:\\p', createdAt: '', updatedAt: '',
+        },
+        sessions: [
+          {
+            config: {
+              id: 'older', projectId: 'p1', title: 'Older', startupCommand: 'codex',
+              pendingFirstPromptTitle: false, cwd: 'C:\\p', shell: 'pwsh.exe',
+              createdAt: '', updatedAt: '',
+            },
+            runtime: { sessionId: 'older', status: 'running', attention: 'task-complete', lastActiveAt: '2026-01-01T00:00:00Z' },
+          },
+          {
+            config: {
+              id: 'newer', projectId: 'p1', title: 'Newer', startupCommand: 'codex',
+              pendingFirstPromptTitle: false, cwd: 'C:\\p', shell: 'pwsh.exe',
+              createdAt: '', updatedAt: '',
+            },
+            runtime: { sessionId: 'newer', status: 'running', attention: 'task-complete', lastActiveAt: '2026-01-02T00:00:00Z' },
+          },
+        ],
+      }],
+      activeSessionId: 'older',
+    }
+    expect(selectHighestPriorityAttentionSession(workspace)?.config.id).toBe('newer')
+  })
+
+  it('formatWorkspaceWindowTitle returns brand name when no attention', () => {
+    const workspace: ListSessionsResponse = {
+      projects: [{
+        config: { id: 'p1', title: 'P', rootPath: 'C:\\p', createdAt: '', updatedAt: '' },
+        sessions: [{
+          config: {
+            id: 's1', projectId: 'p1', title: 'S', startupCommand: 'codex',
+            pendingFirstPromptTitle: false, cwd: 'C:\\p', shell: 'pwsh.exe',
+            createdAt: '', updatedAt: '',
+          },
+          runtime: { sessionId: 's1', status: 'running', attention: null, lastActiveAt: '' },
+        }],
+      }],
+      activeSessionId: 's1',
+    }
+    expect(formatWorkspaceWindowTitle(workspace, 'Agent CLIs')).toBe('Agent CLIs')
+  })
+
+  it('formatWorkspaceWindowTitle shows Done for task-complete attention', () => {
+    const workspace: ListSessionsResponse = {
+      projects: [{
+        config: { id: 'p1', title: 'P', rootPath: 'C:\\p', createdAt: '', updatedAt: '' },
+        sessions: [{
+          config: {
+            id: 's1', projectId: 'p1', title: 'my session',
+            startupCommand: 'codex', pendingFirstPromptTitle: false,
+            cwd: 'C:\\p', shell: 'pwsh.exe', createdAt: '', updatedAt: '',
+          },
+          runtime: { sessionId: 's1', status: 'running', attention: 'task-complete', lastActiveAt: '2026-01-01T00:00:00Z' },
+        }],
+      }],
+      activeSessionId: 's1',
+    }
+    expect(formatWorkspaceWindowTitle(workspace, 'Agent CLIs')).toBe(
+      'Task complete: my session - Agent CLIs',
     )
   })
 })

@@ -468,3 +468,137 @@ describe('attachPlainTextPasteHandler', () => {
     detach()
   })
 })
+
+describe('terminalPaste edge cases', () => {
+  it('formatDroppedFilePaths escapes double quotes in paths', () => {
+    expect(formatDroppedFilePaths(['C:\\path with "quotes"\\file.txt']))
+      .toBe('"C:\\path with \\"quotes\\"\\file.txt"')
+  })
+
+  it('formatDroppedFilePaths handles empty array', () => {
+    expect(formatDroppedFilePaths([])).toBe('')
+  })
+
+  it('formatDroppedFilePaths joins multiple paths with spaces', () => {
+    expect(formatDroppedFilePaths(['C:\\a.txt', 'C:\\b.txt']))
+      .toBe('"C:\\a.txt" "C:\\b.txt"')
+  })
+
+  it('extractClipboardText returns null for null/undefined clipboard', () => {
+    expect(extractClipboardText(null)).toBeNull()
+    expect(extractClipboardText(undefined)).toBeNull()
+  })
+
+  it('extractClipboardText prefers plain text over HTML', () => {
+    const data = createClipboardData({
+      plainText: 'plain',
+      html: '<b>html</b>',
+    })
+    expect(extractClipboardText(data as ClipboardStub)).toBe('plain')
+  })
+
+  it('extractClipboardText falls back to uri-list', () => {
+    const data = createClipboardData({
+      uriList: 'https://example.com',
+    })
+    expect(extractClipboardText(data as ClipboardStub)).toBe('https://example.com')
+  })
+
+  it('extractClipboardText returns null when all fields empty', () => {
+    const data = createClipboardData({})
+    expect(extractClipboardText(data as ClipboardStub)).toBeNull()
+  })
+
+  it('hasBinaryClipboardPayload returns false for null', () => {
+    expect(hasBinaryClipboardPayload(null)).toBe(false)
+    expect(hasBinaryClipboardPayload(undefined)).toBe(false)
+  })
+
+  it('hasBinaryClipboardPayload detects image type in types array', () => {
+    const data = createClipboardData({
+      types: ['image/png'],
+    })
+    expect(hasBinaryClipboardPayload(data as ClipboardStub)).toBe(true)
+  })
+
+  it('hasBinaryClipboardPayload detects Files type', () => {
+    const data = createClipboardData({
+      types: ['Files'],
+    })
+    expect(hasBinaryClipboardPayload(data as ClipboardStub)).toBe(true)
+  })
+
+  it('hasFileTransferPayload returns false for null', () => {
+    expect(hasFileTransferPayload(null)).toBe(false)
+    expect(hasFileTransferPayload(undefined)).toBe(false)
+  })
+
+  it('hasFileTransferPayload detects files array', () => {
+    const data = {
+      ...createClipboardData({}),
+      files: [new File(['data'], 'test.txt')],
+    }
+    expect(hasFileTransferPayload(data as ClipboardStub)).toBe(true)
+  })
+
+  it('extractDroppedFilePaths returns empty for null inputs', () => {
+    expect(extractDroppedFilePaths(null, null)).toEqual([])
+    expect(extractDroppedFilePaths(undefined, undefined)).toEqual([])
+  })
+
+  it('extractDroppedFilePaths filters empty resolved paths', () => {
+    const file = new File(['data'], 'test.txt')
+    const data = {
+      ...createClipboardData({}),
+      files: [file],
+    }
+    const resolver = () => ''
+    expect(extractDroppedFilePaths(data as ClipboardStub, resolver)).toEqual([])
+  })
+
+  it('extractDroppedFilePaths resolves file paths', () => {
+    const file = new File(['data'], 'test.txt')
+    const data = {
+      ...createClipboardData({}),
+      files: [file],
+    }
+    const resolver = () => 'C:\\resolved\\test.txt'
+    expect(extractDroppedFilePaths(data as ClipboardStub, resolver)).toEqual(['C:\\resolved\\test.txt'])
+  })
+
+  it('detach function removes all event listeners', () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const paste = vi.fn()
+    const detach = attachPlainTextPasteHandler({
+      element,
+      textarea,
+      paste,
+      hasSelection: () => false,
+      getSelection: () => '',
+    })
+
+    detach()
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: createClipboardData({ plainText: 'should not paste' }),
+    })
+    textarea.dispatchEvent(pasteEvent)
+    expect(paste).not.toHaveBeenCalled()
+  })
+
+  it('attachPlainTextPasteHandler returns no-op when no elements', () => {
+    const detach = attachPlainTextPasteHandler({
+      element: null as unknown as HTMLElement,
+      textarea: null as unknown as HTMLTextAreaElement,
+      paste: vi.fn(),
+      hasSelection: () => false,
+      getSelection: () => '',
+    })
+    expect(detach).toBeInstanceOf(Function)
+    detach()
+  })
+})

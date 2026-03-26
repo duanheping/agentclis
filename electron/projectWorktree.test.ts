@@ -112,4 +112,88 @@ describe('createProjectSessionWorktree', () => {
       'Git worktrees require the project root to be inside a git repository.',
     )
   })
+
+  it('sanitizes special characters in branch name segments', async () => {
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        const commandLine = args.join(' ')
+        if (commandLine.includes('rev-parse --show-toplevel')) {
+          callback(null, 'C:\\repo\\my-project\n', '')
+          return
+        }
+        if (commandLine.includes('symbolic-ref --quiet --short HEAD')) {
+          callback(null, 'feature/CAPS & special!chars\n', '')
+          return
+        }
+        if (commandLine.includes('worktree add')) {
+          callback(null, '', '')
+          return
+        }
+        callback(new Error(`Unexpected: ${commandLine}`), '', '')
+      },
+    )
+
+    const worktree = await createProjectSessionWorktree({
+      projectRootPath: 'C:\\repo\\my-project',
+      sessionId: 'abcdef01-0000-0000-0000-000000000000',
+      createdAt: '2026-06-15T10:00:00.000Z',
+    })
+
+    expect(worktree.branchName).toMatch(/^agenclis\//)
+    expect(worktree.branchName).not.toMatch(/[A-Z&!]/)
+  })
+
+  it('handles invalid createdAt by falling back to current date', async () => {
+    const worktree = await createProjectSessionWorktree({
+      projectRootPath: 'C:\\repo\\agenclis',
+      sessionId: '12345678-aaaa-bbbb-cccc-1234567890ab',
+      createdAt: 'invalid-date',
+    })
+
+    expect(worktree.branchName).toMatch(/^agenclis\//)
+    expect(worktree.cwd).toContain('worktrees')
+  })
+
+  it('falls back to short HEAD when symbolic-ref fails', async () => {
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        const commandLine = args.join(' ')
+        if (commandLine.includes('rev-parse --show-toplevel')) {
+          callback(null, 'C:\\repo\\agenclis\n', '')
+          return
+        }
+        if (commandLine.includes('symbolic-ref --quiet --short HEAD')) {
+          callback(new Error('fatal: not on a branch'), '', 'fatal: not on a branch')
+          return
+        }
+        if (commandLine.includes('rev-parse --short HEAD')) {
+          callback(null, 'abc1234\n', '')
+          return
+        }
+        if (commandLine.includes('worktree add')) {
+          callback(null, '', '')
+          return
+        }
+        callback(new Error(`Unexpected: ${commandLine}`), '', '')
+      },
+    )
+
+    const worktree = await createProjectSessionWorktree({
+      projectRootPath: 'C:\\repo\\agenclis',
+      sessionId: '12345678-aaaa-bbbb-cccc-1234567890ab',
+      createdAt: '2026-03-17T15:30:45.000Z',
+    })
+
+    expect(worktree.branchName).toContain('abc1234')
+  })
 })

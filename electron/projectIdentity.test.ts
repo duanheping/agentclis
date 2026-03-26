@@ -74,4 +74,52 @@ describe('projectIdentity', () => {
       remoteFingerprint: 'github.com/openai/agenclis',
     })
   })
+
+  it('normalizes HTTPS remote URLs with tokens', () => {
+    expect(normalizeRemoteFingerprint('https://x-access-token:ghs_abc@github.com/org/repo.git'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('normalizes ssh:// remote URLs', () => {
+    expect(normalizeRemoteFingerprint('ssh://git@github.com/org/repo.git'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('returns null for empty or whitespace remote URLs', () => {
+    expect(normalizeRemoteFingerprint('')).toBeNull()
+    expect(normalizeRemoteFingerprint('   ')).toBeNull()
+  })
+
+  it('returns null for malformed URLs without host', () => {
+    expect(normalizeRemoteFingerprint('just-a-string')).toBeNull()
+  })
+
+  it('strips .git suffix case insensitively', () => {
+    expect(normalizeRemoteFingerprint('git@github.com:Org/Repo.GIT'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('normalizes backslashes in SCP paths', () => {
+    expect(normalizeRemoteFingerprint('git@github.com:org\\repo.git'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('handles HTTPS URLs without .git suffix', () => {
+    expect(normalizeRemoteFingerprint('https://github.com/org/repo'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('lowercases both host and path', () => {
+    expect(normalizeRemoteFingerprint('https://GitHub.COM/ORG/REPO.git'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('handles Azure DevOps style URLs', () => {
+    const result = normalizeRemoteFingerprint('https://dev.azure.com/org/project/_git/repo')
+    expect(result).toBe('dev.azure.com/org/project/_git/repo')
+  })
+
+  it('returns null for SCP-like URL with no pathname', () => {
+    expect(normalizeRemoteFingerprint('git@github.com:')).toBeNull()
+  })
 })

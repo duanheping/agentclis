@@ -142,4 +142,93 @@ describe('AnalysisEventFormatter', () => {
     const out = fmt.push('{"key":"value"}\n')
     expect(out).toContain('{"key":"value"}')
   })
+
+  it('formats assistant.message events with text content', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(
+      makeEvent('assistant.message', { content: 'Here is the result.' }) + '\n',
+    )
+    expect(out).toContain('Here is the result.')
+    expect(out).toContain('\r\n')
+  })
+
+  it('formats assistant.message.delta events as inline text', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(
+      makeEvent('assistant.message.delta', { text: 'partial output' }) + '\n',
+    )
+    expect(out).toContain('partial output')
+  })
+
+  it('returns empty for content event with empty text', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(makeEvent('content', { content: '' }) + '\n')
+    expect(out).toBe('')
+  })
+
+  it('returns empty for assistant.message with empty content', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(makeEvent('assistant.message', { content: '' }) + '\n')
+    expect(out).toBe('')
+  })
+
+  it('handles tool_execution_start with toolCallId fallback', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(
+      makeEvent('tool_execution_start', { toolCallId: 'call_123' }) + '\n',
+    )
+    expect(out).toContain('⚙')
+    expect(out).toContain('call_123')
+  })
+
+  it('handles tool_execution_complete with no telemetry', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(
+      makeEvent('tool_execution_complete', {
+        success: true,
+        result: { content: 'ok' },
+      }) + '\n',
+    )
+    expect(out).toContain('✓')
+    expect(out).toContain('tool')
+  })
+
+  it('defaults turnId to ? when missing', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(makeEvent('assistant.turn_start', {}) + '\n')
+    expect(out).toContain('Agent turn ?')
+  })
+
+  it('flush returns remaining buffered JSON', () => {
+    const fmt = new AnalysisEventFormatter()
+    fmt.push(makeEvent('assistant.turn_start', { turnId: '7' }))
+    const flushed = fmt.flush()
+    expect(flushed).toContain('Agent turn 7')
+  })
+
+  it('flush returns empty string when nothing buffered', () => {
+    const fmt = new AnalysisEventFormatter()
+    expect(fmt.flush()).toBe('')
+  })
+
+  it('handles empty lines as blank output', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push('\n\n\n')
+    expect(out).toBe('\r\n\r\n\r\n')
+  })
+
+  it('handles \\r\\n line endings', () => {
+    const fmt = new AnalysisEventFormatter()
+    const event = makeEvent('assistant.turn_start', { turnId: '3' })
+    const out = fmt.push(event + '\r\n')
+    expect(out).toContain('Agent turn 3')
+  })
+
+  it('converts newlines to \\r\\n in content events', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push(
+      makeEvent('content', { content: 'line1\nline2' }) + '\n',
+    )
+    expect(out).toContain('line1\r\nline2')
+  })
 })
