@@ -17,6 +17,7 @@ export type ProjectGitChangeKind = (typeof PROJECT_GIT_CHANGE_KINDS)[number]
 
 export interface ProjectGitFileChange {
   path: string
+  previousPath?: string
   status: ProjectGitChangeKind
   additions: number
   deletions: number

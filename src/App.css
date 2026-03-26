@@ -2797,6 +2797,14 @@
   background: rgba(122, 224, 214, 0.08);
 }
 
+.context-menu__item:disabled {
+  opacity: 0.56;
+}
+
+.context-menu__item:disabled:hover {
+  background: transparent;
+}
+
 .context-menu__item.is-danger {
   color: #ffb3bc;
 }
@@ -3076,6 +3084,14 @@
 .context-menu__item:hover {
   transform: none;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.context-menu__item:disabled {
+  opacity: 0.56;
+}
+
+.context-menu__item:disabled:hover {
+  background: transparent;
 }
 
 .context-menu__item.is-danger {

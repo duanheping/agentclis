@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -58,11 +58,13 @@ describe('ProjectDiffPanel', () => {
           path: 'src/App.tsx',
           staged: false,
         }}
+        revertingFile={null}
         diffContent="diff --git a/src/App.tsx b/src/App.tsx"
         diffLoading={false}
         diffErrorMessage={null}
         onRefresh={vi.fn()}
         onSelectFile={onSelectFile}
+        onRevertFile={vi.fn()}
       />,
     )
 
@@ -92,6 +94,7 @@ describe('ProjectDiffPanel', () => {
           path: 'src/App.tsx',
           staged: false,
         }}
+        revertingFile={null}
         diffContent={[
           'diff --git a/src/App.tsx b/src/App.tsx',
           '@@ -1,2 +1,2 @@',
@@ -103,6 +106,7 @@ describe('ProjectDiffPanel', () => {
         diffErrorMessage={null}
         onRefresh={vi.fn()}
         onSelectFile={vi.fn()}
+        onRevertFile={vi.fn()}
       />,
     )
 
@@ -119,5 +123,44 @@ describe('ProjectDiffPanel', () => {
     expect(screen.getByText('+const nextValue = true')).toHaveClass(
       'project-diff-panel__code-line--added',
     )
+  })
+
+  it('opens a context menu and forwards revert actions for a file', async () => {
+    const user = userEvent.setup()
+    const onRevertFile = vi.fn()
+
+    render(
+      <ProjectDiffPanel
+        overview={buildOverview()}
+        loading={false}
+        errorMessage={null}
+        selectedFile={{
+          path: 'src/App.tsx',
+          staged: false,
+        }}
+        revertingFile={null}
+        diffContent="diff --git a/src/App.tsx b/src/App.tsx"
+        diffLoading={false}
+        diffErrorMessage={null}
+        onRefresh={vi.fn()}
+        onSelectFile={vi.fn()}
+        onRevertFile={onRevertFile}
+      />,
+    )
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: /README\.md/i }), {
+      clientX: 80,
+      clientY: 120,
+    })
+
+    await user.click(screen.getByRole('menuitem', { name: 'Revert changes' }))
+
+    expect(onRevertFile).toHaveBeenCalledWith({
+      path: 'README.md',
+      status: 'added',
+      additions: 10,
+      deletions: 0,
+      staged: true,
+    })
   })
 })

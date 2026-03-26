@@ -99,6 +99,8 @@ const api: AgentCliApi = {
       filePath,
       staged,
     ),
+  revertProjectGitFile: (projectPath, file) =>
+    ipcRenderer.invoke(IPC_CHANNELS.revertProjectGitFile, projectPath, file),
   openFileReference: (target) =>
     ipcRenderer.invoke(IPC_CHANNELS.openFileReference, target),
   getPathForFile: (file) => webUtils.getPathForFile(file),

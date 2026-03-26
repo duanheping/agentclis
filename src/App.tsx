@@ -235,6 +235,8 @@ function App() {
   const [projectGitDiffLoading, setProjectGitDiffLoading] = useState(false)
   const [projectGitDiffErrorMessage, setProjectGitDiffErrorMessage] =
     useState<string | null>(null)
+  const [projectGitRevertingFile, setProjectGitRevertingFile] =
+    useState<ProjectDiffSelection | null>(null)
   const [skillLibrarySettings, setSkillLibrarySettings] =
     useState<SkillLibrarySettings | null>(null)
   const [skillSyncStatus, setSkillSyncStatus] = useState<SkillSyncStatus | null>(null)
@@ -744,6 +746,7 @@ function App() {
       setSelectedProjectDiff(null)
       setProjectGitDiffContent(null)
       setProjectGitDiffErrorMessage(null)
+      setProjectGitRevertingFile(null)
       return
     }
 
@@ -1073,6 +1076,33 @@ function App() {
       path: file.path,
       staged: file.staged,
     })
+  }
+
+  const handleRevertProjectDiffFile = async (file: ProjectGitFileChange) => {
+    if (!agentCli || !activeWorkspacePath) {
+      setProjectGitErrorMessage('There is no active workspace to revert changes in.')
+      return
+    }
+
+    if (!window.confirm(`Revert changes in ${file.path}? This cannot be undone.`)) {
+      return
+    }
+
+    setProjectGitRevertingFile({
+      path: file.path,
+      staged: file.staged,
+    })
+    setProjectGitErrorMessage(null)
+    setProjectGitDiffErrorMessage(null)
+
+    try {
+      await agentCli.revertProjectGitFile(activeWorkspacePath, file)
+      await refreshProjectGitState(activeWorkspacePath)
+    } catch (error) {
+      setProjectGitErrorMessage(getErrorMessage(error))
+    } finally {
+      setProjectGitRevertingFile(null)
+    }
   }
 
   const handlePickSkillLibraryRoot = async () => {
@@ -1633,11 +1663,13 @@ function App() {
               loading={projectGitLoading}
               errorMessage={projectGitErrorMessage}
               selectedFile={selectedProjectDiff}
+              revertingFile={projectGitRevertingFile}
               diffContent={projectGitDiffContent}
               diffLoading={projectGitDiffLoading}
               diffErrorMessage={projectGitDiffErrorMessage}
               onRefresh={() => void handleRefreshProjectDiff()}
               onSelectFile={handleSelectProjectDiffFile}
+              onRevertFile={(file) => void handleRevertProjectDiffFile(file)}
             />
           ) : null}
         </section>

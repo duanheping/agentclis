@@ -12,6 +12,7 @@ import type {
 } from './session'
 import type {
   ProjectGitDiff,
+  ProjectGitFileChange,
   ProjectGitOverview,
   ProjectOpenTarget,
 } from './projectTools'
@@ -83,6 +84,7 @@ export const IPC_CHANNELS = {
   openProject: 'project:open',
   getProjectGitOverview: 'project:git-overview',
   getProjectGitDiff: 'project:git-diff',
+  revertProjectGitFile: 'project:git-revert-file',
   openFileReference: 'shell:open-file-reference',
   listWindowsCommandPrompts: 'shell:list-windows-command-prompts',
   openWindowsCommandPrompt: 'shell:open-windows-command-prompt',
@@ -144,6 +146,10 @@ export interface AgentCliApi {
     filePath: string,
     staged: boolean,
   ): Promise<ProjectGitDiff>
+  revertProjectGitFile(
+    projectPath: string,
+    file: ProjectGitFileChange,
+  ): Promise<void>
   openFileReference(target: string): Promise<void>
   getPathForFile(file: File): string
   listWindowsCommandPrompts(): Promise<string[]>
