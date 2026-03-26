@@ -47,6 +47,7 @@ import { TranscriptStore } from './transcriptStore'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 import { resolveShellCommand, buildShellArgs, supportsInlineShellCommand } from './windowsShell'
 import { cleanupStructuredAgentTemp } from './structuredAgentRunner'
+import { AnalysisEventFormatter } from './analysisFormatter'
 
 type IPty = import('node-pty').IPty
 const requireNative = createRequire(import.meta.url)
@@ -120,6 +121,7 @@ const windowsCommandPromptManager = new WindowsCommandPromptManager({
 
 let analysisWindow: BrowserWindow | null = null
 let analysisTerminal: IPty | null = null
+let analysisFormatter: AnalysisEventFormatter | null = null
 let analysisContext: {
   kind: 'architecture' | 'sessions'
   tempRoot: string
@@ -200,12 +202,23 @@ async function openAnalysisWindow(
   )
 
   analysisTerminal = terminal
+  analysisFormatter = new AnalysisEventFormatter()
 
   terminal.onData((chunk) => {
-    analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalData, { chunk })
+    const formatted = analysisFormatter ? analysisFormatter.push(chunk) : chunk
+    if (formatted) {
+      analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalData, { chunk: formatted })
+    }
   })
 
   terminal.onExit(({ exitCode }) => {
+    if (analysisFormatter) {
+      const remaining = analysisFormatter.flush()
+      if (remaining) {
+        analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalData, { chunk: remaining })
+      }
+      analysisFormatter = null
+    }
     analysisTerminal = null
     void finalizeAnalysis(exitCode)
   })
@@ -222,6 +235,7 @@ function closeAnalysisTerminal(): void {
     try { analysisTerminal.kill() } catch { /* ignore */ }
     analysisTerminal = null
   }
+  analysisFormatter = null
   if (analysisContext) {
     void cleanupStructuredAgentTemp(analysisContext.tempRoot)
     analysisContext = null

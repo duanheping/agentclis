@@ -352,9 +352,15 @@ export async function prepareStructuredAgent(input: {
   const scriptPath = path.join(tempRoot, 'run.ps1')
 
   await writeFile(schemaPath, `${input.schema}\n`, 'utf8')
-  const promptSuffix = input.agent === 'copilot'
-    ? '\nReturn only JSON. Do not wrap it in markdown.'
-    : ''
+  let promptSuffix = ''
+  if (input.agent === 'copilot') {
+    promptSuffix = [
+      '',
+      '',
+      `Write your complete JSON response to the file: ${outputPath}`,
+      'Do not print the raw JSON in your conversation response — only write it to that file.',
+    ].join('\n')
+  }
   await writeFile(promptPath, `${input.prompt}${promptSuffix}`, 'utf8')
 
   const scriptContent = buildAnalysisScript({
@@ -408,27 +414,25 @@ function buildAnalysisScript(input: {
     lines.push(
       `$schema = Get-Content -Raw ${q(input.schemaPath)}`,
       `$prompt = Get-Content -Raw ${q(input.promptPath)}`,
+      `Write-Host 'Running analysis with Claude...' -ForegroundColor Cyan`,
       [
-        '$prompt | & claude --print --output-format json',
+        '$prompt | & claude --print',
         '--json-schema $schema',
         '--no-session-persistence --permission-mode dontAsk',
-        `| Tee-Object -FilePath ${q(input.outputPath)}`,
+        `> ${q(input.outputPath)}`,
       ].join(' '),
+      `Write-Host 'Analysis complete.' -ForegroundColor Green`,
     )
   } else {
     const dirArgs = input.contextDirectories
       .map((d) => `--add-dir ${q(d)}`)
       .join(' ')
-    // Copilot's --prompt puts the full text on the process command line,
-    // which is limited to ~32K chars on Windows. Use a short --prompt
-    // that tells copilot to read the real instructions from the file.
     lines.push(
       [
-        '& copilot --output-format json --stream off',
+        '& copilot',
         '--allow-all --no-ask-user --no-custom-instructions',
         dirArgs,
-        `--prompt ${q(`Read and follow the detailed instructions in the file at ${input.promptPath} exactly. Return only JSON matching the schema described there.`)}`,
-        `| Tee-Object -FilePath ${q(input.outputPath)}`,
+        `--prompt ${q(`Read and follow all instructions in the file at ${input.promptPath}.`)}`,
       ].filter(Boolean).join(' '),
     )
   }
