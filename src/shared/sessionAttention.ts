@@ -12,6 +12,10 @@ const NEEDS_USER_DECISION_PATTERNS = [
   /\b(?:choose|select|pick|approve|deny|confirm)\b/i,
   /\bwhich (?:option|path|approach|one)\b/i,
 ]
+const TERMINAL_APPROVAL_PATTERNS = [
+  /\bwould you like to run (?:the following )?command\?/i,
+  /\bpress enter to confirm or esc to cancel\b/i,
+]
 
 function flattenSessions(workspace: ListSessionsResponse): SessionSnapshot[] {
   return workspace.projects.flatMap((project) => project.sessions)
@@ -23,6 +27,10 @@ function parseJsonLine(line: string): unknown | null {
   } catch {
     return null
   }
+}
+
+function normalizeAttentionText(content: string): string {
+  return content.trim().replace(/\s+/g, ' ')
 }
 
 function getAttentionPriority(attention: SessionAttentionKind): number {
@@ -50,6 +58,7 @@ function extractCodexMessageText(content: unknown): string {
 function parseCodexEvent(line: string): {
   payload?: {
     content?: unknown
+    last_agent_message?: string
     message?: string
     phase?: string
     role?: string
@@ -62,6 +71,7 @@ function parseCodexEvent(line: string): {
     ? (parsed as {
         payload?: {
           content?: unknown
+          last_agent_message?: string
           message?: string
           phase?: string
           role?: string
@@ -99,6 +109,13 @@ function extractCodexAttentionFromParsedEvent(
 
   const payload = parsed.payload
   if (payload?.type === 'task_complete') {
+    if (
+      typeof payload.last_agent_message === 'string' &&
+      payload.last_agent_message.trim()
+    ) {
+      return classifySessionAttentionFromText(payload.last_agent_message)
+    }
+
     return 'task-complete'
   }
 
@@ -171,7 +188,7 @@ function shouldResetCopilotAttention(
 export function classifySessionAttentionFromText(
   content: string,
 ): SessionAttentionKind {
-  const normalized = content.trim().replace(/\s+/g, ' ')
+  const normalized = normalizeAttentionText(content)
   if (!normalized) {
     return 'task-complete'
   }
@@ -185,6 +202,19 @@ export function classifySessionAttentionFromText(
   }
 
   return 'task-complete'
+}
+
+export function extractTerminalAttentionFromText(
+  content: string,
+): SessionAttentionKind | null {
+  const normalized = normalizeAttentionText(content)
+  if (!normalized) {
+    return null
+  }
+
+  return TERMINAL_APPROVAL_PATTERNS.some((pattern) => pattern.test(normalized))
+    ? 'needs-user-decision'
+    : null
 }
 
 export function extractCodexAttentionFromSessionLine(
@@ -244,6 +274,16 @@ export function getSessionAttentionTitleLabel(
   return attention === 'needs-user-decision'
     ? 'Reply needed'
     : 'Task complete'
+}
+
+export function getSessionAttentionNotificationBody(
+  attention: SessionAttentionKind,
+  sessionTitle: string,
+): string {
+  const title = sessionTitle.trim() || 'A session'
+  return attention === 'needs-user-decision'
+    ? `${title} is waiting for your approval or reply.`
+    : `${title} finished and is ready for review.`
 }
 
 export function selectHighestPriorityAttentionSession(

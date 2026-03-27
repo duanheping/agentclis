@@ -32,6 +32,7 @@ import {
   type SessionSnapshot,
 } from '../src/shared/session'
 import {
+  extractTerminalAttentionFromText,
   reduceCodexAttentionState,
   reduceCopilotAttentionState,
 } from '../src/shared/sessionAttention'
@@ -101,6 +102,11 @@ const FIRST_PROMPT_TITLE_LIMIT = 80
 const BACKGROUND_IDENTITY_REFRESH_DELAY_MS = 1_500
 const BACKGROUND_MEMORY_BACKFILL_DELAY_MS = 4_500
 const EXTERNAL_ATTENTION_POLL_INTERVAL_MS = 1_500
+const LIVE_ATTENTION_BUFFER_LIMIT = 4_096
+const ANSI_ESCAPE_REGEX = new RegExp(
+  `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
+  'gu',
+)
 const EXTERNAL_ATTENTION_HISTORY_SCAN_BYTES = 512 * 1024
 
 const require = createRequire(import.meta.url)
@@ -216,6 +222,7 @@ export class SessionManager {
   private readonly runtimes = new Map<string, SessionRuntime>()
   private readonly terminals = new Map<string, IPty>()
   private readonly pendingFirstPromptBuffers = new Map<string, string>()
+  private readonly liveAttentionBuffers = new Map<string, string>()
   private readonly claimedExternalSessions = new Map<string, string>()
   private readonly pendingExternalSessionDetections = new Map<string, NodeJS.Timeout>()
   private readonly externalSessionAttentionTrackers = new Map<
@@ -593,6 +600,7 @@ export class SessionManager {
     this.cancelExternalSessionDetection(config.id)
     this.stopExternalSessionAttentionTracking(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
+    this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
       attention: null,
       status: 'starting',
@@ -686,6 +694,7 @@ export class SessionManager {
           source: 'pty',
           chunk,
         })
+        this.processLiveSessionOutputAttention(normalizedConfig.id, chunk)
         this.events.onData({
           sessionId: normalizedConfig.id,
           chunk,
@@ -694,6 +703,7 @@ export class SessionManager {
 
       terminal.onExit(({ exitCode }) => {
         this.terminals.delete(normalizedConfig.id)
+        this.clearLiveAttentionBuffer(normalizedConfig.id)
         this.cancelExternalSessionDetection(normalizedConfig.id)
 
         if (this.suppressedExit.delete(normalizedConfig.id)) {
@@ -777,6 +787,7 @@ export class SessionManager {
   private stopSession(id: string, suppressExit: boolean): void {
     const terminal = this.terminals.get(id)
     if (!terminal) {
+      this.liveAttentionBuffers.delete(id)
       return
     }
 
@@ -785,11 +796,34 @@ export class SessionManager {
     }
 
     this.terminals.delete(id)
+    this.liveAttentionBuffers.delete(id)
     try {
       terminal.kill()
     } catch {
       this.suppressedExit.delete(id)
     }
+  }
+
+  private clearLiveAttentionBuffer(id: string): void {
+    this.liveAttentionBuffers.delete(id)
+  }
+
+  private processLiveSessionOutputAttention(id: string, chunk: string): void {
+    const sanitizedChunk = chunk.replace(ANSI_ESCAPE_REGEX, '')
+    if (!sanitizedChunk) {
+      return
+    }
+
+    const nextBuffer = `${this.liveAttentionBuffers.get(id) ?? ''}${sanitizedChunk}`
+      .slice(-LIVE_ATTENTION_BUFFER_LIMIT)
+    this.liveAttentionBuffers.set(id, nextBuffer)
+
+    const attention = extractTerminalAttentionFromText(nextBuffer)
+    if (!attention) {
+      return
+    }
+
+    this.setSessionAttention(id, attention)
   }
 
   private resolveStartupCommand(config: SessionConfig): string {
@@ -2183,6 +2217,7 @@ export class SessionManager {
     source: 'system' | 'user',
   ): void {
     if (source === 'user') {
+      this.clearLiveAttentionBuffer(id)
       const attentionCleared = this.clearSessionAttention(id)
       this.capturePendingFirstPromptTitle(id, data)
       if (!attentionCleared) {
