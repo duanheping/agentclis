@@ -161,6 +161,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (fileMeta) {
         return {
           mtimeMs: fileMeta.mtimeMs,
+          size: Buffer.byteLength(fileMeta.content),
         }
       }
 
@@ -172,6 +173,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (childModificationTimes.length > 0) {
         return {
           mtimeMs: Math.max(...childModificationTimes),
+          size: 0,
         }
       }
 
@@ -486,6 +488,70 @@ describe('SessionManager restore policy', () => {
         }
       ).sessions[0]?.externalSession?.sessionId,
     ).toBe('019cf7a4-db19-78a0-a9b1-b9e3d2b0126a')
+  })
+
+  it('backfills Codex attention from a recovered transcript before polling new lines', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-15T18:10:00.000Z',
+          updatedAt: '2026-03-15T18:12:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'review PR',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-15T18:10:24.756Z',
+          updatedAt: '2026-03-15T18:12:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const sessionFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '15',
+      'rollout-2026-03-15T18-10-31-019cf7a4-db19-78a0-a9b1-b9e3d2b0126a.jsonl',
+    )
+    mocks.setFile(
+      sessionFilePath,
+      [
+        '{"timestamp":"2026-03-15T18:10:31.000Z","type":"session_meta","payload":{"id":"019cf7a4-db19-78a0-a9b1-b9e3d2b0126a","timestamp":"2026-03-15T18:10:31.000Z","cwd":"C:\\\\repo","originator":"codex_cli_rs","source":"cli"}}',
+        '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"review PR"}]}}',
+        '{"type":"event_msg","payload":{"type":"agent_message","message":"Should I open a PR?","phase":"final_answer"}}',
+        '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}',
+      ].join('\n'),
+      '2026-03-15T18:10:35.000Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(
+      manager.listSessions().projects[0]?.sessions[0]?.runtime.attention,
+    ).toBe('needs-user-decision')
   })
 
   it('does not recover a Codex Desktop session for an agentclis-managed restore', async () => {

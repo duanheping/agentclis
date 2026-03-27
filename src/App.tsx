@@ -72,6 +72,11 @@ interface SessionAttentionNotice {
   attention: SessionAttentionKind
 }
 
+interface TerminalFocusRequest {
+  terminalId: string
+  sequence: number
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message
@@ -295,6 +300,8 @@ function App() {
     useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
   const [skillsSyncing, setSkillsSyncing] = useState(false)
+  const [terminalFocusRequest, setTerminalFocusRequest] =
+    useState<TerminalFocusRequest | null>(null)
   const appShellRef = useRef<HTMLDivElement | null>(null)
   const projectBranchMenuRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
@@ -306,6 +313,7 @@ function App() {
   const sessionIdsRef = useRef<Set<string>>(new Set())
   const previousAttentionRef =
     useRef<Map<string, SessionAttentionKind | null> | null>(null)
+  const terminalFocusSequenceRef = useRef(0)
 
   const sessions = flattenSessions(projects)
   sessionIdsRef.current = new Set(sessions.map((session) => session.config.id))
@@ -473,6 +481,20 @@ function App() {
   const showWindowsCommandPrompt = useCallback((sessionId: string) => {
     setWindowsCommandPromptSessionIds((current) =>
       current.includes(sessionId) ? current : [...current, sessionId],
+    )
+  }, [])
+
+  const requestTerminalFocus = useCallback((terminalId: string) => {
+    terminalFocusSequenceRef.current += 1
+    setTerminalFocusRequest({
+      terminalId,
+      sequence: terminalFocusSequenceRef.current,
+    })
+  }, [])
+
+  const handleTerminalFocusHandled = useCallback((sequence: number) => {
+    setTerminalFocusRequest((current) =>
+      current?.sequence === sequence ? null : current,
     )
   }, [])
 
@@ -1177,6 +1199,10 @@ function App() {
 
       await agentCli.openWindowsCommandPrompt(id, session.config.cwd)
       showWindowsCommandPrompt(id)
+
+      if (id === activeSessionId) {
+        requestTerminalFocus(buildWindowsCommandPromptTerminalId(id))
+      }
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     }
@@ -1920,6 +1946,9 @@ function App() {
               sessions={sessions}
               activeSessionId={activeSessionId}
               windowsCommandPromptSessionIds={windowsCommandPromptSessionIds}
+              focusTerminalId={terminalFocusRequest?.terminalId ?? null}
+              focusTerminalSequence={terminalFocusRequest?.sequence ?? 0}
+              onFocusTerminalHandled={handleTerminalFocusHandled}
             />
           )}
 

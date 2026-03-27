@@ -631,6 +631,29 @@
   min-height: 0;
   overflow: auto;
   padding: 0 12px 14px 14px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(227, 211, 182, 0.32) rgba(9, 13, 18, 0.9);
+}
+
+.session-list::-webkit-scrollbar {
+  width: 12px;
+}
+
+.session-list::-webkit-scrollbar-track,
+.session-list::-webkit-scrollbar-corner {
+  background: rgba(9, 13, 18, 0.9);
+  border-radius: 999px;
+}
+
+.session-list::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(9, 13, 18, 0.9);
+  border-radius: 999px;
+  background: rgba(227, 211, 182, 0.32);
+}
+
+.session-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(227, 211, 182, 0.46);
 }
 
 .sidebar__empty {

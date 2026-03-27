@@ -55,6 +55,136 @@ function extractCodexMessageText(content: unknown): string {
     .trim()
 }
 
+function parseCodexEvent(line: string): {
+  payload?: {
+    content?: unknown
+    last_agent_message?: string
+    message?: string
+    phase?: string
+    role?: string
+    type?: string
+  }
+  type?: string
+} | null {
+  const parsed = parseJsonLine(line)
+  return parsed && typeof parsed === 'object'
+    ? (parsed as {
+        payload?: {
+          content?: unknown
+          last_agent_message?: string
+          message?: string
+          phase?: string
+          role?: string
+          type?: string
+        }
+        type?: string
+      })
+    : null
+}
+
+function extractCodexAttentionFromParsedEvent(
+  parsed: ReturnType<typeof parseCodexEvent>,
+): SessionAttentionKind | null {
+  if (!parsed) {
+    return null
+  }
+
+  if (parsed.type === 'response_item') {
+    const payload = parsed.payload
+    if (
+      payload?.type !== 'message' ||
+      payload.role !== 'assistant' ||
+      payload.phase !== 'final_answer'
+    ) {
+      return null
+    }
+
+    const content = extractCodexMessageText(payload.content)
+    return content ? classifySessionAttentionFromText(content) : null
+  }
+
+  if (parsed.type !== 'event_msg') {
+    return null
+  }
+
+  const payload = parsed.payload
+  if (payload?.type === 'task_complete') {
+    if (
+      typeof payload.last_agent_message === 'string' &&
+      payload.last_agent_message.trim()
+    ) {
+      return classifySessionAttentionFromText(payload.last_agent_message)
+    }
+
+    return 'task-complete'
+  }
+
+  if (payload?.type !== 'agent_message' || payload.phase !== 'final_answer') {
+    return null
+  }
+
+  const content = payload.message?.trim()
+  return content ? classifySessionAttentionFromText(content) : null
+}
+
+function shouldResetCodexAttention(
+  parsed: ReturnType<typeof parseCodexEvent>,
+): boolean {
+  if (!parsed) {
+    return false
+  }
+
+  if (
+    parsed.type === 'response_item' &&
+    parsed.payload?.type === 'message' &&
+    parsed.payload.role === 'user'
+  ) {
+    return true
+  }
+
+  return parsed.type === 'event_msg' && parsed.payload?.type === 'task_started'
+}
+
+function parseCopilotEvent(line: string): {
+  data?: {
+    content?: string
+    toolRequests?: unknown[]
+  }
+  type?: string
+} | null {
+  const parsed = parseJsonLine(line)
+  return parsed && typeof parsed === 'object'
+    ? (parsed as {
+        data?: {
+          content?: string
+          toolRequests?: unknown[]
+        }
+        type?: string
+      })
+    : null
+}
+
+function extractCopilotAttentionFromParsedEvent(
+  parsed: ReturnType<typeof parseCopilotEvent>,
+): SessionAttentionKind | null {
+  if (!parsed || parsed.type !== 'assistant.message') {
+    return null
+  }
+
+  if (!Array.isArray(parsed.data?.toolRequests) || parsed.data.toolRequests.length > 0) {
+    return null
+  }
+
+  const content = parsed.data.content?.trim()
+  return content ? classifySessionAttentionFromText(content) : null
+}
+
+function shouldResetCopilotAttention(
+  parsed: ReturnType<typeof parseCopilotEvent>,
+): boolean {
+  return Boolean(parsed?.type?.startsWith('user.'))
+}
+
 export function classifySessionAttentionFromText(
   content: string,
 ): SessionAttentionKind {
@@ -90,103 +220,46 @@ export function extractTerminalAttentionFromText(
 export function extractCodexAttentionFromSessionLine(
   line: string,
 ): SessionAttentionKind | null {
-  const parsed = parseJsonLine(line)
-  if (!parsed || typeof parsed !== 'object') {
-    return null
-  }
-
-  const { type, payload } = parsed as {
-    payload?: {
-      type?: string
-      role?: string
-      phase?: string
-      content?: unknown
-    }
-    type?: string
-  }
-  if (type !== 'response_item') {
-    const { payload } = parsed as {
-      payload?: {
-        type?: string
-        phase?: string
-        message?: string
-        last_agent_message?: string
-      }
-      type?: string
-    }
-
-    if (type !== 'event_msg') {
-      return null
-    }
-
-    if (
-      payload?.type === 'agent_message' &&
-      payload.phase === 'final_answer' &&
-      typeof payload.message === 'string' &&
-      payload.message.trim()
-    ) {
-      return classifySessionAttentionFromText(payload.message)
-    }
-
-    if (payload?.type !== 'task_complete') {
-      return null
-    }
-
-    if (
-      typeof payload.last_agent_message === 'string' &&
-      payload.last_agent_message.trim()
-    ) {
-      return classifySessionAttentionFromText(payload.last_agent_message)
-    }
-
-    return 'task-complete'
-  }
-
-  if (
-    payload?.type !== 'message' ||
-    payload.role !== 'assistant' ||
-    payload.phase !== 'final_answer'
-  ) {
-    return null
-  }
-
-  const content = extractCodexMessageText(payload.content)
-  if (!content) {
-    return null
-  }
-
-  return classifySessionAttentionFromText(content)
+  return extractCodexAttentionFromParsedEvent(parseCodexEvent(line))
 }
 
 export function extractCopilotAttentionFromSessionLine(
   line: string,
 ): SessionAttentionKind | null {
-  const parsed = parseJsonLine(line)
-  if (!parsed || typeof parsed !== 'object') {
+  return extractCopilotAttentionFromParsedEvent(parseCopilotEvent(line))
+}
+
+export function reduceCodexAttentionState(
+  current: SessionAttentionKind | null,
+  line: string,
+): SessionAttentionKind | null {
+  const parsed = parseCodexEvent(line)
+  if (shouldResetCodexAttention(parsed)) {
     return null
   }
 
-  const { data, type } = parsed as {
-    data?: {
-      content?: string
-      toolRequests?: unknown[]
-    }
-    type?: string
+  const nextAttention = extractCodexAttentionFromParsedEvent(parsed)
+  if (!nextAttention) {
+    return current
   }
-  if (type !== 'assistant.message') {
+
+  if (current === 'needs-user-decision' && nextAttention === 'task-complete') {
+    return current
+  }
+
+  return nextAttention
+}
+
+export function reduceCopilotAttentionState(
+  current: SessionAttentionKind | null,
+  line: string,
+): SessionAttentionKind | null {
+  const parsed = parseCopilotEvent(line)
+  if (shouldResetCopilotAttention(parsed)) {
     return null
   }
 
-  if (!Array.isArray(data?.toolRequests) || data.toolRequests.length > 0) {
-    return null
-  }
-
-  const content = data.content?.trim()
-  if (!content) {
-    return null
-  }
-
-  return classifySessionAttentionFromText(content)
+  return extractCopilotAttentionFromParsedEvent(parsed) ?? current
 }
 
 export function getSessionAttentionBadgeLabel(
