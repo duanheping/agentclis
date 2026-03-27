@@ -71,6 +71,7 @@ function buildProjectGitOverview(): ProjectGitOverview {
     isGitRepository: true,
     repoRoot: 'C:\\repo\\agenclis',
     branch: 'feature/topbar-actions',
+    branches: ['feature/topbar-actions', 'main', 'release/24.1'],
     stagedFiles: [],
     unstagedFiles: [
       {
@@ -355,11 +356,18 @@ function createAgentCliMock(
     openPath: vi.fn().mockResolvedValue(undefined),
     openProject: vi.fn().mockResolvedValue(undefined),
     getProjectGitOverview: vi.fn().mockResolvedValue(gitOverview),
+    switchProjectGitBranch: vi
+      .fn()
+      .mockImplementation(async (_projectPath: string, branchName: string) => ({
+        ...structuredClone(gitOverview),
+        branch: branchName,
+      })),
     getProjectGitDiff: vi.fn().mockResolvedValue({
       filePath: 'src/App.tsx',
       staged: false,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n+new line\n-old line',
     }),
+    revertProjectGitFile: vi.fn().mockResolvedValue(undefined),
     openFileReference: vi.fn().mockResolvedValue(undefined),
     openExternalLink: vi.fn().mockResolvedValue(undefined),
     getPathForFile: vi.fn((file: File) => file.name),
@@ -418,6 +426,11 @@ describe('App skills settings', () => {
         removeListener: vi.fn(),
         dispatchEvent: vi.fn(),
       })),
+    })
+    Object.defineProperty(window, 'confirm', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockReturnValue(true),
     })
     useSessionsStore.setState({
       projects: [],
@@ -719,6 +732,152 @@ describe('App skills settings', () => {
       'src/App.tsx',
       false,
     )
+  })
+
+  it('switches branches from the top bar branch menu', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    const switchBranchButton = await screen.findByRole('button', {
+      name: 'Switch branch',
+    })
+
+    await waitFor(() => {
+      expect(switchBranchButton).not.toBeDisabled()
+    })
+
+    await user.click(switchBranchButton)
+    await user.click(screen.getByRole('menuitemradio', { name: /main/i }))
+
+    await waitFor(() => {
+      expect(agentCli.switchProjectGitBranch).toHaveBeenCalledWith(
+        'C:\\repo\\agenclis',
+        'main',
+      )
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Switch branch' })).toHaveTextContent(
+        'main',
+      )
+    })
+  })
+
+  it('reverts a file from the diff panel context menu and refreshes git state', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Changes')).toBeInTheDocument()
+    })
+
+    fireEvent.contextMenu(
+      screen.getByRole('button', { name: /src\/App\.tsx/i }),
+      {
+        clientX: 120,
+        clientY: 140,
+      },
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: 'Revert changes' }))
+
+    await waitFor(() => {
+      expect(agentCli.revertProjectGitFile).toHaveBeenCalledWith(
+        'C:\\repo\\agenclis',
+        {
+          path: 'src/App.tsx',
+          status: 'modified',
+          additions: 23,
+          deletions: 7,
+          staged: false,
+        },
+      )
+    })
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Revert changes in src/App.tsx? This cannot be undone.',
+    )
+    expect(agentCli.getProjectGitOverview.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
   it('hides the cmd pane immediately while the close request is still pending', async () => {

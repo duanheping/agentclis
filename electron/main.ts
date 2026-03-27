@@ -16,6 +16,7 @@ import {
 
 import { IPC_CHANNELS, type PersistTransientFileInput } from '../src/shared/ipc'
 import type { ProjectOpenTarget } from '../src/shared/projectTools'
+import type { ProjectGitFileChange } from '../src/shared/projectTools'
 import type { ProjectConfig, SessionAttentionKind } from '../src/shared/session'
 import {
   formatWorkspaceWindowTitle,
@@ -33,6 +34,8 @@ import {
   getProjectGitDiff,
   getProjectGitOverview,
   openProjectInTarget,
+  revertProjectGitFile,
+  switchProjectGitBranch,
 } from './projectTools'
 import { ProjectArchitectureAgentExtractor } from './projectArchitectureAgent'
 import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'
@@ -750,9 +753,19 @@ function registerIpcHandlers(): void {
     getProjectGitOverview(projectPath),
   )
   ipcMain.handle(
+    IPC_CHANNELS.switchProjectGitBranch,
+    (_event, projectPath: string, branchName: string) =>
+      switchProjectGitBranch(projectPath, branchName),
+  )
+  ipcMain.handle(
     IPC_CHANNELS.getProjectGitDiff,
     (_event, projectPath: string, filePath: string, staged: boolean) =>
       getProjectGitDiff(projectPath, filePath, staged),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.revertProjectGitFile,
+    (_event, projectPath: string, file: ProjectGitFileChange) =>
+      revertProjectGitFile(projectPath, file),
   )
   ipcMain.handle(IPC_CHANNELS.openFileReference, (_event, target: string) =>
     openFileReferenceTarget(target, shell),

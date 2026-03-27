@@ -92,6 +92,12 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openProject, target, projectPath),
   getProjectGitOverview: (projectPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.getProjectGitOverview, projectPath),
+  switchProjectGitBranch: (projectPath, branchName) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.switchProjectGitBranch,
+      projectPath,
+      branchName,
+    ),
   getProjectGitDiff: (projectPath, filePath, staged) =>
     ipcRenderer.invoke(
       IPC_CHANNELS.getProjectGitDiff,
@@ -99,6 +105,8 @@ const api: AgentCliApi = {
       filePath,
       staged,
     ),
+  revertProjectGitFile: (projectPath, file) =>
+    ipcRenderer.invoke(IPC_CHANNELS.revertProjectGitFile, projectPath, file),
   openFileReference: (target) =>
     ipcRenderer.invoke(IPC_CHANNELS.openFileReference, target),
   getPathForFile: (file) => webUtils.getPathForFile(file),
