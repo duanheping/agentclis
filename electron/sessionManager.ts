@@ -32,8 +32,8 @@ import {
   type SessionSnapshot,
 } from '../src/shared/session'
 import {
-  extractCodexAttentionFromSessionLine,
-  extractCopilotAttentionFromSessionLine,
+  reduceCodexAttentionState,
+  reduceCopilotAttentionState,
 } from '../src/shared/sessionAttention'
 import type {
   ProjectLocation,
@@ -101,6 +101,7 @@ const FIRST_PROMPT_TITLE_LIMIT = 80
 const BACKGROUND_IDENTITY_REFRESH_DELAY_MS = 1_500
 const BACKGROUND_MEMORY_BACKFILL_DELAY_MS = 4_500
 const EXTERNAL_ATTENTION_POLL_INTERVAL_MS = 1_500
+const EXTERNAL_ATTENTION_HISTORY_SCAN_BYTES = 512 * 1024
 
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
@@ -861,6 +862,13 @@ export class SessionManager {
     }
 
     if (attempt + 1 >= CODEX_SESSION_DISCOVERY_ATTEMPTS) {
+      const historicalSession = await this.findHistoricalExternalSession(
+        config,
+        provider,
+      )
+      if (historicalSession) {
+        this.attachExternalSession(config, historicalSession)
+      }
       return
     }
 
@@ -1244,6 +1252,43 @@ export class SessionManager {
     }
   }
 
+  private async readFileTail(
+    filePath: string,
+    byteLimit: number,
+  ): Promise<string | null> {
+    let handle
+
+    try {
+      const details = await stat(filePath)
+      const size = details.size
+      if (size <= 0) {
+        return null
+      }
+
+      handle = await open(filePath, 'r')
+      const bytesToRead = Math.min(size, byteLimit)
+      const startOffset = Math.max(0, size - bytesToRead)
+      const buffer = Buffer.alloc(bytesToRead)
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, startOffset)
+      const content = buffer.toString('utf8', 0, bytesRead)
+
+      if (startOffset === 0) {
+        return content
+      }
+
+      const firstNewlineIndex = content.search(/\r?\n/u)
+      if (firstNewlineIndex === -1) {
+        return null
+      }
+
+      return content.slice(firstNewlineIndex + 1)
+    } catch {
+      return null
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
+  }
+
   private async readCopilotSessionMeta(
     filePath: string,
   ): Promise<DetectedExternalSession | null> {
@@ -1370,13 +1415,22 @@ export class SessionManager {
     }
 
     let initialOffset = 0
+    let initialAttention: SessionAttentionKind | null = null
     try {
-      initialOffset = (await stat(filePath)).size
+      const details = await stat(filePath)
+      initialOffset = details.size
+      initialAttention = await this.readPersistedExternalSessionAttention(
+        config.externalSession.provider,
+        filePath,
+      )
     } catch {
       return
     }
 
     this.stopExternalSessionAttentionTracking(config.id)
+    if (initialAttention) {
+      this.setSessionAttention(config.id, initialAttention)
+    }
     const interval = setInterval(() => {
       void this.pollExternalSessionAttention(config.id)
     }, EXTERNAL_ATTENTION_POLL_INTERVAL_MS)
@@ -1390,6 +1444,34 @@ export class SessionManager {
       remainder: '',
       polling: false,
     })
+  }
+
+  private async readPersistedExternalSessionAttention(
+    provider: 'codex' | 'copilot',
+    filePath: string,
+  ): Promise<SessionAttentionKind | null> {
+    const content = await this.readFileTail(
+      filePath,
+      EXTERNAL_ATTENTION_HISTORY_SCAN_BYTES,
+    )
+    if (!content) {
+      return null
+    }
+
+    let attention: SessionAttentionKind | null = null
+    const lines = content.split(/\r?\n/u)
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue
+      }
+
+      attention =
+        provider === 'codex'
+          ? reduceCodexAttentionState(attention, line)
+          : reduceCopilotAttentionState(attention, line)
+    }
+
+    return attention
   }
 
   private stopExternalSessionAttentionTracking(sessionId: string): void {
@@ -1502,15 +1584,16 @@ export class SessionManager {
       return
     }
 
-    const attention =
+    const currentAttention = this.runtimes.get(sessionId)?.attention ?? null
+    const nextAttention =
       provider === 'codex'
-        ? extractCodexAttentionFromSessionLine(line)
-        : extractCopilotAttentionFromSessionLine(line)
-    if (!attention) {
+        ? reduceCodexAttentionState(currentAttention, line)
+        : reduceCopilotAttentionState(currentAttention, line)
+    if (nextAttention === currentAttention) {
       return
     }
 
-    this.setSessionAttention(sessionId, attention)
+    this.setSessionAttention(sessionId, nextAttention)
   }
 
   private claimExternalSession(config: SessionConfig): void {

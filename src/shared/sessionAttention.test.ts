@@ -8,6 +8,8 @@ import {
   formatWorkspaceWindowTitle,
   getSessionAttentionBadgeLabel,
   getSessionAttentionTitleLabel,
+  reduceCodexAttentionState,
+  reduceCopilotAttentionState,
   selectHighestPriorityAttentionSession,
 } from './sessionAttention'
 
@@ -85,6 +87,20 @@ describe('sessionAttention', () => {
     expect(extractCodexAttentionFromSessionLine(line)).toBeNull()
   })
 
+  it('detects Codex final answers from event_msg agent messages', () => {
+    const line =
+      '{"type":"event_msg","payload":{"type":"agent_message","message":"All done. Here is the summary.","phase":"final_answer"}}'
+
+    expect(extractCodexAttentionFromSessionLine(line)).toBe('task-complete')
+  })
+
+  it('detects Codex task_complete events as task completion', () => {
+    const line =
+      '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"All done."}}'
+
+    expect(extractCodexAttentionFromSessionLine(line)).toBe('task-complete')
+  })
+
   it('detects Copilot final answers with no pending tool requests', () => {
     const line =
       '{"type":"assistant.message","data":{"content":"All done. Here is the summary.","toolRequests":[]}}'
@@ -147,6 +163,45 @@ describe('sessionAttention', () => {
   it('returns null from Copilot extractor when content is empty', () => {
     const line = '{"type":"assistant.message","data":{"content":"","toolRequests":[]}}'
     expect(extractCopilotAttentionFromSessionLine(line)).toBeNull()
+  })
+
+  it('reduces Codex attention state across a completed turn', () => {
+    let attention = reduceCodexAttentionState(
+      null,
+      '{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Should I continue?"}]}}',
+    )
+
+    expect(attention).toBe('needs-user-decision')
+
+    attention = reduceCodexAttentionState(
+      attention,
+      '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}',
+    )
+
+    expect(attention).toBe('needs-user-decision')
+
+    attention = reduceCodexAttentionState(
+      attention,
+      '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"yes"}]}}',
+    )
+
+    expect(attention).toBeNull()
+  })
+
+  it('reduces Copilot attention state and clears it on user events', () => {
+    let attention = reduceCopilotAttentionState(
+      null,
+      '{"type":"assistant.message","data":{"content":"All done.","toolRequests":[]}}',
+    )
+
+    expect(attention).toBe('task-complete')
+
+    attention = reduceCopilotAttentionState(
+      attention,
+      '{"type":"user.message","data":{"content":"next task"}}',
+    )
+
+    expect(attention).toBeNull()
   })
 
   it('classifies text with question mark as needs-user-decision', () => {
