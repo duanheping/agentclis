@@ -982,6 +982,111 @@ describe('SessionManager project lifecycle', () => {
     ).toBeNull()
   })
 
+  it('routes terminal data to the correct session when multiple sessions run concurrently', async () => {
+    const onData = vi.fn()
+    const manager = new SessionManager({
+      onData,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session1 = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'first',
+    })
+
+    const session2 = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'second',
+    })
+
+    const session3 = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'third',
+    })
+
+    const terminal1Listener = mocks.terminals[0]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+    const terminal2Listener = mocks.terminals[1]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+    const terminal3Listener = mocks.terminals[2]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+
+    expect(terminal1Listener).toBeTypeOf('function')
+    expect(terminal2Listener).toBeTypeOf('function')
+    expect(terminal3Listener).toBeTypeOf('function')
+
+    terminal1Listener?.('output-from-session-1')
+    terminal3Listener?.('output-from-session-3')
+    terminal2Listener?.('output-from-session-2')
+
+    const session1Events = onData.mock.calls.filter(
+      ([event]: [{ sessionId: string }]) => event.sessionId === session1.config.id,
+    )
+    const session2Events = onData.mock.calls.filter(
+      ([event]: [{ sessionId: string }]) => event.sessionId === session2.config.id,
+    )
+    const session3Events = onData.mock.calls.filter(
+      ([event]: [{ sessionId: string }]) => event.sessionId === session3.config.id,
+    )
+
+    expect(session1Events).toHaveLength(1)
+    expect(session1Events[0]?.[0].chunk).toBe('output-from-session-1')
+
+    expect(session2Events).toHaveLength(1)
+    expect(session2Events[0]?.[0].chunk).toBe('output-from-session-2')
+
+    expect(session3Events).toHaveLength(1)
+    expect(session3Events[0]?.[0].chunk).toBe('output-from-session-3')
+  })
+
+  it('ignores terminal data from a replaced terminal after session restart', async () => {
+    const onData = vi.fn()
+    const manager = new SessionManager({
+      onData,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'agent',
+    })
+
+    const oldTerminalListener = mocks.terminals[0]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+
+    await manager.restartSession(session.config.id)
+
+    const newTerminalListener = mocks.terminals[1]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+
+    expect(oldTerminalListener).toBeTypeOf('function')
+    expect(newTerminalListener).toBeTypeOf('function')
+
+    onData.mockClear()
+
+    oldTerminalListener?.('stale-data-from-old-terminal')
+    newTerminalListener?.('fresh-data-from-new-terminal')
+
+    expect(onData).toHaveBeenCalledTimes(1)
+    expect(onData).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      chunk: 'fresh-data-from-new-terminal',
+    })
+  })
+
   it('ignores low-signal first prompts until a meaningful title is available', async () => {
     const onConfig = vi.fn()
     const manager = new SessionManager({
