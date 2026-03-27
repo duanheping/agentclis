@@ -17,6 +17,8 @@ import type {
 } from './shared/skills'
 import { useSessionsStore } from './store/useSessionsStore'
 
+const notificationSpy = vi.fn()
+
 function buildSkillSettings(): SkillLibrarySettings {
   return {
     libraryRoot: '',
@@ -412,6 +414,7 @@ describe('App skills settings', () => {
   })
 
   beforeEach(() => {
+    notificationSpy.mockReset()
     window.localStorage.clear()
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -431,6 +434,17 @@ describe('App skills settings', () => {
       configurable: true,
       writable: true,
       value: vi.fn().mockReturnValue(true),
+    })
+    Object.defineProperty(window, 'Notification', {
+      configurable: true,
+      writable: true,
+      value: class MockNotification {
+        static permission: NotificationPermission = 'granted'
+
+        constructor(title: string, options?: NotificationOptions) {
+          notificationSpy(title, options)
+        }
+      },
     })
     useSessionsStore.setState({
       projects: [],
@@ -483,6 +497,97 @@ describe('App skills settings', () => {
     await waitFor(() => {
       expect(document.title).toBe('Reply needed: Codex - Agent CLIs')
     })
+  })
+
+  it('shows an attention notice and system notification when a session needs input', async () => {
+    let runtimeListener:
+      | ((event: {
+        runtime: {
+          attention?: 'needs-user-decision' | 'task-complete' | null
+          lastActiveAt: string
+          sessionId: string
+          status: 'starting' | 'running' | 'exited' | 'error'
+        }
+        sessionId: string
+      }) => void)
+      | null = null
+
+    const { agentCli } = createAgentCliMock({
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-12T18:00:00.000Z',
+            updatedAt: '2026-03-12T18:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'pwsh.exe',
+                createdAt: '2026-03-12T18:00:00.000Z',
+                updatedAt: '2026-03-12T18:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                attention: null,
+                lastActiveAt: '2026-03-12T18:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    agentCli.onSessionRuntime.mockImplementation((listener) => {
+      runtimeListener = listener
+      return vi.fn()
+    })
+
+    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Codex')).toBeInTheDocument()
+    })
+
+    act(() => {
+      runtimeListener?.({
+        sessionId: 'session-1',
+        runtime: {
+          sessionId: 'session-1',
+          status: 'running',
+          attention: 'needs-user-decision',
+          lastActiveAt: '2026-03-12T18:00:05.000Z',
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Codex is waiting for your approval or reply.'),
+      ).toBeInTheDocument()
+    })
+
+    expect(notificationSpy).toHaveBeenCalledWith(
+      'Reply needed: Codex',
+      expect.objectContaining({
+        body: 'Codex is waiting for your approval or reply.',
+      }),
+    )
+
+    hasFocusSpy.mockRestore()
   })
 
   it('loads root settings, lets the user choose paths, and triggers sync', async () => {

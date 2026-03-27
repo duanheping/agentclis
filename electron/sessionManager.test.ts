@@ -859,6 +859,55 @@ describe('SessionManager project lifecycle', () => {
     expect(onConfig).not.toHaveBeenCalled()
   })
 
+  it('marks a live session as needing user attention when the terminal shows an approval prompt', async () => {
+    const onRuntime = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+    })
+
+    const terminalDataListener = mocks.terminals[0]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+
+    expect(terminalDataListener).toBeTypeOf('function')
+
+    terminalDataListener?.(
+      '\r\nWould you like to run the following command?\r\n',
+    )
+    terminalDataListener?.(
+      '\r\nPress enter to confirm or esc to cancel\r\n',
+    )
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.attention,
+    ).toBe('needs-user-decision')
+    expect(onRuntime).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      runtime: expect.objectContaining({
+        attention: 'needs-user-decision',
+      }),
+    })
+
+    manager.writeToSession(session.config.id, 'y')
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.attention,
+    ).toBeNull()
+  })
+
   it('ignores low-signal first prompts until a meaningful title is available', async () => {
     const onConfig = vi.fn()
     const manager = new SessionManager({

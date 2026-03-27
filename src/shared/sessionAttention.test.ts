@@ -5,8 +5,10 @@ import {
   classifySessionAttentionFromText,
   extractCodexAttentionFromSessionLine,
   extractCopilotAttentionFromSessionLine,
+  extractTerminalAttentionFromText,
   formatWorkspaceWindowTitle,
   getSessionAttentionBadgeLabel,
+  getSessionAttentionNotificationBody,
   getSessionAttentionTitleLabel,
   selectHighestPriorityAttentionSession,
 } from './sessionAttention'
@@ -83,6 +85,22 @@ describe('sessionAttention', () => {
       '{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Still working."}]}}'
 
     expect(extractCodexAttentionFromSessionLine(line)).toBeNull()
+  })
+
+  it('detects Codex task_complete event messages', () => {
+    const line =
+      '{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"All done. The changes are ready."}}'
+
+    expect(extractCodexAttentionFromSessionLine(line)).toBe('task-complete')
+  })
+
+  it('detects Codex final agent_message events that still need a reply', () => {
+    const line =
+      '{"type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"Task finished. Which option do you want me to take next?"}}'
+
+    expect(extractCodexAttentionFromSessionLine(line)).toBe(
+      'needs-user-decision',
+    )
   })
 
   it('detects Copilot final answers with no pending tool requests', () => {
@@ -175,6 +193,22 @@ describe('sessionAttention', () => {
     expect(classifySessionAttentionFromText('All changes applied successfully.')).toBe('task-complete')
   })
 
+  it('detects terminal approval prompts without treating generic output as attention', () => {
+    expect(
+      extractTerminalAttentionFromText(
+        'Would you like to run the following command?',
+      ),
+    ).toBe('needs-user-decision')
+    expect(
+      extractTerminalAttentionFromText(
+        'Press enter to confirm or esc to cancel',
+      ),
+    ).toBe('needs-user-decision')
+    expect(
+      extractTerminalAttentionFromText('Running npm test now...'),
+    ).toBeNull()
+  })
+
   it('returns correct badge labels', () => {
     expect(getSessionAttentionBadgeLabel('needs-user-decision')).toBe('Reply')
     expect(getSessionAttentionBadgeLabel('task-complete')).toBe('Done')
@@ -183,6 +217,15 @@ describe('sessionAttention', () => {
   it('returns correct title labels', () => {
     expect(getSessionAttentionTitleLabel('needs-user-decision')).toBe('Reply needed')
     expect(getSessionAttentionTitleLabel('task-complete')).toBe('Task complete')
+  })
+
+  it('returns notification copy for attention states', () => {
+    expect(
+      getSessionAttentionNotificationBody('needs-user-decision', 'Codex'),
+    ).toBe('Codex is waiting for your approval or reply.')
+    expect(
+      getSessionAttentionNotificationBody('task-complete', 'Codex'),
+    ).toBe('Codex finished and is ready for review.')
   })
 
   it('selectHighestPriorityAttentionSession returns null when no sessions have attention', () => {
