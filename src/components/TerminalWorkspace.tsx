@@ -23,6 +23,9 @@ interface TerminalWorkspaceProps {
   sessions: SessionSnapshot[]
   activeSessionId: string | null
   windowsCommandPromptSessionIds: string[]
+  focusTerminalId?: string | null
+  focusTerminalSequence?: number
+  onFocusTerminalHandled?: (sequence: number) => void
 }
 
 interface SessionTerminalStackProps {
@@ -30,6 +33,9 @@ interface SessionTerminalStackProps {
   active: boolean
   showWindowsCommandPrompt: boolean
   splitRatio: number
+  focusTerminalId: string | null
+  focusTerminalSequence: number
+  onFocusTerminalHandled?: (sequence: number) => void
   onSplitResizerPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void
   onSplitResizerKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void
 }
@@ -38,6 +44,8 @@ interface TerminalSurfaceProps {
   terminalId: string
   active: boolean
   autoFocus?: boolean
+  focusRequestSequence?: number
+  onFocusRequestHandled?: (sequence: number) => void
   onInput: (data: string) => void
   onResize: (cols: number, rows: number) => void | Promise<void>
 }
@@ -88,6 +96,9 @@ export function TerminalWorkspace({
   sessions,
   activeSessionId,
   windowsCommandPromptSessionIds,
+  focusTerminalId = null,
+  focusTerminalSequence = 0,
+  onFocusTerminalHandled,
 }: TerminalWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const splitResizeCleanupRef = useRef<(() => void) | null>(null)
@@ -234,6 +245,9 @@ export function TerminalWorkspace({
             session.config.id,
           )}
           splitRatio={splitRatio}
+          focusTerminalId={focusTerminalId}
+          focusTerminalSequence={focusTerminalSequence}
+          onFocusTerminalHandled={onFocusTerminalHandled}
           onSplitResizerPointerDown={handleSplitResizerPointerDown}
           onSplitResizerKeyDown={handleSplitResizerKeyDown}
         />
@@ -247,6 +261,9 @@ function SessionTerminalStack({
   active,
   showWindowsCommandPrompt,
   splitRatio,
+  focusTerminalId,
+  focusTerminalSequence,
+  onFocusTerminalHandled,
   onSplitResizerPointerDown,
   onSplitResizerKeyDown,
 }: SessionTerminalStackProps) {
@@ -270,6 +287,10 @@ function SessionTerminalStack({
           terminalId={sessionId}
           active={active}
           autoFocus
+          focusRequestSequence={
+            focusTerminalId === sessionId ? focusTerminalSequence : 0
+          }
+          onFocusRequestHandled={onFocusTerminalHandled}
           onInput={(data) => {
             void window.agentCli.writeToSession(sessionId, data)
           }}
@@ -293,6 +314,12 @@ function SessionTerminalStack({
             <TerminalSurface
               terminalId={buildWindowsCommandPromptTerminalId(sessionId)}
               active={active}
+              focusRequestSequence={
+                focusTerminalId === buildWindowsCommandPromptTerminalId(sessionId)
+                  ? focusTerminalSequence
+                  : 0
+              }
+              onFocusRequestHandled={onFocusTerminalHandled}
               onInput={(data) => {
                 void window.agentCli.writeToWindowsCommandPrompt(sessionId, data)
               }}
@@ -311,6 +338,8 @@ function TerminalSurface({
   terminalId,
   active,
   autoFocus = false,
+  focusRequestSequence = 0,
+  onFocusRequestHandled,
   onInput,
   onResize,
 }: TerminalSurfaceProps) {
@@ -451,6 +480,15 @@ function TerminalSurface({
       }
     })
   }, [active, autoFocus, terminalId])
+
+  useEffect(() => {
+    if (!active || focusRequestSequence === 0) {
+      return
+    }
+
+    terminalRegistry.focus(terminalId)
+    onFocusRequestHandled?.(focusRequestSequence)
+  }, [active, focusRequestSequence, onFocusRequestHandled, terminalId])
 
   return <div ref={containerRef} className="terminal-surface" />
 }

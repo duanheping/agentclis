@@ -2,8 +2,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const mockTerminalWorkspace = vi.hoisted(() => vi.fn())
+
 vi.mock('./components/TerminalWorkspace', () => ({
-  TerminalWorkspace: () => <div data-testid="terminal-workspace" />,
+  TerminalWorkspace: (props: unknown) => {
+    mockTerminalWorkspace(props)
+    return <div data-testid="terminal-workspace" />
+  },
 }))
 
 import App from './App'
@@ -412,6 +417,7 @@ describe('App skills settings', () => {
   })
 
   beforeEach(() => {
+    mockTerminalWorkspace.mockClear()
     window.localStorage.clear()
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -712,6 +718,18 @@ describe('App skills settings', () => {
       'session-1',
       'C:\\Users\\hduan10\\.codex\\worktrees\\agenclis\\20260317-153045-12345678',
     )
+    expect(mockTerminalWorkspace).toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(
+        mockTerminalWorkspace.mock.calls.at(-1)?.[0],
+      ).toEqual(
+        expect.objectContaining({
+          focusTerminalId: 'session-1:windows-cmd',
+          focusTerminalSequence: expect.any(Number),
+        }),
+      )
+    })
 
     await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
 
