@@ -394,6 +394,36 @@
   line-height: 1.4;
 }
 
+.titlebar-action--permission {
+  gap: 5px;
+}
+
+.titlebar-action__shield {
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.titlebar-menu__panel--permission {
+  width: 220px;
+}
+
+.titlebar-menu__item--permission {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titlebar-menu__item-radio {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.titlebar-menu__item.is-selected .titlebar-menu__item-radio {
+  color: var(--accent);
+}
+
 .sidebar {
   grid-column: 1;
   grid-row: 2;

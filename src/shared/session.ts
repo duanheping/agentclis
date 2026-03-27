@@ -16,6 +16,20 @@ export const MANAGED_CLI_PROVIDERS = ['codex', 'copilot'] as const
 
 export type ManagedCliProvider = (typeof MANAGED_CLI_PROVIDERS)[number]
 
+export const PERMISSION_LEVELS = ['default', 'full-access'] as const
+
+export type PermissionLevel = (typeof PERMISSION_LEVELS)[number]
+
+export const PERMISSION_LEVEL_LABELS: Record<PermissionLevel, string> = {
+  'default': 'Default permissions',
+  'full-access': 'Full access',
+}
+
+export const PERMISSION_LEVEL_DESCRIPTIONS: Record<PermissionLevel, string> = {
+  'default': 'Agent requires approval for file changes and commands',
+  'full-access': 'Agent can read, write, and execute without approval',
+}
+
 export interface ManagedCliSessionRef {
   provider: ManagedCliProvider
   sessionId: string
@@ -88,6 +102,7 @@ export interface CreateSessionInput {
   cwd?: string
   createWithWorktree?: boolean
   attachProjectContext?: boolean
+  permissionLevel?: PermissionLevel
 }
 
 export interface SessionCloseResult {
