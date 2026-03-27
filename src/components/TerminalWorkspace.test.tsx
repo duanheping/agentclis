@@ -45,7 +45,9 @@ vi.mock('@xterm/xterm', () => ({
     }))
     write = vi.fn()
     clear = vi.fn()
-    focus = vi.fn()
+    focus = vi.fn(() => {
+      this.textarea.focus()
+    })
     paste = vi.fn()
     getSelection = vi.fn(() => '')
     hasSelection = vi.fn(() => false)
@@ -251,5 +253,24 @@ describe('TerminalWorkspace', () => {
         },
       }),
     )
+  })
+
+  it('focuses the windows cmd terminal when a focus request targets it', async () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={['session-1']}
+        focusTerminalId="session-1:windows-cmd"
+        focusTerminalSequence={1}
+      />,
+    )
+
+    const textareas = document.querySelectorAll('.xterm textarea')
+
+    await waitFor(() => {
+      expect(textareas).toHaveLength(2)
+      expect(document.activeElement).toBe(textareas[1])
+    })
   })
 })
