@@ -96,6 +96,7 @@ const CODEX_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
 const CODEX_SESSION_DISCOVERY_INTERVAL_MS = 750
 const CODEX_SESSION_DISCOVERY_ATTEMPTS = 24
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
+const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
 const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
 const FIRST_PROMPT_TITLE_LIMIT = 80
@@ -872,6 +873,30 @@ export class SessionManager {
     return null
   }
 
+  private shouldAllowHistoricalExternalSessionMatching(
+    config: SessionConfig,
+  ): boolean {
+    if (this.historicalExternalSessionRecovery.has(config.id)) {
+      return true
+    }
+
+    return this.isExplicitResumeCommand(config.startupCommand)
+  }
+
+  private isExplicitResumeCommand(command: string): boolean {
+    if (
+      supportsCodexSessionResume(command) &&
+      /\b(?:resume|fork)\b/u.test(command)
+    ) {
+      return true
+    }
+
+    return (
+      supportsCopilotSessionResume(command) &&
+      /(^|\s)--(?:resume|continue)(?:\s|=|$)/u.test(command)
+    )
+  }
+
   private async pollForExternalSessionRef(
     sessionId: string,
     provider: 'codex' | 'copilot',
@@ -896,12 +921,14 @@ export class SessionManager {
     }
 
     if (attempt + 1 >= CODEX_SESSION_DISCOVERY_ATTEMPTS) {
-      const historicalSession = await this.findHistoricalExternalSession(
-        config,
-        provider,
-      )
-      if (historicalSession) {
-        this.attachExternalSession(config, historicalSession)
+      if (this.shouldAllowHistoricalExternalSessionMatching(config)) {
+        const historicalSession = await this.findHistoricalExternalSession(
+          config,
+          provider,
+        )
+        if (historicalSession) {
+          this.attachExternalSession(config, historicalSession)
+        }
       }
       return
     }
@@ -927,10 +954,18 @@ export class SessionManager {
       startedAt - CODEX_SESSION_DISCOVERY_LOOKBACK_MS,
     )
     const normalizedCwd = this.normalizePath(config.cwd)
+    const allowHistoricalMatch =
+      this.shouldAllowHistoricalExternalSessionMatching(config)
+    const earliestAllowedStart =
+      startedAt - EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS
 
     const match = candidates
       .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
       .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
+      .filter(
+        (candidate) =>
+          allowHistoricalMatch || candidate.startedAt >= earliestAllowedStart,
+      )
       .filter((candidate) => {
         const claimedBy = this.claimedExternalSessions.get(
           this.getExternalSessionClaimKey(candidate.provider, candidate.sessionId),

@@ -779,7 +779,9 @@ describe('SessionManager project lifecycle', () => {
   })
 
   it('starts a fresh Codex session instead of reviving project history', async () => {
-    const startedAt = new Date(Date.now() - 60_000)
+    const now = new Date('2026-03-27T15:00:00.000Z')
+    vi.setSystemTime(now)
+    const startedAt = new Date(now.getTime() - 2_000)
     const sessionFilePath = path.join(
       os.homedir(),
       '.codex',
@@ -810,6 +812,7 @@ describe('SessionManager project lifecycle', () => {
       projectRootPath: 'C:\\repo',
       startupCommand: 'codex',
     })
+    await vi.runAllTimersAsync()
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
     const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
@@ -820,6 +823,11 @@ describe('SessionManager project lifecycle', () => {
       'codex',
     ])
     expect(session.config.externalSession).toBeUndefined()
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.config.externalSession,
+    ).toBeUndefined()
   })
 
   it('creates project-context sessions inside a fresh git worktree', async () => {

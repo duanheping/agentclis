@@ -505,7 +505,7 @@ describe('App skills settings', () => {
     })
   })
 
-  it('shows an attention notice and system notification when a session needs input', async () => {
+  it('keeps reply-needed attention in the title without showing a popup notification', async () => {
     let runtimeListener:
       | ((event: {
         runtime: {
@@ -559,7 +559,6 @@ describe('App skills settings', () => {
       return vi.fn()
     })
 
-    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
     window.agentCli = agentCli
 
     render(<App />)
@@ -581,19 +580,13 @@ describe('App skills settings', () => {
     })
 
     await waitFor(() => {
-      expect(
-        screen.getByText('Codex is waiting for your approval or reply.'),
-      ).toBeInTheDocument()
+      expect(document.title).toBe('Reply needed: Codex - Agent CLIs')
     })
 
-    expect(notificationSpy).toHaveBeenCalledWith(
-      'Reply needed: Codex',
-      expect.objectContaining({
-        body: 'Codex is waiting for your approval or reply.',
-      }),
-    )
-
-    hasFocusSpy.mockRestore()
+    expect(
+      screen.queryByText('Codex is waiting for your approval or reply.'),
+    ).not.toBeInTheDocument()
+    expect(notificationSpy).not.toHaveBeenCalled()
   })
 
   it('loads root settings, lets the user choose paths, and triggers sync', async () => {
