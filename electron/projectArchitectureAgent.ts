@@ -259,7 +259,7 @@ function normalizeGlossaryTerm(value: unknown): ArchitectureGlossaryTerm | null 
   return { term, meaning }
 }
 
-function buildSchema(): string {
+export function buildArchitectureSchema(): string {
   return JSON.stringify(
     {
       type: 'object',
@@ -280,7 +280,22 @@ function buildSchema(): string {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'name', 'kind', 'paths', 'responsibility', 'confidence'],
+            required: [
+              'id',
+              'name',
+              'kind',
+              'paths',
+              'responsibility',
+              'owns',
+              'dependsOn',
+              'usedBy',
+              'publicInterfaces',
+              'keyTypes',
+              'invariants',
+              'changeGuidance',
+              'testLocations',
+              'confidence',
+            ],
             properties: {
               id: { type: 'string' },
               name: { type: 'string' },
@@ -334,7 +349,16 @@ function buildSchema(): string {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'from', 'to', 'via', 'purpose', 'trigger'],
+            required: [
+              'id',
+              'from',
+              'to',
+              'via',
+              'purpose',
+              'trigger',
+              'failureModes',
+              'notes',
+            ],
             properties: {
               id: { type: 'string' },
               from: { type: 'string' },
@@ -550,7 +574,7 @@ export class ProjectArchitectureAgentExtractor
       readFirstExistingExcerpt(rootPath, ARCHITECTURE_DOC_CANDIDATES),
       loadProjectMemorySkill('project-memory-architecture-analysis'),
     ])
-    const schema = buildSchema()
+    const schema = buildArchitectureSchema()
     const prompt = buildPrompt({
       ...input,
       topLevelEntries,
@@ -606,7 +630,7 @@ export class ProjectArchitectureAgentExtractor
       readFirstExistingExcerpt(rootPath, ARCHITECTURE_DOC_CANDIDATES),
       loadProjectMemorySkill('project-memory-architecture-analysis'),
     ])
-    const schema = buildSchema()
+    const schema = buildArchitectureSchema()
     const prompt = buildPrompt({
       ...input,
       topLevelEntries,
