@@ -688,44 +688,59 @@ export class SessionManager {
         void this.ensureExternalSessionAttentionTracking(normalizedConfig)
       }
 
+      // Capture immutable sessionId to prevent stale closure references when
+      // normalizedConfig is reassigned during concurrent session startups.
+      const sessionId = config.id
+
       terminal.onData((chunk) => {
+        if (this.terminals.get(sessionId) !== terminal) {
+          return
+        }
+
         this.appendTranscriptEvent({
-          sessionId: normalizedConfig.id,
+          sessionId,
           kind: 'output',
           source: 'pty',
           chunk,
         })
-        this.processLiveSessionOutputAttention(normalizedConfig.id, chunk)
+        this.processLiveSessionOutputAttention(sessionId, chunk)
         this.events.onData({
-          sessionId: normalizedConfig.id,
+          sessionId,
           chunk,
         })
       })
 
       terminal.onExit(({ exitCode }) => {
-        this.terminals.delete(normalizedConfig.id)
-        this.clearLiveAttentionBuffer(normalizedConfig.id)
-        this.cancelExternalSessionDetection(normalizedConfig.id)
+        if (this.terminals.get(sessionId) !== terminal) {
+          return
+        }
 
-        if (this.suppressedExit.delete(normalizedConfig.id)) {
+        this.terminals.delete(sessionId)
+        this.clearLiveAttentionBuffer(sessionId)
+        this.cancelExternalSessionDetection(sessionId)
+
+        if (this.suppressedExit.delete(sessionId)) {
           return
         }
 
         const status = exitCode === 0 ? 'exited' : 'error'
-        this.setRuntime(normalizedConfig.id, {
+        this.setRuntime(sessionId, {
           status,
           pid: undefined,
           exitCode,
         })
         this.appendTranscriptEvent({
-          sessionId: normalizedConfig.id,
+          sessionId,
           kind: 'system',
           source: 'system',
           chunk: `Session exited with code ${exitCode}.`,
         })
-        void this.queueProjectMemoryCapture(normalizedConfig)
+        const exitConfig = this.configs.get(sessionId)
+        if (exitConfig) {
+          void this.queueProjectMemoryCapture(exitConfig)
+        }
         this.events.onExit({
-          sessionId: normalizedConfig.id,
+          sessionId,
           exitCode,
         })
       })
@@ -738,12 +753,12 @@ export class SessionManager {
 
       setTimeout(() => {
         if (!launchesInline) {
-          this.writeToTerminal(normalizedConfig.id, `${launchCommand}\r`)
+          this.writeToTerminal(sessionId, `${launchCommand}\r`)
         }
 
         if (externalSessionProvider) {
           void this.pollForExternalSessionRef(
-            normalizedConfig.id,
+            sessionId,
             externalSessionProvider,
             detectionStartedAt,
           )
