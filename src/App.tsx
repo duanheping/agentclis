@@ -30,14 +30,9 @@ import type {
   CreateProjectInput,
   CreateSessionInput,
   ProjectSnapshot,
-  SessionAttentionKind,
   SessionSnapshot,
 } from './shared/session'
-import {
-  formatWorkspaceWindowTitle,
-  getSessionAttentionNotificationBody,
-  getSessionAttentionTitleLabel,
-} from './shared/sessionAttention'
+import { formatWorkspaceWindowTitle } from './shared/sessionAttention'
 import { useSessionsStore } from './store/useSessionsStore'
 
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
@@ -56,20 +51,12 @@ const RESIZER_KEYBOARD_STEP = 24
 const COMPACT_LAYOUT_MEDIA_QUERY = '(max-width: 980px)'
 const APP_BRAND_NAME = 'agentclis'
 const WINDOW_BRAND_NAME = 'Agent CLIs'
-const ATTENTION_NOTICE_DURATION_MS = 6_000
 type CreateDialogIntent = 'session' | 'project'
 type CreateDialogMode = 'default' | 'project-context'
 
 interface ProjectDiffSelection {
   path: string
   staged: boolean
-}
-
-interface SessionAttentionNotice {
-  id: string
-  title: string
-  body: string
-  attention: SessionAttentionKind
 }
 
 interface TerminalFocusRequest {
@@ -203,26 +190,6 @@ function formatCountLabel(count: number, singular: string, plural: string): stri
   return `${count} ${count === 1 ? singular : plural}`
 }
 
-function getAttentionPriority(attention: SessionAttentionKind): number {
-  return attention === 'needs-user-decision' ? 0 : 1
-}
-
-function buildSessionAttentionNotice(
-  session: SessionSnapshot,
-): SessionAttentionNotice | null {
-  const attention = session.runtime.attention ?? null
-  if (!attention) {
-    return null
-  }
-
-  return {
-    id: `${session.config.id}:${attention}:${session.runtime.lastActiveAt}`,
-    title: `${getSessionAttentionTitleLabel(attention)}: ${session.config.title}`,
-    body: getSessionAttentionNotificationBody(attention, session.config.title),
-    attention,
-  }
-}
-
 function App() {
   const agentCli = window.agentCli
   const projects = useSessionsStore((state) => state.projects)
@@ -286,8 +253,6 @@ function App() {
   const [skillsResolving, setSkillsResolving] = useState<string | null>(null)
   const [skillsGeneratingMerge, setSkillsGeneratingMerge] = useState<string | null>(null)
   const [skillsApplyingMerge, setSkillsApplyingMerge] = useState(false)
-  const [attentionNotice, setAttentionNotice] =
-    useState<SessionAttentionNotice | null>(null)
   const [projectArchitectureAnalyzing, setProjectArchitectureAnalyzing] =
     useState(false)
   const [projectSessionsAnalyzing, setProjectSessionsAnalyzing] =
@@ -311,8 +276,6 @@ function App() {
     new Set(),
   )
   const sessionIdsRef = useRef<Set<string>>(new Set())
-  const previousAttentionRef =
-    useRef<Map<string, SessionAttentionKind | null> | null>(null)
   const terminalFocusSequenceRef = useRef(0)
 
   const sessions = flattenSessions(projects)
@@ -717,91 +680,6 @@ function App() {
       WINDOW_BRAND_NAME,
     )
   }, [activeSessionId, projects])
-
-  useEffect(() => {
-    const nextAttentionMap = new Map<string, SessionAttentionKind | null>(
-      sessions.map((session) => [
-        session.config.id,
-        session.runtime.attention ?? null,
-      ]),
-    )
-
-    if (!hydrated) {
-      previousAttentionRef.current = null
-      return
-    }
-
-    const previousAttentionMap = previousAttentionRef.current
-    previousAttentionRef.current = nextAttentionMap
-    if (!previousAttentionMap) {
-      return
-    }
-
-    const nextNotice = sessions
-      .filter((session) => {
-        const attention = session.runtime.attention ?? null
-        return (
-          attention !== null &&
-          attention !==
-            (previousAttentionMap.get(session.config.id) ?? null)
-        )
-      })
-      .sort((left, right) => {
-        const priorityDelta =
-          getAttentionPriority(left.runtime.attention as SessionAttentionKind) -
-          getAttentionPriority(right.runtime.attention as SessionAttentionKind)
-
-        if (priorityDelta !== 0) {
-          return priorityDelta
-        }
-
-        return right.runtime.lastActiveAt.localeCompare(left.runtime.lastActiveAt)
-      })
-      .map(buildSessionAttentionNotice)[0]
-
-    if (!nextNotice) {
-      return
-    }
-
-    setAttentionNotice(nextNotice)
-
-    const canUseSystemNotification =
-      typeof window !== 'undefined' &&
-      typeof window.Notification === 'function' &&
-      window.Notification.permission === 'granted' &&
-      (document.visibilityState !== 'visible' ||
-        typeof document.hasFocus !== 'function' ||
-        !document.hasFocus())
-
-    if (!canUseSystemNotification) {
-      return
-    }
-
-    try {
-      new window.Notification(nextNotice.title, {
-        body: nextNotice.body,
-        tag: nextNotice.id,
-      })
-    } catch {
-      // Ignore notification failures so the in-app notice still appears.
-    }
-  }, [hydrated, sessions])
-
-  useEffect(() => {
-    if (!attentionNotice) {
-      return
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setAttentionNotice((current) =>
-        current?.id === attentionNotice.id ? null : current,
-      )
-    }, ATTENTION_NOTICE_DURATION_MS)
-
-    return () => {
-      window.clearTimeout(timeoutId)
-    }
-  }, [attentionNotice])
 
   useEffect(() => {
     try {
@@ -1726,27 +1604,6 @@ function App() {
           </button>
         </div>
       </header>
-
-      {attentionNotice ? (
-        <div
-          className={`attention-notice is-${attentionNotice.attention}`}
-          role="status"
-          aria-live="polite"
-        >
-          <div className="attention-notice__header">
-            <strong>{attentionNotice.title}</strong>
-            <button
-              type="button"
-              className="attention-notice__dismiss"
-              aria-label="Dismiss attention notice"
-              onClick={() => setAttentionNotice(null)}
-            >
-              Dismiss
-            </button>
-          </div>
-          <p>{attentionNotice.body}</p>
-        </div>
-      ) : null}
 
       {sidebarOpen ? (
         <SessionSidebar
