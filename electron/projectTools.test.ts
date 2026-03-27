@@ -36,6 +36,16 @@ const mocks = vi.hoisted(() => ({
         return
       }
 
+      if (commandLine.includes('for-each-ref --format=%(refname:short) refs/heads')) {
+        callback(null, 'ECG-206483\nmain\nrelease/24.1\n', '')
+        return
+      }
+
+      if (commandLine.includes('switch main')) {
+        callback(null, '', '')
+        return
+      }
+
       if (commandLine.includes('status --short --untracked-files=all')) {
         callback(null, ` M ${mocks.filePath}\n`, '')
         return
@@ -93,6 +103,7 @@ import {
   getProjectGitOverview,
   openProjectInTarget,
   revertProjectGitFile,
+  switchProjectGitBranch,
 } from './projectTools'
 
 function installDefaultExecFileImpl(): void {
@@ -122,6 +133,16 @@ function installDefaultExecFileImpl(): void {
 
       if (commandLine.includes('rev-parse --short HEAD')) {
         callback(null, 'abc1234\n', '')
+        return
+      }
+
+      if (commandLine.includes('for-each-ref --format=%(refname:short) refs/heads')) {
+        callback(null, 'ECG-206483\nmain\nrelease/24.1\n', '')
+        return
+      }
+
+      if (commandLine.includes('switch main')) {
+        callback(null, '', '')
         return
       }
 
@@ -188,6 +209,7 @@ describe('projectTools', () => {
     const overview = await getProjectGitOverview(mocks.repoRoot)
 
     expect(overview.branch).toBe('ECG-206483')
+    expect(overview.branches).toEqual(['ECG-206483', 'main', 'release/24.1'])
     expect(overview.unstagedFiles).toEqual([
       {
         additions: 71,
@@ -210,6 +232,22 @@ describe('projectTools', () => {
         args.includes('--no-color'),
       ),
     ).toBe(true)
+  })
+
+  it('switches branches and returns refreshed git overview', async () => {
+    const overview = await switchProjectGitBranch(mocks.repoRoot, 'main')
+
+    const switchCall = mocks.execFileImpl.mock.calls.find(
+      ([, args]) => args[2] === 'switch',
+    )
+
+    expect(switchCall?.[1]).toEqual([
+      '-C',
+      mocks.repoRoot,
+      'switch',
+      'main',
+    ])
+    expect(overview.branch).toBe('ECG-206483')
   })
 
   it('loads per-file diffs using Git internal diff output', async () => {

@@ -243,8 +243,25 @@ function calculateTotals(files: ProjectGitFileChange[]): ProjectGitTotals {
   )
 }
 
-async function resolveRepoRoot(projectPath: string): Promise<string> {
-  return runGit(['-C', projectPath, 'rev-parse', '--show-toplevel'], projectPath)
+async function requireRepoRoot(projectPath: string): Promise<string> {
+  const repoRoot = await tryRunGit(
+    ['-C', projectPath, 'rev-parse', '--show-toplevel'],
+    projectPath,
+  )
+
+  if (!repoRoot) {
+    throw new Error('Project is not inside a git repository.')
+  }
+
+  return repoRoot
+}
+
+function parseBranchList(output: string): string[] {
+  return output
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
 }
 
 function getRevertPathspecs(file: ProjectGitFileChange): string[] {
@@ -381,6 +398,7 @@ export async function getProjectGitOverview(
       isGitRepository: false,
       repoRoot: null,
       branch: null,
+      branches: [],
       stagedFiles: [],
       unstagedFiles: [],
       stagedTotals: {
@@ -394,10 +412,21 @@ export async function getProjectGitOverview(
     }
   }
 
-  const [branchName, detachedHead, statusOutput, stagedNumstatOutput, unstagedNumstatOutput] =
+  const [
+    branchName,
+    detachedHead,
+    branchListOutput,
+    statusOutput,
+    stagedNumstatOutput,
+    unstagedNumstatOutput,
+  ] =
     await Promise.all([
       tryRunGit(['-C', repoRoot, 'symbolic-ref', '--short', 'HEAD'], repoRoot),
       tryRunGit(['-C', repoRoot, 'rev-parse', '--short', 'HEAD'], repoRoot),
+      runGit(
+        ['-C', repoRoot, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+        repoRoot,
+      ),
       runGit(
         ['-C', repoRoot, 'status', '--short', '--untracked-files=all'],
         repoRoot,
@@ -429,11 +458,30 @@ export async function getProjectGitOverview(
     isGitRepository: true,
     repoRoot,
     branch: branchName || detachedHead,
+    branches: parseBranchList(branchListOutput),
     stagedFiles,
     unstagedFiles,
     stagedTotals: calculateTotals(stagedFiles),
     unstagedTotals: calculateTotals(unstagedFiles),
   }
+}
+
+export async function switchProjectGitBranch(
+  projectPath: string,
+  branchName: string,
+): Promise<ProjectGitOverview> {
+  const normalizedPath = normalizeProjectPath(projectPath)
+  const normalizedBranchName = branchName.trim()
+
+  if (!normalizedBranchName) {
+    throw new Error('A branch name is required to switch branches.')
+  }
+
+  await assertProjectPathExists(normalizedPath)
+
+  const repoRoot = await requireRepoRoot(normalizedPath)
+  await runGit(['-C', repoRoot, 'switch', normalizedBranchName], repoRoot)
+  return getProjectGitOverview(normalizedPath)
 }
 
 export async function getProjectGitDiff(
@@ -450,7 +498,7 @@ export async function getProjectGitDiff(
 
   await assertProjectPathExists(normalizedPath)
 
-  const repoRoot = await resolveRepoRoot(normalizedPath)
+  const repoRoot = await requireRepoRoot(normalizedPath)
   const diffArgs = [
     '-C',
     repoRoot,
@@ -485,7 +533,7 @@ export async function revertProjectGitFile(
 
   await assertProjectPathExists(normalizedPath)
 
-  const repoRoot = await resolveRepoRoot(normalizedPath)
+  const repoRoot = await requireRepoRoot(normalizedPath)
   await runGit(
     buildRevertGitArgs(repoRoot, {
       ...file,

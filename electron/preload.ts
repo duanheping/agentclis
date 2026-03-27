@@ -92,6 +92,12 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openProject, target, projectPath),
   getProjectGitOverview: (projectPath) =>
     ipcRenderer.invoke(IPC_CHANNELS.getProjectGitOverview, projectPath),
+  switchProjectGitBranch: (projectPath, branchName) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.switchProjectGitBranch,
+      projectPath,
+      branchName,
+    ),
   getProjectGitDiff: (projectPath, filePath, staged) =>
     ipcRenderer.invoke(
       IPC_CHANNELS.getProjectGitDiff,

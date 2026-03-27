@@ -35,6 +35,7 @@ import {
   getProjectGitOverview,
   openProjectInTarget,
   revertProjectGitFile,
+  switchProjectGitBranch,
 } from './projectTools'
 import { ProjectArchitectureAgentExtractor } from './projectArchitectureAgent'
 import { ProjectMemoryAgentExtractor } from './projectMemoryAgent'
@@ -750,6 +751,11 @@ function registerIpcHandlers(): void {
   )
   ipcMain.handle(IPC_CHANNELS.getProjectGitOverview, (_event, projectPath: string) =>
     getProjectGitOverview(projectPath),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.switchProjectGitBranch,
+    (_event, projectPath: string, branchName: string) =>
+      switchProjectGitBranch(projectPath, branchName),
   )
   ipcMain.handle(
     IPC_CHANNELS.getProjectGitDiff,

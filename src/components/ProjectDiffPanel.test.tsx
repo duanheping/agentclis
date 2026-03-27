@@ -11,6 +11,7 @@ function buildOverview(): ProjectGitOverview {
     isGitRepository: true,
     repoRoot: 'C:\\repo\\agenclis',
     branch: 'feature/diff-panel',
+    branches: ['feature/diff-panel', 'main'],
     unstagedFiles: [
       {
         path: 'src/App.tsx',

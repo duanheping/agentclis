@@ -34,6 +34,7 @@ export interface ProjectGitOverview {
   isGitRepository: boolean
   repoRoot: string | null
   branch: string | null
+  branches: string[]
   stagedFiles: ProjectGitFileChange[]
   unstagedFiles: ProjectGitFileChange[]
   stagedTotals: ProjectGitTotals

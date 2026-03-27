@@ -83,6 +83,7 @@ export const IPC_CHANNELS = {
   openExternalLink: 'shell:open-external-link',
   openProject: 'project:open',
   getProjectGitOverview: 'project:git-overview',
+  switchProjectGitBranch: 'project:git-switch-branch',
   getProjectGitDiff: 'project:git-diff',
   revertProjectGitFile: 'project:git-revert-file',
   openFileReference: 'shell:open-file-reference',
@@ -141,6 +142,10 @@ export interface AgentCliApi {
   openExternalLink(target: string): Promise<void>
   openProject(target: ProjectOpenTarget, projectPath: string): Promise<void>
   getProjectGitOverview(projectPath: string): Promise<ProjectGitOverview>
+  switchProjectGitBranch(
+    projectPath: string,
+    branchName: string,
+  ): Promise<ProjectGitOverview>
   getProjectGitDiff(
     projectPath: string,
     filePath: string,

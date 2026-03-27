@@ -218,7 +218,10 @@ function App() {
   )
   const [windowsCommandPromptSessionIds, setWindowsCommandPromptSessionIds] =
     useState<string[]>([])
+  const [projectBranchMenuOpen, setProjectBranchMenuOpen] = useState(false)
   const [projectOpenMenuOpen, setProjectOpenMenuOpen] = useState(false)
+  const [projectBranchSwitching, setProjectBranchSwitching] =
+    useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(() =>
     agentCli
       ? null
@@ -258,6 +261,7 @@ function App() {
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
   const [skillsSyncing, setSkillsSyncing] = useState(false)
   const appShellRef = useRef<HTMLDivElement | null>(null)
+  const projectBranchMenuRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
   const workspaceBodyRef = useRef<HTMLElement | null>(null)
   const paneResizeCleanupRef = useRef<(() => void) | null>(null)
@@ -279,6 +283,14 @@ function App() {
   const showDiffPanel = hydrated && diffPanelOpen && Boolean(activeWorkspacePath)
   const featuredProject = activeProject ?? projects[0] ?? null
   const showWelcomeWorkspace = hydrated && sessions.length === 0
+  const availableProjectBranches = projectGitOverview?.branches ?? []
+  const canSwitchProjectBranch =
+    Boolean(activeWorkspacePath) &&
+    Boolean(projectGitOverview?.isGitRepository) &&
+    availableProjectBranches.length > 0 &&
+    projectBranchSwitching === null
+  const projectBranchLabel =
+    projectGitOverview?.branch ?? (activeWorkspacePath ? 'Branch' : 'No branch')
 
   const clampSidebarWidth = (nextWidth: number): number => {
     const containerWidth = appShellRef.current?.getBoundingClientRect().width
@@ -709,6 +721,32 @@ function App() {
   }, [showDiffPanel, sidebarOpen])
 
   useEffect(() => {
+    if (!projectBranchMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!projectBranchMenuRef.current?.contains(event.target as Node)) {
+        setProjectBranchMenuOpen(false)
+      }
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setProjectBranchMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleEscape)
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [projectBranchMenuOpen])
+
+  useEffect(() => {
     if (!projectOpenMenuOpen) {
       return
     }
@@ -735,6 +773,7 @@ function App() {
   }, [projectOpenMenuOpen])
 
   useEffect(() => {
+    setProjectBranchMenuOpen(false)
     setProjectOpenMenuOpen(false)
   }, [activeWorkspacePath])
 
@@ -1033,6 +1072,46 @@ function App() {
       await agentCli.openProject(target, activeWorkspacePath)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleSwitchProjectBranch = async (branchName: string) => {
+    if (!agentCli || !activeWorkspacePath) {
+      setErrorMessage('There is no active workspace to switch branches in.')
+      return
+    }
+
+    if (branchName === projectGitOverview?.branch) {
+      setProjectBranchMenuOpen(false)
+      return
+    }
+
+    try {
+      setErrorMessage(null)
+      setProjectGitErrorMessage(null)
+      setProjectBranchMenuOpen(false)
+      setProjectBranchSwitching(branchName)
+      const overview = await agentCli.switchProjectGitBranch(
+        activeWorkspacePath,
+        branchName,
+      )
+      setProjectGitOverview(overview)
+      setProjectGitDiffContent(null)
+      setProjectGitDiffErrorMessage(null)
+      setSelectedProjectDiff((current) =>
+        current
+          ? {
+              path: current.path,
+              staged: current.staged,
+            }
+          : null,
+      )
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setErrorMessage(message)
+      setProjectGitErrorMessage(message)
+    } finally {
+      setProjectBranchSwitching(null)
     }
   }
 
@@ -1368,6 +1447,56 @@ function App() {
         </div>
 
         <div className="titlebar__actions">
+          <div className="titlebar-menu" ref={projectBranchMenuRef}>
+            <button
+              type="button"
+              className={`titlebar-action titlebar-action--menu${projectBranchMenuOpen ? ' is-active' : ''}`}
+              aria-label="Switch branch"
+              aria-expanded={projectBranchMenuOpen}
+              disabled={!canSwitchProjectBranch}
+              onClick={() => {
+                setProjectOpenMenuOpen(false)
+                setProjectBranchMenuOpen((current) => !current)
+              }}
+            >
+              <span className="titlebar-action__label titlebar-action__label--branch">
+                {projectBranchLabel}
+              </span>
+              <span className="titlebar-action__chevron" aria-hidden="true">
+                v
+              </span>
+            </button>
+
+            {projectBranchMenuOpen ? (
+              <div
+                className="titlebar-menu__panel titlebar-menu__panel--branch"
+                role="menu"
+                aria-label="Switch branch"
+              >
+                {availableProjectBranches.map((branchName) => {
+                  const selected = branchName === projectGitOverview?.branch
+
+                  return (
+                    <button
+                      key={branchName}
+                      type="button"
+                      className={`titlebar-menu__item titlebar-menu__item--branch${selected ? ' is-selected' : ''}`}
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      disabled={selected || projectBranchSwitching !== null}
+                      onClick={() => void handleSwitchProjectBranch(branchName)}
+                    >
+                      <span className="titlebar-menu__item-title">{branchName}</span>
+                      <span className="titlebar-menu__item-meta">
+                        {selected ? 'Current branch' : 'Switch branch'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
+
           <div className="titlebar-menu" ref={projectMenuRef}>
             <button
               type="button"
@@ -1375,7 +1504,10 @@ function App() {
               aria-label="Open project"
               aria-expanded={projectOpenMenuOpen}
               disabled={!activeWorkspacePath}
-              onClick={() => setProjectOpenMenuOpen((current) => !current)}
+              onClick={() => {
+                setProjectBranchMenuOpen(false)
+                setProjectOpenMenuOpen((current) => !current)
+              }}
             >
               <span className="titlebar-action__label">Open</span>
               <span className="titlebar-action__chevron" aria-hidden="true">

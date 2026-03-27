@@ -294,6 +294,12 @@
   line-height: 1;
 }
 
+.titlebar-action__label--branch {
+  max-width: min(220px, 28vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .titlebar-action__chevron {
   color: var(--text-muted);
   font-size: 0.64rem;
@@ -337,6 +343,12 @@
   -webkit-app-region: no-drag;
 }
 
+.titlebar-menu__panel--branch {
+  width: 240px;
+  max-height: min(320px, calc(100vh - 84px));
+  overflow-y: auto;
+}
+
 .titlebar-menu__item {
   display: flex;
   align-items: center;
@@ -357,10 +369,23 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.titlebar-menu__item--branch {
+  display: grid;
+  gap: 4px;
+}
+
+.titlebar-menu__item.is-selected {
+  border-color: rgba(227, 211, 182, 0.2);
+  background: rgba(227, 211, 182, 0.08);
+}
+
 .titlebar-menu__item-title {
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .titlebar-menu__item-meta {
