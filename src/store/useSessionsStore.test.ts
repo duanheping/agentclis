@@ -59,9 +59,11 @@ function makeWorkspace(
 
 describe('useSessionsStore', () => {
   beforeEach(() => {
+    window.localStorage.clear()
     useSessionsStore.setState({
       projects: [],
       activeSessionId: null,
+      permissionLevel: 'default',
       hydrated: false,
     })
   })
@@ -252,5 +254,22 @@ describe('useSessionsStore', () => {
 
     expect(useSessionsStore.getState().projects[0].sessions[0].config.title).toBe('Session 1')
     expect(useSessionsStore.getState().projects[1].sessions[0].config.title).toBe('Updated')
+  })
+
+  it('starts with default permission level', () => {
+    expect(useSessionsStore.getState().permissionLevel).toBe('default')
+  })
+
+  it('setPermissionLevel updates the level and persists to localStorage', () => {
+    useSessionsStore.getState().setPermissionLevel('full-access')
+    expect(useSessionsStore.getState().permissionLevel).toBe('full-access')
+    expect(window.localStorage.getItem('agenclis:permission-level')).toBe('full-access')
+  })
+
+  it('setPermissionLevel can switch back to default', () => {
+    useSessionsStore.getState().setPermissionLevel('full-access')
+    useSessionsStore.getState().setPermissionLevel('default')
+    expect(useSessionsStore.getState().permissionLevel).toBe('default')
+    expect(window.localStorage.getItem('agenclis:permission-level')).toBe('default')
   })
 })

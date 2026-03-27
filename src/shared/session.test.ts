@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  PERMISSION_LEVEL_DESCRIPTIONS,
+  PERMISSION_LEVEL_LABELS,
+  PERMISSION_LEVELS,
   buildRuntime,
   deriveProjectTitle,
   deriveSessionTitle,
@@ -113,5 +116,19 @@ describe('session helpers', () => {
   it('buildRuntime accepts a custom status', () => {
     const runtime = buildRuntime('test-session', 'running')
     expect(runtime.status).toBe('running')
+  })
+
+  it('exports PERMISSION_LEVELS with expected values', () => {
+    expect(PERMISSION_LEVELS).toEqual(['default', 'full-access'])
+  })
+
+  it('exports PERMISSION_LEVEL_LABELS for each level', () => {
+    expect(PERMISSION_LEVEL_LABELS['default']).toBe('Default permissions')
+    expect(PERMISSION_LEVEL_LABELS['full-access']).toBe('Full access')
+  })
+
+  it('exports PERMISSION_LEVEL_DESCRIPTIONS for each level', () => {
+    expect(PERMISSION_LEVEL_DESCRIPTIONS['default']).toContain('approval')
+    expect(PERMISSION_LEVEL_DESCRIPTIONS['full-access']).toContain('without approval')
   })
 })

@@ -13,7 +13,7 @@ vi.mock('./components/TerminalWorkspace', () => ({
 
 import App from './App'
 import type { ProjectGitOverview } from './shared/projectTools'
-import type { ListSessionsResponse, SessionExitMeta } from './shared/session'
+import type { CreateSessionInput, ListSessionsResponse, SessionExitMeta } from './shared/session'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -1280,5 +1280,151 @@ describe('App skills settings', () => {
         '480px',
       )
     })
+  })
+})
+
+describe('App permission dropdown', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  beforeEach(() => {
+    mockTerminalWorkspace.mockClear()
+    window.localStorage.clear()
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
+    Object.defineProperty(window, 'confirm', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockReturnValue(true),
+    })
+    useSessionsStore.setState({
+      projects: [],
+      activeSessionId: null,
+      permissionLevel: 'default',
+      hydrated: false,
+    })
+  })
+
+  it('renders the permission dropdown with default label', async () => {
+    const { agentCli } = createAgentCliMock()
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Agent permissions' })).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('Default permissions')).toBeInTheDocument()
+  })
+
+  it('opens the permission menu and shows all options', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Agent permissions' })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Agent permissions' }))
+
+    expect(screen.getByRole('menu', { name: 'Agent permissions' })).toBeInTheDocument()
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(2)
+  })
+
+  it('switches permission level to full-access', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Agent permissions' })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Agent permissions' }))
+    await user.click(screen.getByRole('menuitemradio', { name: /Full access/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Full access')).toBeInTheDocument()
+    })
+
+    expect(useSessionsStore.getState().permissionLevel).toBe('full-access')
+    expect(window.localStorage.getItem('agenclis:permission-level')).toBe('full-access')
+  })
+
+  it('persists permission level across renders', async () => {
+    window.localStorage.setItem('agenclis:permission-level', 'full-access')
+    useSessionsStore.setState({ permissionLevel: 'full-access' })
+
+    const { agentCli } = createAgentCliMock()
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Full access')).toBeInTheDocument()
+    })
+  })
+
+  it('includes permissionLevel in createSession calls', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-12T18:00:00.000Z',
+            updatedAt: '2026-03-12T18:00:00.000Z',
+          },
+          sessions: [],
+        },
+      ],
+      activeSessionId: null,
+    }
+    const { agentCli } = createAgentCliMock(workspacePayload)
+    window.agentCli = agentCli
+
+    useSessionsStore.setState({ permissionLevel: 'full-access' })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Full access')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Launch a session in agenclis' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => {
+      expect(agentCli.createSession).toHaveBeenCalled()
+    })
+
+    const callArgs = agentCli.createSession.mock.calls[0][0] as CreateSessionInput
+    expect(callArgs.permissionLevel).toBe('full-access')
   })
 })

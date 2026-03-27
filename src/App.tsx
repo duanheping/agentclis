@@ -26,11 +26,13 @@ import type {
   SkillSyncRoot,
   SkillSyncStatus,
 } from './shared/skills'
-import type {
-  CreateProjectInput,
-  CreateSessionInput,
-  ProjectSnapshot,
-  SessionSnapshot,
+import {
+  PERMISSION_LEVEL_LABELS,
+  PERMISSION_LEVELS,
+  type CreateProjectInput,
+  type CreateSessionInput,
+  type ProjectSnapshot,
+  type SessionSnapshot,
 } from './shared/session'
 import { formatWorkspaceWindowTitle } from './shared/sessionAttention'
 import { useSessionsStore } from './store/useSessionsStore'
@@ -199,6 +201,8 @@ function App() {
   const setActiveSession = useSessionsStore((state) => state.setActiveSession)
   const updateConfig = useSessionsStore((state) => state.updateConfig)
   const updateRuntime = useSessionsStore((state) => state.updateRuntime)
+  const permissionLevel = useSessionsStore((state) => state.permissionLevel)
+  const setPermissionLevel = useSessionsStore((state) => state.setPermissionLevel)
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [createDialogIntent, setCreateDialogIntent] =
@@ -225,6 +229,7 @@ function App() {
     useState<string[]>([])
   const [projectBranchMenuOpen, setProjectBranchMenuOpen] = useState(false)
   const [projectOpenMenuOpen, setProjectOpenMenuOpen] = useState(false)
+  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
   const [projectBranchSwitching, setProjectBranchSwitching] =
     useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(() =>
@@ -268,6 +273,7 @@ function App() {
   const [terminalFocusRequest, setTerminalFocusRequest] =
     useState<TerminalFocusRequest | null>(null)
   const appShellRef = useRef<HTMLDivElement | null>(null)
+  const permissionMenuRef = useRef<HTMLDivElement | null>(null)
   const projectBranchMenuRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
   const workspaceBodyRef = useRef<HTMLElement | null>(null)
@@ -795,6 +801,32 @@ function App() {
   }, [projectOpenMenuOpen])
 
   useEffect(() => {
+    if (!permissionMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!permissionMenuRef.current?.contains(event.target as Node)) {
+        setPermissionMenuOpen(false)
+      }
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPermissionMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleEscape)
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [permissionMenuOpen])
+
+  useEffect(() => {
     setProjectBranchMenuOpen(false)
     setProjectOpenMenuOpen(false)
   }, [activeWorkspacePath])
@@ -954,7 +986,10 @@ function App() {
 
     setErrorMessage(null)
     try {
-      await agentCli.createSession(input)
+      await agentCli.createSession({
+        ...input,
+        permissionLevel,
+      })
       await refreshWorkspace()
     } catch (error) {
       const message = getErrorMessage(error)
@@ -1473,6 +1508,63 @@ function App() {
         </div>
 
         <div className="titlebar__actions">
+          <div className="titlebar-menu" ref={permissionMenuRef}>
+            <button
+              type="button"
+              className={`titlebar-action titlebar-action--menu titlebar-action--permission${permissionMenuOpen ? ' is-active' : ''}`}
+              aria-label="Agent permissions"
+              aria-expanded={permissionMenuOpen}
+              onClick={() => {
+                setProjectBranchMenuOpen(false)
+                setProjectOpenMenuOpen(false)
+                setPermissionMenuOpen((current) => !current)
+              }}
+            >
+              <span className="titlebar-action__shield" aria-hidden="true">
+                🛡
+              </span>
+              <span className="titlebar-action__label">
+                {PERMISSION_LEVEL_LABELS[permissionLevel]}
+              </span>
+              <span className="titlebar-action__chevron" aria-hidden="true">
+                v
+              </span>
+            </button>
+
+            {permissionMenuOpen ? (
+              <div
+                className="titlebar-menu__panel titlebar-menu__panel--permission"
+                role="menu"
+                aria-label="Agent permissions"
+              >
+                {PERMISSION_LEVELS.map((level) => {
+                  const selected = level === permissionLevel
+
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      className={`titlebar-menu__item titlebar-menu__item--permission${selected ? ' is-selected' : ''}`}
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      onClick={() => {
+                        setPermissionLevel(level)
+                        setPermissionMenuOpen(false)
+                      }}
+                    >
+                      <span className="titlebar-menu__item-radio" aria-hidden="true">
+                        {selected ? '●' : '○'}
+                      </span>
+                      <span className="titlebar-menu__item-title">
+                        {PERMISSION_LEVEL_LABELS[level]}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
+
           <div className="titlebar-menu" ref={projectBranchMenuRef}>
             <button
               type="button"
@@ -1482,6 +1574,7 @@ function App() {
               disabled={!canSwitchProjectBranch}
               onClick={() => {
                 setProjectOpenMenuOpen(false)
+                setPermissionMenuOpen(false)
                 setProjectBranchMenuOpen((current) => !current)
               }}
             >
@@ -1532,6 +1625,7 @@ function App() {
               disabled={!activeWorkspacePath}
               onClick={() => {
                 setProjectBranchMenuOpen(false)
+                setPermissionMenuOpen(false)
                 setProjectOpenMenuOpen((current) => !current)
               }}
             >
