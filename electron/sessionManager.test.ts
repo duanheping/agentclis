@@ -709,6 +709,123 @@ describe('SessionManager restore policy', () => {
       ).sessions[0]?.externalSession,
     ).toBeUndefined()
   })
+
+  it('does not cross-match external sessions between sibling sessions in the same project', async () => {
+    const sessionACreated = '2026-03-22T12:00:00.000Z'
+    const sessionBCreated = '2026-03-22T12:05:00.000Z'
+    const codexAStarted = new Date('2026-03-22T12:00:07.000Z')
+    const codexBStarted = new Date('2026-03-22T12:05:08.000Z')
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: sessionACreated,
+          updatedAt: sessionBCreated,
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'analyze architecture',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: sessionACreated,
+          updatedAt: sessionACreated,
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-1',
+          title: 'review pull request',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: sessionBCreated,
+          updatedAt: sessionBCreated,
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const codexAFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '22',
+      'rollout-2026-03-22T12-00-07-019codex-session-a.jsonl',
+    )
+    mocks.setFile(
+      codexAFilePath,
+      [
+        `{"timestamp":"${codexAStarted.toISOString()}","type":"session_meta","payload":{"id":"019codex-session-a","timestamp":"${codexAStarted.toISOString()}","cwd":"C:\\\\repo","originator":"codex_cli_rs"}}`,
+        '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"analyze architecture"}]}}',
+      ].join('\n'),
+      codexAStarted.getTime(),
+    )
+
+    const codexBFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '22',
+      'rollout-2026-03-22T12-05-08-019codex-session-b.jsonl',
+    )
+    mocks.setFile(
+      codexBFilePath,
+      [
+        `{"timestamp":"${codexBStarted.toISOString()}","type":"session_meta","payload":{"id":"019codex-session-b","timestamp":"${codexBStarted.toISOString()}","cwd":"C:\\\\repo","originator":"codex_cli_rs"}}`,
+        '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"review pull request"}]}}',
+      ].join('\n'),
+      codexBStarted.getTime(),
+    )
+
+    const onConfig = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    // Session A (active) should resume its own codex session, not session B's
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex resume 019codex-session-a',
+    ])
+
+    // Now activate session B
+    await manager.activateSession('session-b')
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    })
+
+    // Session B should resume its own codex session, not session A's
+    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
+    expect(secondSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex resume 019codex-session-b',
+    ])
+  })
 })
 
 describe('SessionManager project lifecycle', () => {
