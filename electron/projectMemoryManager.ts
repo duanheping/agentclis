@@ -1187,11 +1187,18 @@ function selectRelevantInteractions(
   )
 }
 
+function recencyFactor(updatedAt: string, now: number): number {
+  const elapsed = now - new Date(updatedAt).getTime()
+  const daysSince = Math.max(0, elapsed / (1000 * 60 * 60 * 24))
+  return Math.pow(0.98, daysSince)
+}
+
 function selectRelevantEntries(
   items: ProjectMemoryCandidate[],
   locationId: string | null,
   query?: string,
 ): ProjectMemoryCandidate[] {
+  const now = Date.now()
   const activeItems = items.filter(
     (item) =>
       item.status === 'active' &&
@@ -1203,23 +1210,39 @@ function selectRelevantEntries(
   const normalizedQuery = normalizeWhitespace(query ?? '').toLowerCase()
   if (!normalizedQuery) {
     return activeItems
+      .slice()
+      .sort((left, right) => {
+        const leftScore = left.confidence * recencyFactor(left.updatedAt, now)
+        const rightScore = right.confidence * recencyFactor(right.updatedAt, now)
+        return rightScore - leftScore
+      })
   }
 
   const queryTerms = normalizedQuery.split(/\s+/).filter((term) => term.length >= 3)
   if (queryTerms.length === 0) {
     return activeItems
+      .slice()
+      .sort((left, right) => {
+        const leftScore = left.confidence * recencyFactor(left.updatedAt, now)
+        const rightScore = right.confidence * recencyFactor(right.updatedAt, now)
+        return rightScore - leftScore
+      })
   }
 
   const scoredItems = activeItems
-    .map((item) => ({
-      item,
-      score: queryTerms.reduce((score, term) => {
+    .map((item) => {
+      const termHits = queryTerms.reduce((score, term) => {
         return item.content.toLowerCase().includes(term) || item.key.includes(term)
           ? score + 1
           : score
-      }, 0),
-    }))
-    .filter((entry) => entry.score > 0)
+      }, 0)
+      return {
+        item,
+        score: termHits * item.confidence * recencyFactor(item.updatedAt, now),
+        termHits,
+      }
+    })
+    .filter((entry) => entry.termHits > 0)
     .sort((left, right) => right.score - left.score)
     .map((entry) => entry.item)
 
@@ -2359,65 +2382,73 @@ export class ProjectMemoryManager {
     }
 
     const locationId = input.location?.id ?? null
+    const hasQuery = Boolean(input.query?.trim())
+    const slotLimits = hasQuery
+      ? { facts: 6, decisions: 4, preferences: 4, workflows: 4,
+          troubleshooting: 4, userAssist: 3, componentWorkflows: 4,
+          conventions: 4, debug: 4, criticalFiles: 5, modules: 3, interactions: 2 }
+      : { facts: 6, decisions: 4, preferences: 4, workflows: 2,
+          troubleshooting: 2, userAssist: 1, componentWorkflows: 2,
+          conventions: 4, debug: 2, criticalFiles: 5, modules: 3, interactions: 2 }
     const relevantFacts = selectRelevantEntries(
       snapshot.facts,
       locationId,
       input.query,
-    ).slice(0, 6)
+    ).slice(0, slotLimits.facts)
     const relevantDecisions = selectRelevantEntries(
       snapshot.decisions,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.decisions)
     const relevantPreferences = selectRelevantEntries(
       snapshot.preferences,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.preferences)
     const relevantWorkflows = selectRelevantEntries(
       snapshot.workflows,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.workflows)
     const relevantTroubleshooting = selectRelevantEntries(
       snapshot.troubleshootingPatterns,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.troubleshooting)
     const relevantUserAssistPatterns = selectRelevantEntries(
       snapshot.userAssistPatterns,
       locationId,
       input.query,
-    ).slice(0, 3)
+    ).slice(0, slotLimits.userAssist)
     const relevantComponentWorkflows = selectRelevantEntries(
       snapshot.componentWorkflows,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.componentWorkflows)
     const relevantProjectConventions = selectRelevantEntries(
       snapshot.projectConventions,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.conventions)
     const relevantDebugApproaches = selectRelevantEntries(
       snapshot.debugApproaches,
       locationId,
       input.query,
-    ).slice(0, 4)
+    ).slice(0, slotLimits.debug)
     const relevantCriticalFiles = selectRelevantEntries(
       snapshot.criticalFiles,
       locationId,
       input.query,
-    ).slice(0, 5)
+    ).slice(0, slotLimits.criticalFiles)
     const relevantModules = architectureSnapshot
-      ? selectRelevantModules(architectureSnapshot.modules, input.query).slice(0, 3)
+      ? selectRelevantModules(architectureSnapshot.modules, input.query).slice(0, slotLimits.modules)
       : []
     const relevantInteractions = architectureSnapshot
       ? selectRelevantInteractions(
           architectureSnapshot.interactions,
           relevantModules.map((module) => module.id),
           input.query,
-        ).slice(0, 2)
+        ).slice(0, slotLimits.interactions)
       : []
     const architectureExcerpt = trimExcerpt(
       architectureSnapshot?.systemOverview ?? null,

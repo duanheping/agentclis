@@ -900,4 +900,113 @@ describe('ProjectMemoryManager', () => {
       readFile(path.join(memoryRoot, 'architecture.json'), 'utf8'),
     ).resolves.toContain('Session lifecycle is centralized in SessionManager')
   })
+
+  it('composite scoring ranks high-confidence recent entries above low-confidence old entries', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const recentTimestamp = new Date().toISOString()
+    const oldTimestamp = '2024-01-01T00:00:00.000Z'
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async () => ({
+        summary: 'Session with mixed confidence entries.',
+        candidates: [
+          {
+            kind: 'fact' as const,
+            scope: 'project' as const,
+            key: 'old-low-confidence-build',
+            content: 'Build uses webpack with custom loader configuration.',
+            confidence: 0.35,
+            sourceEventIds: ['event-1'],
+          },
+          {
+            kind: 'fact' as const,
+            scope: 'project' as const,
+            key: 'recent-high-confidence-build',
+            content: 'Build uses vite with native ESM resolution.',
+            confidence: 0.95,
+            sourceEventIds: ['event-2'],
+          },
+        ],
+      }),
+    })
+
+    await manager.captureSession({
+      project: buildProject(),
+      location: buildLocation(),
+      session: buildSession(),
+      transcript: buildTranscript(),
+    })
+
+    const context = await manager.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+      query: 'build configuration',
+    })
+
+    const message = context.bootstrapMessage ?? ''
+    const viteIndex = message.indexOf('vite with native ESM')
+    const webpackIndex = message.indexOf('webpack with custom loader')
+    expect(viteIndex).toBeGreaterThan(-1)
+    expect(webpackIndex).toBeGreaterThan(-1)
+    expect(viteIndex).toBeLessThan(webpackIndex)
+  })
+
+  it('reduces task-specific category slots when no query is provided', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async () => ({
+        summary: 'Session with many user assist patterns.',
+        candidates: [
+          ...[1, 2, 3].map((index) => ({
+            kind: 'user-assist-pattern' as const,
+            scope: 'project' as const,
+            key: `assist-pattern-${index}`,
+            content: `User assist pattern number ${index} for unblocking the agent.`,
+            confidence: 0.8,
+            sourceEventIds: [`event-a-${index}`],
+          })),
+          ...[1, 2, 3, 4].map((index) => ({
+            kind: 'project-convention' as const,
+            scope: 'project' as const,
+            key: `convention-${index}`,
+            content: `Convention number ${index} for code style and naming.`,
+            confidence: 0.85,
+            sourceEventIds: [`event-c-${index}`],
+          })),
+        ],
+      }),
+    })
+
+    await manager.captureSession({
+      project: buildProject(),
+      location: buildLocation(),
+      session: buildSession(),
+      transcript: buildTranscript(),
+    })
+
+    const contextNoQuery = await manager.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+    const contextWithQuery = await manager.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+      query: 'unblocking agent assist',
+    })
+
+    const noQueryMessage = contextNoQuery.bootstrapMessage ?? ''
+    const queryMessage = contextWithQuery.bootstrapMessage ?? ''
+
+    const countOccurrences = (text: string, pattern: string): number =>
+      (text.match(new RegExp(pattern, 'g')) || []).length
+
+    const noQueryAssistCount = countOccurrences(noQueryMessage, 'User assist pattern number')
+    const queryAssistCount = countOccurrences(queryMessage, 'User assist pattern number')
+    expect(noQueryAssistCount).toBeLessThan(queryAssistCount)
+
+    const noQueryConvCount = countOccurrences(noQueryMessage, 'Convention number')
+    const queryConvCount = countOccurrences(queryMessage, 'Convention number')
+    expect(noQueryConvCount).toBeGreaterThanOrEqual(queryConvCount)
+  })
 })

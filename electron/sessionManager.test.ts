@@ -1556,6 +1556,81 @@ describe('SessionManager logical project identity and project context', () => {
     expect(renamedSession?.config.title).toBe('real user task')
   })
 
+  it('injects a deferred query-aware bootstrap after capturing the first user prompt', async () => {
+    const transcriptEvents: TranscriptEvent[] = []
+    const transcriptStore = {
+      append: vi.fn(async (event: TranscriptEvent) => {
+        transcriptEvents.push(event)
+      }),
+      readEvents: vi.fn(async () => structuredClone(transcriptEvents)),
+    }
+    let assembleCallCount = 0
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async (input: { query?: string }) => {
+        assembleCallCount += 1
+        return {
+          ...buildProjectMemoryContext(),
+          bootstrapMessage: input.query
+            ? `Task-specific memory for: ${input.query}`
+            : 'Use the project memory.\nRead:\n- memory.md',
+          fileReferences: ['memory.md'],
+          summaryExcerpt: 'Latest summary',
+        }
+      }),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+      attachProjectContext: true,
+    })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(mocks.terminals[0]?.write).toHaveBeenCalledWith(
+      'Use the project memory.\nRead:\n- memory.md\r',
+    )
+    expect(assembleCallCount).toBe(1)
+
+    manager.writeToSession(session.config.id, 'fix the login bug\r')
+
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(assembleCallCount).toBe(2)
+    expect(projectMemory.assembleContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: 'fix the login bug',
+      }),
+    )
+    expect(mocks.terminals[0]?.write).toHaveBeenCalledWith(
+      'Task-specific memory for: fix the login bug\r',
+    )
+  })
+
   it('queues project memory capture when a session is closed', async () => {
     const transcriptEvents: TranscriptEvent[] = []
     const transcriptStore = {
