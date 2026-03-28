@@ -444,6 +444,7 @@ export class SessionManager {
         input.startupCommand,
         input.title,
       ),
+      permissionLevel: input.permissionLevel,
       cwd,
       shell,
       createdAt: now,
@@ -844,24 +845,50 @@ export class SessionManager {
 
   private resolveStartupCommand(config: SessionConfig): string {
     if (config.externalSession?.provider === 'codex') {
-      return (
+      return this.applyPermissionFlags(
         buildCodexResumeCommand(
           config.startupCommand,
           config.externalSession.sessionId,
-        ) ?? config.startupCommand
+        ) ?? config.startupCommand,
+        config,
       )
     }
 
     if (config.externalSession?.provider === 'copilot') {
-      return (
+      return this.applyPermissionFlags(
         buildCopilotResumeCommand(
           config.startupCommand,
           config.externalSession.sessionId,
-        ) ?? config.startupCommand
+        ) ?? config.startupCommand,
+        config,
       )
     }
 
-    return config.startupCommand
+    return this.applyPermissionFlags(config.startupCommand, config)
+  }
+
+  private applyPermissionFlags(
+    command: string,
+    config: SessionConfig,
+  ): string {
+    if (config.permissionLevel !== 'full-access') {
+      return command
+    }
+
+    const provider = this.detectResumableProvider(command)
+    if (provider === 'copilot' && !command.includes('--no-ask-user')) {
+      return `${command} --no-ask-user`
+    }
+
+    if (
+      provider === 'codex' &&
+      !command.includes('--dangerously-bypass-approvals-and-sandbox') &&
+      !command.includes('--full-auto')
+    ) {
+      return `${command} --full-auto`
+    }
+
+    return command
   }
 
   private cancelExternalSessionDetection(sessionId: string): void {
