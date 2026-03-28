@@ -232,6 +232,7 @@ export class SessionManager {
   >()
   private readonly historicalExternalSessionRecovery = new Set<string>()
   private readonly suppressedExit = new Set<string>()
+  private readonly pendingQueryBootstrapSessions = new Set<string>()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
@@ -526,6 +527,7 @@ export class SessionManager {
     this.cancelExternalSessionDetection(id)
     this.stopExternalSessionAttentionTracking(id)
     this.pendingFirstPromptBuffers.delete(id)
+    this.pendingQueryBootstrapSessions.delete(id)
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.configs.delete(id)
@@ -602,6 +604,7 @@ export class SessionManager {
     this.cancelExternalSessionDetection(config.id)
     this.stopExternalSessionAttentionTracking(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
+    this.pendingQueryBootstrapSessions.delete(config.id)
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
       attention: null,
@@ -2076,6 +2079,7 @@ export class SessionManager {
       sessionId: id,
       config: nextConfig,
     })
+    this.scheduleDeferredQueryBootstrap(id, title)
   }
 
   private async resolveProjectForCreate(
@@ -2504,6 +2508,50 @@ export class SessionManager {
       config: nextConfig,
     })
     this.writeToSessionInternal(sessionId, `${context.bootstrapMessage}\r`, 'system')
+    this.pendingQueryBootstrapSessions.add(sessionId)
+  }
+
+  private scheduleDeferredQueryBootstrap(sessionId: string, query: string): void {
+    if (!this.pendingQueryBootstrapSessions.delete(sessionId)) {
+      return
+    }
+
+    setTimeout(() => {
+      void this.attachDeferredQueryBootstrap(sessionId, query)
+    }, 80)
+  }
+
+  private async attachDeferredQueryBootstrap(
+    sessionId: string,
+    query: string,
+  ): Promise<void> {
+    const config = this.configs.get(sessionId)
+    if (!config?.projectContextAttachedAt || !this.terminals.has(sessionId)) {
+      return
+    }
+
+    const project = this.projects.get(config.projectId)
+    if (!project) {
+      return
+    }
+
+    const location = config.locationId
+      ? this.locations.get(config.locationId) ?? null
+      : null
+    const context = await this.projectMemory.assembleContext({
+      project,
+      location,
+      query,
+    })
+    if (!context.bootstrapMessage?.trim()) {
+      return
+    }
+
+    this.writeToSessionInternal(
+      sessionId,
+      `${context.bootstrapMessage}\r`,
+      'system',
+    )
   }
 
   private collectBackfillInputs(): Array<{
