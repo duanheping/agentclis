@@ -1395,6 +1395,15 @@
   border-radius: 0;
 }
 
+.terminal-surface .xterm .xterm-scrollable-element > .invisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.terminal-surface .xterm .xterm-scrollable-element > .invisible.fade {
+  transition: none;
+}
+
 .project-diff-panel {
   display: flex;
   flex-direction: column;
@@ -3331,4 +3340,13 @@
 
 .analysis-window__terminal .xterm-viewport {
   border-radius: 0;
+}
+
+.analysis-window__terminal .xterm .xterm-scrollable-element > .invisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.analysis-window__terminal .xterm .xterm-scrollable-element > .invisible.fade {
+  transition: none;
 }
