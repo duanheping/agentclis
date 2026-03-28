@@ -1028,7 +1028,7 @@ export class SessionManager {
         })),
     )
 
-    return scoredCandidates
+    const sorted = scoredCandidates
       .sort((left, right) => {
         if (left.titleMatches !== right.titleMatches) {
           return left.titleMatches ? -1 : 1
@@ -1038,7 +1038,20 @@ export class SessionManager {
           left.distance - right.distance ||
           right.candidate.startedAt - left.candidate.startedAt
         )
-      })[0]?.candidate ?? null
+      })
+
+    const best = sorted[0]
+    if (!best) {
+      return null
+    }
+
+    // When the session has a meaningful title, require a title match to
+    // prevent cross-session bleed between sessions that share the same CWD.
+    if (shouldMatchTitle && !best.titleMatches) {
+      return null
+    }
+
+    return best.candidate
   }
 
   private async shouldKeepStoredCodexExternalSession(
