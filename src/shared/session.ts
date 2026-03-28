@@ -54,6 +54,7 @@ export interface SessionConfig {
   startupCommand: string
   pendingFirstPromptTitle: boolean
   externalSession?: ManagedCliSessionRef
+  permissionLevel?: PermissionLevel
   cwd: string
   shell: string
   projectContextAttachedAt?: string
