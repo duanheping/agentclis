@@ -60,6 +60,7 @@ import {
   resolveShellCommand,
   supportsInlineShellCommand,
 } from './windowsShell'
+import { killTerminalProcessTree } from './ptyProcessTree'
 
 type IPty = import('node-pty').IPty
 
@@ -842,7 +843,7 @@ export class SessionManager {
     this.terminals.delete(id)
     this.liveAttentionBuffers.delete(id)
     try {
-      terminal.kill()
+      killTerminalProcessTree(terminal)
     } catch {
       this.suppressedExit.delete(id)
     }
