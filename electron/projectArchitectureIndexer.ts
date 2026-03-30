@@ -56,6 +56,20 @@ interface ArchitectureDocumentSnapshot {
   sections: ArchitectureDocumentSection[]
 }
 
+interface DetailedAutosarLayout {
+  startApplicationPath: string
+  applPath: string | null
+  sourcePath: string | null
+  includePath: string | null
+  buildScriptPath: string | null
+  gpjPath: string | null
+  variantConfigPaths: string[]
+  generatedDataPaths: string[]
+  buildOutputPaths: string[]
+  dpaPaths: string[]
+  sourceModulePaths: string[]
+}
+
 const SOURCE_DIRECTORIES = ['src', 'electron']
 const SOURCE_FILE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs'])
 const OUTPUT_DIRECTORIES = new Set(['dist', 'dist-electron', 'release', 'build', 'out', 'coverage'])
@@ -621,6 +635,140 @@ const AUTOSAR_GLOSSARY: ArchitectureGlossaryTerm[] = [
       'Configuration sources such as DaVinci projects, vpconfig data, and generator inputs that produce BSW or integration artifacts.',
   },
 ]
+
+const DETAILED_AUTOSAR_GLOSSARY: ArchitectureGlossaryTerm[] = [
+  ...AUTOSAR_GLOSSARY,
+  {
+    term: 'Config_<VARIANT>',
+    meaning:
+      'Variant-specific ECUC and integration inputs. This is the primary edit surface for AUTOSAR configuration changes.',
+  },
+  {
+    term: 'GenData_<VARIANT>',
+    meaning:
+      'Variant-specific generated C, headers, OS/RTE outputs, and linker-related artifacts derived from configuration and generation tooling.',
+  },
+  {
+    term: 'ECG_CAN_ETH_<VARIANT>.dpa',
+    meaning:
+      'DaVinci project file that binds a vehicle variant to its configuration and generation setup.',
+  },
+  {
+    term: 'user-owned source',
+    meaning:
+      'Application code beneath Appl/Source and related Include paths where feature logic, diagnostics, wake management, and framework behavior should normally be edited.',
+  },
+  {
+    term: 'vendor/generated boundary',
+    meaning:
+      'BSW, BSWMD, ThirdParty, and GenData areas are tool-, vendor-, or generation-owned and should not be treated like the primary feature-edit surface.',
+  },
+]
+
+const DETAILED_AUTOSAR_INVARIANTS: ArchitectureInvariant[] = [
+  {
+    id: 'autosar-feature-code-boundary',
+    statement:
+      'Feature behavior should normally be implemented in Appl/Source or variant configuration inputs, not by hand-editing GenData, BSW, or other generated/vendor-owned outputs.',
+    relatedModules: [
+      'autosar-user-source-root',
+      'autosar-generated-platform',
+      'autosar-variant-layout',
+    ],
+  },
+  {
+    id: 'autosar-variant-triplet',
+    statement:
+      'Each vehicle variant is represented by a Config_<VARIANT> folder, a matching GenData_<VARIANT> output area, and a corresponding .dpa project file that must stay aligned.',
+    relatedModules: [
+      'autosar-variant-layout',
+      'autosar-build-entrypoints',
+      'autosar-generated-platform',
+    ],
+  },
+  {
+    id: 'autosar-build-entrypoint-boundary',
+    statement:
+      'Compile and generation workflows should be traced through the checked-in build scripts, project files, and DaVinci inputs rather than reconstructed from individual generated files.',
+    relatedModules: [
+      'autosar-build-entrypoints',
+      'autosar-tooling-and-third-party',
+      'autosar-generated-platform',
+    ],
+  },
+]
+
+const AUTOSAR_SOURCE_MODULE_BLUEPRINTS = [
+  {
+    id: 'autosar-vmcu-framework',
+    name: 'VMCU framework and shared utilities',
+    directoryNames: ['Vmcu', 'VMCU_common', 'Variants', 'VmcuTestAutomation'],
+    responsibility:
+      'Provides the core VMCU runtime framework, shared utilities, variant helpers, and automation hooks that other user modules build on.',
+    owns: [
+      'framework startup helpers',
+      'shared VMCU utilities',
+      'variant helpers',
+      'test automation entrypoints',
+    ],
+    changeGuidance: [
+      'Cross-cutting VMCU behavior changes usually start here before touching individual feature modules.',
+    ],
+    testLocations: ['unit_test/UnitTest_ECG2_VMCU'],
+  },
+  {
+    id: 'autosar-diagnostics',
+    name: 'Diagnostics and service handling',
+    directoryNames: ['Diag'],
+    responsibility:
+      'Implements diagnostic flows such as DID, DTC, and routine handling on top of AUTOSAR diagnostic and communication services.',
+    owns: ['diagnostic handlers', 'DID/DTC flows', 'routine logic'],
+    changeGuidance: [
+      'Trace diagnostic behavior here before changing generated DCM/DEM assets.',
+    ],
+    testLocations: ['unit_test/UnitTest_ECG2_Diag'],
+  },
+  {
+    id: 'autosar-wake-management',
+    name: 'Wake and power management',
+    directoryNames: ['Wm'],
+    responsibility:
+      'Owns wakeup, sleep, and power-state coordination, including wake-source handling and power-log behavior.',
+    owns: ['wake state machine', 'power logging', 'wake-source handling'],
+    changeGuidance: [
+      'Keep wake-management edits aligned with diagnostics, CAN wake inputs, and targeted wake-manager tests.',
+    ],
+    testLocations: ['unit_test/UnitTest_Wm'],
+  },
+  {
+    id: 'autosar-communication-hal',
+    name: 'Communication, IPC, and complex drivers',
+    directoryNames: ['Can', 'Ipc_Hal', 'Cdd'],
+    responsibility:
+      'Bridges CAN, IPC, Ethernet/UART/shared-memory paths, and complex device drivers into the AUTOSAR runtime and user logic.',
+    owns: [
+      'CAN transport wrappers',
+      'IPC adapters',
+      'complex drivers',
+    ],
+    changeGuidance: [
+      'Communication-path fixes usually start here before changing lower-level BSW or generated transport configuration.',
+    ],
+    testLocations: ['unit_test/UnitTest_ECG2_VMCU'],
+  },
+  {
+    id: 'autosar-flash-security',
+    name: 'Flash, boot, and security services',
+    directoryNames: ['Flash', 'bootupdate', 'hse_driver', 'Hw_Info'],
+    responsibility:
+      'Contains flash-guard, boot-update, HSE, and hardware-information logic that supports secure update and platform state transitions.',
+    owns: ['flash update paths', 'boot update logic', 'HSE integration'],
+    changeGuidance: [
+      'Security and flash changes should be traced here together with the generated crypto and platform configuration they depend on.',
+    ],
+    testLocations: ['unit_test/UnitTest_ECG2_VMCU'],
+  },
+] as const
 
 function normalizeRepoPath(filePath: string): string {
   return filePath.replace(/\\/g, '/')
@@ -1225,6 +1373,458 @@ function selectTopLevelPaths(
     .sort()
 }
 
+async function listRepoEntries(
+  rootPath: string,
+  repoPath: string,
+): Promise<TopLevelRepoEntry[]> {
+  try {
+    const entries = await readdir(path.join(rootPath, repoPath), {
+      withFileTypes: true,
+    })
+    return entries
+      .map((entry) => ({
+        name: entry.name,
+        repoPath: normalizeRepoPath(path.posix.join(repoPath, entry.name)),
+        isDirectory: entry.isDirectory(),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+  } catch {
+    return []
+  }
+}
+
+async function findAutosarStartApplicationPath(
+  rootPath: string,
+  repoPath: string,
+  depth = 0,
+): Promise<string | null> {
+  const entries = await listRepoEntries(rootPath, repoPath)
+  if (entries.length === 0) {
+    return null
+  }
+
+  const hasAppl = entries.some(
+    (entry) => entry.isDirectory && entry.name.toLowerCase() === 'appl',
+  )
+  const hasVariantConfig = entries.some(
+    (entry) => entry.isDirectory && /^config_/iu.test(entry.name),
+  )
+  if (hasAppl && hasVariantConfig) {
+    return repoPath
+  }
+
+  if (depth >= 3) {
+    return null
+  }
+
+  for (const entry of entries.filter((entry) => entry.isDirectory)) {
+    const nested = await findAutosarStartApplicationPath(
+      rootPath,
+      entry.repoPath,
+      depth + 1,
+    )
+    if (nested) {
+      return nested
+    }
+  }
+
+  return null
+}
+
+function buildRepresentativePathList(
+  primaryPaths: string[],
+  patternPaths: string[] = [],
+  limit = 6,
+): string[] {
+  return uniqueStrings([...primaryPaths, ...patternPaths]).slice(0, limit)
+}
+
+async function findDetailedAutosarLayout(
+  rootPath: string,
+): Promise<DetailedAutosarLayout | null> {
+  const startApplicationPath = await findAutosarStartApplicationPath(
+    rootPath,
+    'Applications',
+  )
+  if (!startApplicationPath) {
+    return null
+  }
+
+  const startEntries = await listRepoEntries(rootPath, startApplicationPath)
+  const applEntry = startEntries.find(
+    (entry) => entry.isDirectory && entry.name.toLowerCase() === 'appl',
+  )
+  const applPath = applEntry?.repoPath ?? null
+  const variantConfigPaths = startEntries
+    .filter((entry) => entry.isDirectory && /^config_/iu.test(entry.name))
+    .map((entry) => entry.repoPath)
+  const dpaPaths = startEntries
+    .filter((entry) => !entry.isDirectory && /\.dpa$/iu.test(entry.name))
+    .map((entry) => entry.repoPath)
+
+  let sourcePath: string | null = null
+  let includePath: string | null = null
+  let buildScriptPath: string | null = null
+  let gpjPath: string | null = null
+  let generatedDataPaths: string[] = []
+  let buildOutputPaths: string[] = []
+  let sourceModulePaths: string[] = []
+
+  if (applPath) {
+    const applEntries = await listRepoEntries(rootPath, applPath)
+    sourcePath =
+      applEntries.find(
+        (entry) => entry.isDirectory && entry.name.toLowerCase() === 'source',
+      )?.repoPath ?? null
+    includePath =
+      applEntries.find(
+        (entry) => entry.isDirectory && entry.name.toLowerCase() === 'include',
+      )?.repoPath ?? null
+    buildScriptPath =
+      applEntries.find(
+        (entry) =>
+          !entry.isDirectory && /^ecg2_vmcu.*\.bat$/iu.test(entry.name),
+      )?.repoPath ?? null
+    gpjPath =
+      applEntries.find(
+        (entry) =>
+          !entry.isDirectory && /^ecg2_vmcu.*\.gpj$/iu.test(entry.name),
+      )?.repoPath ?? null
+    generatedDataPaths = applEntries
+      .filter((entry) => entry.isDirectory && /^gendata_/iu.test(entry.name))
+      .map((entry) => entry.repoPath)
+    buildOutputPaths = applEntries
+      .filter((entry) => entry.isDirectory && /^ecg2_vmcu_/iu.test(entry.name))
+      .map((entry) => entry.repoPath)
+
+    if (sourcePath) {
+      sourceModulePaths = (await listRepoEntries(rootPath, sourcePath))
+        .filter((entry) => entry.isDirectory)
+        .map((entry) => entry.repoPath)
+    }
+  }
+
+  if (
+    !applPath &&
+    variantConfigPaths.length === 0 &&
+    dpaPaths.length === 0
+  ) {
+    return null
+  }
+
+  return {
+    startApplicationPath,
+    applPath,
+    sourcePath,
+    includePath,
+    buildScriptPath,
+    gpjPath,
+    variantConfigPaths,
+    generatedDataPaths,
+    buildOutputPaths,
+    dpaPaths,
+    sourceModulePaths,
+  }
+}
+
+function buildDetailedAutosarModules(
+  entries: TopLevelRepoEntry[],
+  layout: DetailedAutosarLayout,
+): ArchitectureModuleCard[] {
+  const generatorPaths = selectTopLevelPaths(entries, ['Generators', 'DaVinciConfigurator'])
+  const platformPaths = selectTopLevelPaths(entries, ['BSW', 'BSWMD'])
+  const vendorPaths = selectTopLevelPaths(entries, ['ThirdParty', 'Tools', 'vpconfig'])
+  const documentationPaths = selectTopLevelPaths(entries, ['Doc', 'Design_Docs'])
+
+  const modules: ArchitectureModuleCard[] = []
+
+  modules.push({
+    id: 'autosar-build-entrypoints',
+    name: 'Build and generation entrypoints',
+    kind: 'manager',
+    paths: buildRepresentativePathList(
+      [
+        layout.buildScriptPath,
+        layout.gpjPath,
+        layout.startApplicationPath,
+      ].filter((value): value is string => Boolean(value)),
+      generatorPaths,
+    ),
+    responsibility:
+      'Defines the checked-in compile and generation entrypoints for VMCU variants, including the main batch flow, the GHS project, and the generator/tooling handoff.',
+    owns: ['build scripts', 'GHS project entrypoints', 'generation orchestration'],
+    dependsOn: [
+      'autosar-variant-layout',
+      'autosar-generated-platform',
+      'autosar-tooling-and-third-party',
+    ],
+    usedBy: [],
+    publicInterfaces: [
+      ...[
+        layout.buildScriptPath ? path.posix.basename(layout.buildScriptPath) : null,
+        layout.gpjPath ? path.posix.basename(layout.gpjPath) : null,
+      ].filter((value): value is string => Boolean(value)),
+    ],
+    keyTypes: [],
+    invariants: [
+      'Compile and generation work should be traced through these checked-in entrypoints rather than reconstructed from individual generated files.',
+    ],
+    changeGuidance: [
+      'When documenting how to build the ECU, cite the batch/project entrypoints and the variant-specific output paths, not just the top-level folders.',
+    ],
+    testLocations: [],
+    confidence: 0.95,
+  })
+
+  modules.push({
+    id: 'autosar-variant-layout',
+    name: 'Variant configuration layout',
+    kind: 'manager',
+    paths: buildRepresentativePathList(
+      layout.variantConfigPaths,
+      [
+        `${layout.startApplicationPath}/Config_<VARIANT>`,
+        `${layout.startApplicationPath}/ECG_CAN_ETH_<VARIANT>.dpa`,
+        ...(layout.applPath ? [`${layout.applPath}/GenData_<VARIANT>`] : []),
+      ],
+    ),
+    responsibility:
+      'Captures the per-variant triplet of configuration inputs, generated outputs, and DaVinci project files that define each vehicle program.',
+    owns: ['Config_<VARIANT> inputs', 'GenData_<VARIANT> outputs', '.dpa project mapping'],
+    dependsOn: [],
+    usedBy: [],
+    publicInterfaces: layout.dpaPaths.slice(0, 3).map((repoPath) => path.posix.basename(repoPath)),
+    keyTypes: [`Detected variants: ${Math.max(layout.variantConfigPaths.length, layout.generatedDataPaths.length, layout.dpaPaths.length)}`],
+    invariants: [
+      'Variant work should start from Config_<VARIANT> and the matching .dpa project, then be regenerated into GenData_<VARIANT>.',
+    ],
+    changeGuidance: [
+      'For variant-specific changes, name the exact Config_<VARIANT>, GenData_<VARIANT>, and .dpa files that move together.',
+    ],
+    testLocations: [],
+    confidence: 0.97,
+  })
+
+  modules.push({
+    id: 'autosar-user-source-root',
+    name: 'User-owned VMCU source',
+    kind: 'service',
+    paths: buildRepresentativePathList(
+      [
+        layout.sourcePath,
+        layout.includePath,
+      ].filter((value): value is string => Boolean(value)),
+      layout.sourceModulePaths.slice(0, 4),
+    ),
+    responsibility:
+      'Contains the primary user-owned VMCU source and headers where feature logic, framework behavior, and platform integration code are implemented.',
+    owns: ['Appl/Source modules', 'application headers', 'integration callouts'],
+    dependsOn: ['autosar-generated-platform'],
+    usedBy: [],
+    publicInterfaces: [],
+    keyTypes: [],
+    invariants: [
+      'Feature behavior should usually be edited here or in variant configuration, not in generated or vendor-owned areas.',
+    ],
+    changeGuidance: [
+      'When a behavior change is not configuration-driven, start by tracing the relevant user-owned modules under Appl/Source.',
+    ],
+    testLocations: [
+      'unit_test/UnitTest_ECG2_VMCU',
+      'unit_test/UnitTest_ECG2_Diag',
+      'unit_test/UnitTest_Wm',
+    ].filter((repoPath) => entries.some((entry) => entry.repoPath === repoPath || entry.repoPath.startsWith(`${repoPath}/`))),
+    confidence: 0.96,
+  })
+
+  for (const blueprint of AUTOSAR_SOURCE_MODULE_BLUEPRINTS) {
+    const matchedPaths = layout.sourceModulePaths.filter((repoPath) =>
+      blueprint.directoryNames.some((name) => repoPath.endsWith(`/${name}`)),
+    )
+    if (matchedPaths.length === 0) {
+      continue
+    }
+
+    modules.push({
+      id: blueprint.id,
+      name: blueprint.name,
+      kind: 'service',
+      paths: matchedPaths,
+      responsibility: blueprint.responsibility,
+      owns: [...blueprint.owns],
+      dependsOn: ['autosar-user-source-root', 'autosar-generated-platform'],
+      usedBy: [],
+      publicInterfaces: matchedPaths.map((repoPath) => path.posix.basename(repoPath)),
+      keyTypes: [],
+      invariants: [],
+      changeGuidance: [...blueprint.changeGuidance],
+      testLocations: [...blueprint.testLocations],
+      confidence: 0.9,
+    })
+  }
+
+  modules.push({
+    id: 'autosar-generated-platform',
+    name: 'Generated AUTOSAR platform and BSW',
+    kind: 'service',
+    paths: buildRepresentativePathList(platformPaths, layout.generatedDataPaths),
+    responsibility:
+      'Contains vendor and tool-generated AUTOSAR platform code, BSW descriptors, and per-variant generated outputs consumed by the VMCU build.',
+    owns: ['BSW modules', 'BSW metadata', 'RTE/OS/linker outputs', 'generated integration artifacts'],
+    dependsOn: ['autosar-variant-layout', 'autosar-tooling-and-third-party'],
+    usedBy: [],
+    publicInterfaces: [],
+    keyTypes: [],
+    invariants: [
+      'Generated outputs should stay derived from variant configuration and generator inputs instead of becoming the primary manual edit surface.',
+    ],
+    changeGuidance: [
+      'Prefer changing Config_<VARIANT> or user-owned source and regenerating before editing files under GenData, BSW, or BSWMD.',
+    ],
+    testLocations: [],
+    confidence: 0.95,
+  })
+
+  const toolingPaths = buildRepresentativePathList(
+    [...generatorPaths, ...vendorPaths],
+    documentationPaths,
+  )
+  if (toolingPaths.length > 0) {
+    modules.push({
+      id: 'autosar-tooling-and-third-party',
+      name: 'Tooling, vendor inputs, and third-party assets',
+      kind: 'utility',
+      paths: toolingPaths,
+      responsibility:
+        'Provides the generation tools, platform configuration inputs, third-party libraries, and supporting assets that the ECU workflow depends on.',
+      owns: ['DaVinci tooling', 'generator assets', 'third-party code', 'platform config inputs'],
+      dependsOn: [],
+      usedBy: [],
+      publicInterfaces: [],
+      keyTypes: [],
+      invariants: [
+        'Treat these paths as supporting or vendor-owned unless the repo clearly establishes them as the feature-edit surface.',
+      ],
+      changeGuidance: [
+        'Prefer user-owned source and variant configuration first; move into tooling or third-party assets only when the evidence clearly points there.',
+      ],
+      testLocations: [],
+      confidence: 0.86,
+    })
+  }
+
+  return populateUsedBy(modules)
+}
+
+function buildDetailedAutosarInteractions(
+  modules: ArchitectureModuleCard[],
+  layout: DetailedAutosarLayout,
+): ArchitectureInteraction[] {
+  const moduleIds = new Set(modules.map((module) => module.id))
+  const interactions: ArchitectureInteraction[] = []
+
+  if (
+    moduleIds.has('autosar-variant-layout') &&
+    moduleIds.has('autosar-build-entrypoints')
+  ) {
+    interactions.push({
+      id: 'autosar-variant-to-build',
+      from: 'autosar-variant-layout',
+      to: 'autosar-build-entrypoints',
+      via: '.dpa selection, Config_<VARIANT>, and build entry scripts',
+      purpose:
+        'A selected vehicle variant determines which ECU configuration, generated outputs, and build entrypoints are used for compilation and regeneration.',
+      trigger: 'Variant bring-up, cross-variant propagation, or a variant-specific build.',
+      failureModes: [
+        'A change lands in the wrong Config_<VARIANT> or the matching .dpa/generated output is not updated.',
+      ],
+      notes: [
+        `Detected variant roots: ${Math.max(layout.variantConfigPaths.length, layout.generatedDataPaths.length, layout.dpaPaths.length)}`,
+      ],
+    })
+  }
+
+  if (
+    moduleIds.has('autosar-build-entrypoints') &&
+    moduleIds.has('autosar-generated-platform')
+  ) {
+    interactions.push({
+      id: 'autosar-build-to-generated',
+      from: 'autosar-build-entrypoints',
+      to: 'autosar-generated-platform',
+      via: 'DaVinci inputs, generators, and the GHS build project',
+      purpose:
+        'Build and generation entrypoints consume configuration and generator inputs to produce or compile the variant-specific AUTOSAR platform outputs.',
+      trigger: 'DaVinci regeneration, full builds, or variant rebuilds.',
+      failureModes: [
+        'Generated artifacts drift when regeneration is skipped or when manual edits are made under GenData/BSW.',
+      ],
+      notes: [
+        ...[layout.buildScriptPath, layout.gpjPath].filter((value): value is string => Boolean(value)),
+      ],
+    })
+  }
+
+  if (
+    moduleIds.has('autosar-user-source-root') &&
+    moduleIds.has('autosar-generated-platform')
+  ) {
+    interactions.push({
+      id: 'autosar-user-to-platform',
+      from: 'autosar-user-source-root',
+      to: 'autosar-generated-platform',
+      via: 'RTE/BSW APIs, integration callouts, and generated headers',
+      purpose:
+        'User-owned VMCU modules consume generated interfaces and AUTOSAR services rather than reimplementing platform behavior directly.',
+      trigger: 'Feature work, diagnostics, wake management changes, or platform integration fixes.',
+      failureModes: [
+        'Behavior regresses when user modules and generated interfaces drift out of sync.',
+      ],
+      notes: [],
+    })
+  }
+
+  if (
+    moduleIds.has('autosar-diagnostics') &&
+    moduleIds.has('autosar-vmcu-framework')
+  ) {
+    interactions.push({
+      id: 'autosar-diagnostics-to-framework',
+      from: 'autosar-diagnostics',
+      to: 'autosar-vmcu-framework',
+      via: 'shared utilities, framework helpers, and variant-aware runtime services',
+      purpose:
+        'Diagnostic handlers build on framework utilities and shared runtime helpers instead of standing alone.',
+      trigger: 'DID/DTC/routine changes or diagnostic integration work.',
+      failureModes: [
+        'Diagnostic behavior drifts when shared framework assumptions are changed without updating diagnostic handlers.',
+      ],
+      notes: [],
+    })
+  }
+
+  if (
+    moduleIds.has('autosar-wake-management') &&
+    moduleIds.has('autosar-communication-hal')
+  ) {
+    interactions.push({
+      id: 'autosar-wm-to-communication',
+      from: 'autosar-wake-management',
+      to: 'autosar-communication-hal',
+      via: 'CAN wake paths, IPC signals, and driver-level notifications',
+      purpose:
+        'Wake and power management reacts to communication and hardware events carried through CAN, IPC, and complex-driver paths.',
+      trigger: 'Wakeup, sleep, or power-state debugging.',
+      failureModes: [
+        'Power-state behavior can regress when wake-source signaling changes without matching wake-manager updates.',
+      ],
+      notes: [],
+    })
+  }
+
+  return interactions
+}
+
 function buildAutosarModules(entries: TopLevelRepoEntry[]): ArchitectureModuleCard[] {
   const applicationPaths = selectTopLevelPaths(entries, ['Applications', 'SWC'])
   const bswPaths = selectTopLevelPaths(entries, ['BSW', 'BSWMD'])
@@ -1466,6 +2066,37 @@ async function indexAutosarArchitecture(
 
   if (markerCount < 3 || !hasRuntimeArea || !hasConfigurationArea) {
     return null
+  }
+
+  const detailedLayout = await findDetailedAutosarLayout(input.rootPath)
+  if (detailedLayout) {
+    const modules = buildDetailedAutosarModules(topLevelEntries, detailedLayout)
+    const readme = await readPreferredFile(input.rootPath, README_CANDIDATES)
+    const detectedVariantCount = Math.max(
+      detailedLayout.variantConfigPaths.length,
+      detailedLayout.generatedDataPaths.length,
+      detailedLayout.dpaPaths.length,
+    )
+    const overviewParts = [
+      `AUTOSAR ECG-style repository detected. Build entrypoints live under ${detailedLayout.buildScriptPath ?? detailedLayout.applPath ?? detailedLayout.startApplicationPath} and variant configuration is organized beneath ${detailedLayout.startApplicationPath}.`,
+      `Detected ${detectedVariantCount} variant-specific Config_/GenData_/DPA entries.`,
+      detailedLayout.sourcePath
+        ? `User-owned feature code lives under ${detailedLayout.sourcePath} while generated and vendor-owned areas include BSW/, BSWMD/, ${detailedLayout.generatedDataPaths[0] ?? 'GenData_<VARIANT>/'}, and supporting tooling such as Generators/, DaVinciConfigurator/, vpconfig/, and ThirdParty/.`
+        : 'Generated and vendor-owned platform areas are separated from the build entrypoints and variant configuration tree.',
+    ]
+    if (readme) {
+      overviewParts.push(`README summary: ${extractDocumentOverview(readme.content)}`)
+    }
+
+    return buildSnapshot(input, {
+      systemOverview: overviewParts.join(' '),
+      modules,
+      interactions: buildDetailedAutosarInteractions(modules, detailedLayout),
+      invariants: DETAILED_AUTOSAR_INVARIANTS.filter((invariant) =>
+        invariant.relatedModules.some((moduleId) => modules.some((module) => module.id === moduleId)),
+      ),
+      glossary: DETAILED_AUTOSAR_GLOSSARY,
+    })
   }
 
   const modules = buildAutosarModules(topLevelEntries)
