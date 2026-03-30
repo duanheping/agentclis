@@ -214,11 +214,12 @@ export function summarizeCommand(command: string, limit = 42): string {
 export function buildRuntime(
   sessionId: string,
   status: SessionStatus = 'exited',
+  lastActiveAt: string = new Date().toISOString(),
 ): SessionRuntime {
   return {
     sessionId,
     status,
     attention: null,
-    lastActiveAt: new Date().toISOString(),
+    lastActiveAt,
   }
 }

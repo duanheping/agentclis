@@ -118,6 +118,15 @@ describe('session helpers', () => {
     expect(runtime.status).toBe('running')
   })
 
+  it('buildRuntime accepts an explicit lastActiveAt timestamp', () => {
+    const runtime = buildRuntime(
+      'test-session',
+      'exited',
+      '2026-03-30T14:00:00.000Z',
+    )
+    expect(runtime.lastActiveAt).toBe('2026-03-30T14:00:00.000Z')
+  })
+
   it('exports PERMISSION_LEVELS with expected values', () => {
     expect(PERMISSION_LEVELS).toEqual(['default', 'full-access'])
   })

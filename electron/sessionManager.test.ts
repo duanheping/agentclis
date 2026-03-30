@@ -307,7 +307,7 @@ describe('SessionManager restore policy', () => {
     vi.useRealTimers()
   })
 
-  it('restores only the last active session at launch and starts others on demand', async () => {
+  it('restores all saved sessions at launch and reuses running terminals on demand', async () => {
     const manager = new SessionManager({
       onData: () => undefined,
       onConfig: () => undefined,
@@ -321,13 +321,20 @@ describe('SessionManager restore policy', () => {
     ).toEqual(['exited', 'exited'])
 
     const restoredSnapshot = await manager.restoreSessions()
-    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    expect(mocks.spawn).toHaveBeenCalledTimes(2)
     const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
     expect(firstSpawnArgs).toEqual([
       '-NoLogo',
       '-NoExit',
       '-Command',
       'beta',
+    ])
+    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
+    expect(secondSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'alpha',
     ])
     expect(restoredSnapshot.activeSessionId).toBe('session-b')
     expect(
@@ -338,32 +345,145 @@ describe('SessionManager restore policy', () => {
         ]) ?? [],
       ),
     ).toEqual({
-      'session-a': 'exited',
+      'session-a': 'running',
       'session-b': 'running',
     })
 
     vi.runOnlyPendingTimers()
     expect(mocks.terminals[0].write).not.toHaveBeenCalled()
+    expect(mocks.terminals[1].write).not.toHaveBeenCalled()
 
     await manager.activateSession('session-a')
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
-    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
-    expect(secondSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'alpha',
-    ])
     expect(manager.listSessions().activeSessionId).toBe('session-a')
 
     vi.runOnlyPendingTimers()
+    expect(mocks.terminals[0].write).not.toHaveBeenCalled()
     expect(mocks.terminals[1].write).not.toHaveBeenCalled()
 
     await manager.activateSession('session-a')
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
   })
 
-  it('starts the newly active session when closing the restored active session', async () => {
+  it('keeps the restored active session first even when titles would sort it later', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-a',
+          title: 'Alpha project',
+          rootPath: 'C:\\repo\\alpha',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          updatedAt: '2026-03-11T10:00:00.000Z',
+        },
+        {
+          id: 'project-b',
+          title: 'Beta project',
+          rootPath: 'C:\\repo\\beta',
+          createdAt: '2026-03-11T10:01:00.000Z',
+          updatedAt: '2026-03-11T10:01:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-a',
+          title: 'alpha',
+          startupCommand: 'alpha',
+          cwd: 'C:\\repo\\alpha',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          updatedAt: '2026-03-11T10:00:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-b',
+          title: 'zeta',
+          startupCommand: 'beta',
+          cwd: 'C:\\repo\\beta',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-11T10:01:00.000Z',
+          updatedAt: '2026-03-11T10:01:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-b',
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const snapshot = manager.listSessions()
+    expect(snapshot.projects.map((project) => project.config.id)).toEqual([
+      'project-b',
+      'project-a',
+    ])
+    expect(snapshot.projects[0]?.sessions.map((session) => session.config.id)).toEqual([
+      'session-b',
+    ])
+  })
+
+  it('restores inactive session ordering from persisted lastActiveAt values', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          updatedAt: '2026-03-11T10:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'alpha',
+          startupCommand: 'alpha',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          updatedAt: '2026-03-11T10:00:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-1',
+          title: 'zeta',
+          startupCommand: 'beta',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-11T10:01:00.000Z',
+          updatedAt: '2026-03-11T10:01:00.000Z',
+        },
+      ],
+      runtimes: [
+        {
+          sessionId: 'session-a',
+          lastActiveAt: '2026-03-11T10:00:00.000Z',
+        },
+        {
+          sessionId: 'session-b',
+          lastActiveAt: '2026-03-11T10:01:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.map((session) => session.config.id),
+    ).toEqual(['session-b', 'session-a'])
+  })
+
+  it('keeps another restored session running when closing the restored active session', async () => {
     const manager = new SessionManager({
       onData: () => undefined,
       onConfig: () => undefined,
@@ -372,7 +492,7 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
-    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    expect(mocks.spawn).toHaveBeenCalledTimes(2)
 
     const closeResult = await manager.closeSession('session-b')
 
@@ -381,13 +501,6 @@ describe('SessionManager restore policy', () => {
       activeSessionId: 'session-a',
     })
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
-    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
-    expect(secondSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'alpha',
-    ])
     expect(manager.listSessions().activeSessionId).toBe('session-a')
     expect(
       Object.fromEntries(
@@ -549,9 +662,11 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    expect(
-      manager.listSessions().projects[0]?.sessions[0]?.runtime.attention,
-    ).toBe('needs-user-decision')
+    await vi.waitFor(() => {
+      expect(
+        manager.listSessions().projects[0]?.sessions[0]?.runtime.attention,
+      ).toBe('needs-user-decision')
+    })
   })
 
   it('does not recover a Codex Desktop session for an agentclis-managed restore', async () => {
@@ -799,10 +914,10 @@ describe('SessionManager restore policy', () => {
 
     await manager.restoreSessions()
     await vi.waitFor(() => {
-      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+      expect(mocks.spawn).toHaveBeenCalledTimes(2)
     })
 
-    // Session A (active) should resume its own codex session, not session B's
+    // Session A (active) should resume its own codex session, not session B's.
     const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
     expect(firstSpawnArgs).toEqual([
       '-NoLogo',
@@ -811,13 +926,7 @@ describe('SessionManager restore policy', () => {
       'codex resume 019codex-session-a',
     ])
 
-    // Now activate session B
-    await manager.activateSession('session-b')
-    await vi.waitFor(() => {
-      expect(mocks.spawn).toHaveBeenCalledTimes(2)
-    })
-
-    // Session B should resume its own codex session, not session A's
+    // Session B should also resume its own codex session during restore.
     const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
     expect(secondSpawnArgs).toEqual([
       '-NoLogo',
@@ -825,6 +934,12 @@ describe('SessionManager restore policy', () => {
       '-Command',
       'codex resume 019codex-session-b',
     ])
+
+    // Activating an already restored session should not spawn another terminal.
+    await manager.activateSession('session-b')
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    })
   })
 })
 
@@ -1527,30 +1642,36 @@ describe('SessionManager logical project identity and project context', () => {
     )
 
     const snapshot = manager.listSessions()
+    const copyAProject = snapshot.projects.find(
+      (entry) => entry.config.id === 'project-a',
+    )
+    const copyBProject = snapshot.projects.find(
+      (entry) => entry.config.id === 'project-b',
+    )
 
     expect(snapshot.projects).toHaveLength(2)
     expect(snapshot.projects.map((entry) => entry.config.id)).toEqual([
-      'project-a',
       'project-b',
+      'project-a',
     ])
-    expect(snapshot.projects[0]?.locations).toEqual([
+    expect(copyAProject?.locations).toEqual([
       expect.objectContaining({
         id: 'location-a',
         projectId: 'project-a',
         rootPath: 'C:\\repo\\copy-a',
       }),
     ])
-    expect(snapshot.projects[1]?.locations).toEqual([
+    expect(copyBProject?.locations).toEqual([
       expect.objectContaining({
         id: 'location-b',
         projectId: 'project-b',
         rootPath: 'D:\\repo\\copy-b',
       }),
     ])
-    expect(snapshot.projects[0]?.sessions.map((entry) => entry.config.projectId)).toEqual([
+    expect(copyAProject?.sessions.map((entry) => entry.config.projectId)).toEqual([
       'project-a',
     ])
-    expect(snapshot.projects[1]?.sessions.map((entry) => entry.config.projectId)).toEqual([
+    expect(copyBProject?.sessions.map((entry) => entry.config.projectId)).toEqual([
       'project-b',
     ])
   })

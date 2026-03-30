@@ -131,6 +131,7 @@ interface PersistedSessionState {
   projects: ProjectConfig[]
   locations: ProjectLocation[]
   sessions: StoredSessionConfig[]
+  runtimes: Array<Pick<SessionRuntime, 'sessionId' | 'lastActiveAt'>>
   activeSessionId: string | null
 }
 
@@ -214,6 +215,7 @@ export class SessionManager {
       projects: [],
       locations: [],
       sessions: [],
+      runtimes: [],
       activeSessionId: null,
     },
   })
@@ -251,6 +253,16 @@ export class SessionManager {
     this.projectMemory = services.projectMemory ?? noopProjectMemory
     const persisted = this.store.store
     this.activeSessionId = persisted.activeSessionId
+    const persistedRuntimes = new Map(
+      (persisted.runtimes ?? [])
+        .filter(
+          (runtime): runtime is Pick<SessionRuntime, 'sessionId' | 'lastActiveAt'> =>
+            typeof runtime?.sessionId === 'string' &&
+            typeof runtime?.lastActiveAt === 'string' &&
+            runtime.lastActiveAt.length > 0,
+        )
+        .map((runtime) => [runtime.sessionId, runtime]),
+    )
 
     for (const project of persisted.projects ?? []) {
       const hydratedProject = this.hydrateProjectConfig(project)
@@ -282,12 +294,21 @@ export class SessionManager {
 
     for (const config of persisted.sessions ?? []) {
       const hydratedConfig = this.hydrateSessionConfig(config)
+      const persistedRuntime = persistedRuntimes.get(hydratedConfig.id)
+      const restoredLastActiveAt =
+        persistedRuntime?.lastActiveAt ||
+        hydratedConfig.updatedAt ||
+        hydratedConfig.createdAt
       this.configs.set(hydratedConfig.id, hydratedConfig)
-      this.runtimes.set(hydratedConfig.id, buildRuntime(hydratedConfig.id))
+      this.runtimes.set(
+        hydratedConfig.id,
+        buildRuntime(hydratedConfig.id, 'exited', restoredLastActiveAt),
+      )
       this.claimExternalSession(hydratedConfig)
       this.trackHistoricalExternalSessionRecovery(hydratedConfig)
 
       if (
+        persistedRuntime?.lastActiveAt !== restoredLastActiveAt ||
         config.projectId !== hydratedConfig.projectId ||
         config.title !== hydratedConfig.title ||
         config.pendingFirstPromptTitle !== hydratedConfig.pendingFirstPromptTitle ||
@@ -321,8 +342,9 @@ export class SessionManager {
     if (!this.restored) {
       this.restored = true
       this.scheduleBackgroundProjectMaintenance()
-      if (this.activeSessionId) {
-        void this.ensureSessionStarted(this.activeSessionId)
+
+      for (const config of this.getOrderedConfigs()) {
+        await this.ensureSessionStarted(config.id)
       }
     }
 
@@ -2634,8 +2656,21 @@ export class SessionManager {
   }
 
   private getOrderedProjects(): ProjectConfig[] {
+    const activeProjectId = this.activeSessionId
+      ? this.configs.get(this.activeSessionId)?.projectId ?? null
+      : null
+
     return Array.from(this.projects.values())
       .sort((left, right) => {
+        if (activeProjectId) {
+          if (left.id === activeProjectId) {
+            return -1
+          }
+          if (right.id === activeProjectId) {
+            return 1
+          }
+        }
+
         const lastRight = this.getProjectSortValue(right.id)
         const lastLeft = this.getProjectSortValue(left.id)
 
@@ -2650,6 +2685,15 @@ export class SessionManager {
     return Array.from(this.configs.values())
       .filter((config) => !projectId || config.projectId === projectId)
       .sort((left, right) => {
+        if (this.activeSessionId) {
+          if (left.id === this.activeSessionId) {
+            return -1
+          }
+          if (right.id === this.activeSessionId) {
+            return 1
+          }
+        }
+
         const lastRight = this.getSessionSortValue(right.id, right.updatedAt)
         const lastLeft = this.getSessionSortValue(left.id, left.updatedAt)
 
@@ -2875,6 +2919,10 @@ export class SessionManager {
       projects: Array.from(this.projects.values()),
       locations: Array.from(this.locations.values()),
       sessions: Array.from(this.configs.values()),
+      runtimes: Array.from(this.runtimes.values()).map((runtime) => ({
+        sessionId: runtime.sessionId,
+        lastActiveAt: runtime.lastActiveAt,
+      })),
       activeSessionId: this.activeSessionId,
     })
   }
