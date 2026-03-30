@@ -7,6 +7,7 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
   tokenizeCommand,
+  withCodexDangerousBypass,
 } from './codexCli'
 
 describe('codexCli', () => {
@@ -97,6 +98,22 @@ describe('codexCli', () => {
     expect(
       buildCodexResumeCommand('codex --oss --full-auto --model gpt', 'sess-1'),
     ).toBe('codex --oss --full-auto --model gpt resume sess-1')
+  })
+
+  it('rewrites full-auto sessions to the true bypass flag', () => {
+    expect(
+      withCodexDangerousBypass('codex --oss --full-auto --model gpt'),
+    ).toBe(
+      'codex --oss --model gpt --dangerously-bypass-approvals-and-sandbox',
+    )
+  })
+
+  it('inserts the bypass flag before resume arguments', () => {
+    expect(
+      withCodexDangerousBypass('codex resume sess-1'),
+    ).toBe(
+      'codex --dangerously-bypass-approvals-and-sandbox resume sess-1',
+    )
   })
 
   it('stops parsing at -- separator', () => {

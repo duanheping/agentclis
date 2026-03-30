@@ -49,6 +49,7 @@ import {
   buildCodexResumeCommand,
   extractCodexSessionMeta,
   supportsCodexSessionResume,
+  withCodexDangerousBypass,
 } from './codexCli'
 import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
@@ -884,11 +885,9 @@ export class SessionManager {
     }
 
     if (
-      provider === 'codex' &&
-      !command.includes('--dangerously-bypass-approvals-and-sandbox') &&
-      !command.includes('--full-auto')
+      provider === 'codex'
     ) {
-      return `${command} --full-auto`
+      return withCodexDangerousBypass(command) ?? command
     }
 
     return command

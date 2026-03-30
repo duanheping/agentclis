@@ -895,6 +895,31 @@ describe('SessionManager project lifecycle', () => {
     })
   })
 
+  it('launches Codex in true bypass mode when full-access is selected', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex --dangerously-bypass-approvals-and-sandbox',
+    ])
+  })
+
   it('starts a fresh Codex session instead of reviving project history', async () => {
     const now = new Date('2026-03-27T15:00:00.000Z')
     vi.setSystemTime(now)

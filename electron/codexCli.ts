@@ -58,6 +58,7 @@ export interface CodexSessionMeta {
 interface ParsedCodexCommand {
   executable: string
   globalOptions: string[]
+  trailingTokens: string[]
 }
 
 export function tokenizeCommand(command: string): string[] {
@@ -139,6 +140,27 @@ export function buildCodexResumeCommand(
   ])
 }
 
+export function withCodexDangerousBypass(command: string): string | null {
+  const parsed = parseCodexCommand(command)
+  if (!parsed) {
+    return null
+  }
+
+  const globalOptions = parsed.globalOptions.filter(
+    (token) => token !== '--full-auto',
+  )
+
+  if (!globalOptions.includes('--dangerously-bypass-approvals-and-sandbox')) {
+    globalOptions.push('--dangerously-bypass-approvals-and-sandbox')
+  }
+
+  return joinCommandTokens([
+    parsed.executable,
+    ...globalOptions,
+    ...parsed.trailingTokens,
+  ])
+}
+
 export function extractCodexSessionMeta(content: string): CodexSessionMeta | null {
   const match = content.match(
     /"type":"session_meta"[\s\S]*?"payload":\{"id":"([^"]+)","timestamp":"([^"]+)","cwd":"((?:\\.|[^"])*)"/u,
@@ -171,7 +193,11 @@ function parseCodexCommand(command: string): ParsedCodexCommand | null {
   for (let index = 1; index < tokens.length; index += 1) {
     const token = tokens[index]
     if (token === '--') {
-      break
+      return {
+        executable,
+        globalOptions,
+        trailingTokens: tokens.slice(index),
+      }
     }
 
     if (GLOBAL_FLAGS.has(token)) {
@@ -199,6 +225,7 @@ function parseCodexCommand(command: string): ParsedCodexCommand | null {
       return {
         executable,
         globalOptions,
+        trailingTokens: tokens.slice(index),
       }
     }
 
@@ -209,12 +236,14 @@ function parseCodexCommand(command: string): ParsedCodexCommand | null {
     return {
       executable,
       globalOptions,
+      trailingTokens: tokens.slice(index),
     }
   }
 
   return {
     executable,
     globalOptions,
+    trailingTokens: [],
   }
 }
 
