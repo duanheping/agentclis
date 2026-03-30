@@ -6,6 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TranscriptEvent } from '../src/shared/projectMemory'
+import type { SessionDataEvent } from '../src/shared/session'
 import type { ProjectLocationIdentity } from './projectIdentity'
 
 function normalizeMockPath(filePath: string): string {
@@ -1401,24 +1402,27 @@ describe('SessionManager project lifecycle', () => {
     terminal3Listener?.('output-from-session-3')
     terminal2Listener?.('output-from-session-2')
 
-    const session1Events = onData.mock.calls.filter(
-      ([event]: [{ sessionId: string }]) => event.sessionId === session1.config.id,
+    const dataEvents = onData.mock.calls.map(
+      ([event]) => event as SessionDataEvent,
     )
-    const session2Events = onData.mock.calls.filter(
-      ([event]: [{ sessionId: string }]) => event.sessionId === session2.config.id,
+    const session1Events = dataEvents.filter(
+      (event) => event.sessionId === session1.config.id,
     )
-    const session3Events = onData.mock.calls.filter(
-      ([event]: [{ sessionId: string }]) => event.sessionId === session3.config.id,
+    const session2Events = dataEvents.filter(
+      (event) => event.sessionId === session2.config.id,
+    )
+    const session3Events = dataEvents.filter(
+      (event) => event.sessionId === session3.config.id,
     )
 
     expect(session1Events).toHaveLength(1)
-    expect(session1Events[0]?.[0].chunk).toBe('output-from-session-1')
+    expect(session1Events[0]?.chunk).toBe('output-from-session-1')
 
     expect(session2Events).toHaveLength(1)
-    expect(session2Events[0]?.[0].chunk).toBe('output-from-session-2')
+    expect(session2Events[0]?.chunk).toBe('output-from-session-2')
 
     expect(session3Events).toHaveLength(1)
-    expect(session3Events[0]?.[0].chunk).toBe('output-from-session-3')
+    expect(session3Events[0]?.chunk).toBe('output-from-session-3')
   })
 
   it('ignores terminal data from a replaced terminal after session restart', async () => {
