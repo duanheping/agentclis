@@ -97,6 +97,7 @@ const CODEX_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
 const CODEX_SESSION_DISCOVERY_INTERVAL_MS = 750
 const CODEX_SESSION_DISCOVERY_ATTEMPTS = 24
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
+const HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT = 256
 const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
 const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
@@ -1063,6 +1064,7 @@ export class SessionManager {
         0,
         Math.min(...referenceTimestamps) - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
       ),
+      HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT,
     )
     const normalizedCwd = this.normalizePath(config.cwd)
     const defaultTitle = deriveSessionTitle(undefined, config.startupCommand, config.cwd)
@@ -1203,12 +1205,13 @@ export class SessionManager {
   private async listRecentExternalSessions(
     provider: 'codex' | 'copilot',
     sinceMs: number,
+    limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
   ): Promise<DetectedExternalSession[]> {
     if (provider === 'copilot') {
-      return this.listRecentCopilotSessions(sinceMs)
+      return this.listRecentCopilotSessions(sinceMs, limit)
     }
 
-    const candidateFiles = await this.listRecentCodexSessionFiles(sinceMs)
+    const candidateFiles = await this.listRecentCodexSessionFiles(sinceMs, limit)
     const sessions: DetectedExternalSession[] = []
 
     for (const filePath of candidateFiles) {
@@ -1223,6 +1226,7 @@ export class SessionManager {
 
   private async listRecentCopilotSessions(
     sinceMs: number,
+    limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
   ): Promise<DetectedExternalSession[]> {
     let entries
     try {
@@ -1267,7 +1271,7 @@ export class SessionManager {
     const sessions: DetectedExternalSession[] = []
     for (const candidate of candidates
       .sort((left, right) => right.modifiedAt - left.modifiedAt)
-      .slice(0, CODEX_SESSION_DISCOVERY_FILE_LIMIT)) {
+      .slice(0, limit)) {
       const sessionMeta = await this.readCopilotSessionMeta(candidate.workspaceFilePath)
       if (sessionMeta) {
         sessions.push(sessionMeta)
@@ -1277,7 +1281,10 @@ export class SessionManager {
     return sessions
   }
 
-  private async listRecentCodexSessionFiles(sinceMs: number): Promise<string[]> {
+  private async listRecentCodexSessionFiles(
+    sinceMs: number,
+    limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
+  ): Promise<string[]> {
     const dayDirectories = this.getCodexSessionDayDirectories(sinceMs)
     const candidates: Array<{
       filePath: string
@@ -1318,7 +1325,7 @@ export class SessionManager {
 
     return candidates
       .sort((left, right) => right.modifiedAt - left.modifiedAt)
-      .slice(0, CODEX_SESSION_DISCOVERY_FILE_LIMIT)
+      .slice(0, limit)
       .map((candidate) => candidate.filePath)
   }
 
