@@ -941,6 +941,115 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(2)
     })
   })
+
+  it('restores a historical Codex session even when newer transcripts push it past the recent-file window', async () => {
+    const createdAt = '2026-03-30T15:10:31.377Z'
+    const updatedAt = '2026-03-30T15:12:35.672Z'
+    const startedAt = new Date('2026-03-30T15:10:33.570Z')
+    vi.setSystemTime(new Date('2026-03-30T17:00:00.000Z'))
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt,
+          updatedAt,
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'inspect codex hook plugins',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt,
+          updatedAt,
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const targetSessionFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '30',
+      'rollout-target-session.jsonl',
+    )
+    mocks.setFile(
+      targetSessionFilePath,
+      [
+        `{"timestamp":"${startedAt.toISOString()}","type":"session_meta","payload":{"id":"019historical-codex-session","timestamp":"${startedAt.toISOString()}","cwd":"C:\\\\repo","originator":"codex_cli_rs","source":"cli"}}`,
+        '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect codex hook plugins"}]}}',
+      ].join('\n'),
+      startedAt.getTime(),
+    )
+
+    for (let index = 0; index < 40; index += 1) {
+      const decoyStartedAt = new Date(startedAt.getTime() + (index + 1) * 60_000)
+      const decoySessionFilePath = path.join(
+        os.homedir(),
+        '.codex',
+        'sessions',
+        '2026',
+        '03',
+        '30',
+        `rollout-decoy-session-${index}.jsonl`,
+      )
+      mocks.setFile(
+        decoySessionFilePath,
+        [
+          `{"timestamp":"${decoyStartedAt.toISOString()}","type":"session_meta","payload":{"id":"019decoy-session-${index}","timestamp":"${decoyStartedAt.toISOString()}","cwd":"C:\\\\other-${index}","originator":"codex_cli_rs","source":"cli"}}`,
+        ].join('\n'),
+        decoyStartedAt.getTime(),
+      )
+    }
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex resume 019historical-codex-session',
+    ])
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: {
+              provider: string
+              sessionId: string
+            }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toEqual(
+      expect.objectContaining({
+        provider: 'codex',
+        sessionId: '019historical-codex-session',
+      }),
+    )
+  })
 })
 
 describe('SessionManager project lifecycle', () => {
