@@ -7,9 +7,11 @@ import {
   type ProjectLocation,
   type ProjectMemoryCandidateKind,
   type ProjectMemoryScope,
+  type TranscriptEvent,
 } from '../src/shared/projectMemory'
 import type { ProjectConfig, SessionConfig } from '../src/shared/session'
 import type { SkillAiMergeAgent } from '../src/shared/skills'
+import { buildTranscriptEvidenceDigest } from './projectMemoryEvidence'
 import { loadProjectMemorySkill } from './projectMemorySkillLoader'
 import { parseProjectMemoryResponse } from './projectMemoryAgent'
 import {
@@ -21,6 +23,8 @@ import type { PreparedStructuredAgent } from './structuredAgentRunner'
 
 const MAX_PROJECT_SESSION_ANALYSIS_PROMPT_BYTES = 240_000
 const MAX_SESSION_CATALOG_BYTES = 100_000
+const MAX_SESSION_EVIDENCE_CATALOG_BYTES = 72_000
+const MAX_SESSION_EVIDENCE_BYTES = 1_400
 const MAX_TEXT_EXCERPT_BYTES = 16_000
 const AGENTS_CANDIDATES = ['AGENTS.md']
 const README_CANDIDATES = ['README.md', 'Readme.md', 'readme.md']
@@ -184,6 +188,74 @@ function formatSessionCatalog(
   return lines.join('\n')
 }
 
+async function readTranscriptEvents(
+  transcriptPath: string,
+): Promise<TranscriptEvent[]> {
+  try {
+    const content = await readFile(transcriptPath, 'utf8')
+    return content
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as TranscriptEvent]
+        } catch {
+          return []
+        }
+      })
+  } catch {
+    return []
+  }
+}
+
+async function formatSessionEvidenceCatalog(
+  sessions: HistoricalProjectSessionDescriptor[],
+  transcriptBaseRoot: string,
+): Promise<string> {
+  if (sessions.length === 0) {
+    return '(no transcript evidence available)'
+  }
+
+  const blocks: string[] = []
+  let usedBytes = 0
+
+  for (const descriptor of sessions) {
+    const transcript = await readTranscriptEvents(descriptor.transcriptPath)
+    const evidence = buildTranscriptEvidenceDigest(
+      transcript,
+      MAX_SESSION_EVIDENCE_BYTES,
+      4,
+    )
+    const transcriptPath = path
+      .relative(transcriptBaseRoot, descriptor.transcriptPath)
+      .replace(/\\/g, '/')
+    const block = [
+      `- ${descriptor.session.id} | title="${truncateUtf8(descriptor.session.title, 120)}" | location=${descriptor.location?.label ?? 'n/a'} | updatedAt=${descriptor.session.updatedAt} | events=${descriptor.transcriptEventCount} | transcript=${transcriptPath}`,
+      evidence
+        .split('\n')
+        .map((line) => `  ${line}`)
+        .join('\n'),
+    ].join('\n')
+    const separatorBytes = blocks.length > 0 ? 2 : 0
+    const nextBytes = Buffer.byteLength(block, 'utf8') + separatorBytes
+
+    if (blocks.length > 0 && usedBytes + nextBytes > MAX_SESSION_EVIDENCE_CATALOG_BYTES) {
+      const omitted = sessions.length - blocks.length
+      const prefix = `[additional session evidence omitted: ${omitted}]\n`
+      return truncateUtf8(
+        `${prefix}${blocks.join('\n\n')}`,
+        MAX_SESSION_EVIDENCE_CATALOG_BYTES,
+      )
+    }
+
+    blocks.push(block)
+    usedBytes += nextBytes
+  }
+
+  return blocks.join('\n\n')
+}
+
 export function buildPrompt(input: {
   project: ProjectConfig
   canonicalMemoryDirectory: string
@@ -192,6 +264,7 @@ export function buildPrompt(input: {
   agentsExcerpt: string | null
   readmeExcerpt: string | null
   skillGuidance: string | null
+  sessionEvidenceCatalog: string
 }): string {
   return truncateUtf8(
     [
@@ -203,6 +276,8 @@ export function buildPrompt(input: {
       'Consolidate repeated lessons into stronger, deduplicated memory.',
       'Prefer high-signal, project-specific guidance over generic process narration.',
       'If evidence is weak, omit the item.',
+      'When several sessions show failed approaches converging on one successful method, preserve that final method as durable memory.',
+      'Capture user corrections and repeated tool-choice convergence aggressively when they will prevent the agent from retrying the same wrong path.',
       '',
       'Task skill guidance:',
       input.skillGuidance ?? '(none found)',
@@ -211,6 +286,7 @@ export function buildPrompt(input: {
       '- Keep only durable facts, decisions, preferences, workflows, troubleshooting patterns, user-assist patterns, component workflows, conventions, debug approaches, and critical files.',
       '- Use relative repo paths when useful. Never include machine-local absolute paths in the output.',
       '- Do not record branch names, commit hashes, PR numbers, build numbers, temporary files, or historical progress status.',
+      '- It is valid to preserve a durable tool-choice preference or workflow, for example preferring a verified REST API path over gh CLI or MCP when repeated sessions establish that as the successful approach.',
       '- Treat the current canonical memory as material to improve and deduplicate, not text to repeat.',
       `Logical project title: ${input.project.title}`,
       `Canonical memory directory: ${input.canonicalMemoryDirectory}`,
@@ -225,6 +301,9 @@ export function buildPrompt(input: {
       '',
       'Stored sessions to review:',
       formatSessionCatalog(input.sessions, input.transcriptBaseRoot),
+      '',
+      'High-signal transcript evidence by session:',
+      input.sessionEvidenceCatalog,
     ].join('\n'),
     MAX_PROJECT_SESSION_ANALYSIS_PROMPT_BYTES,
   )
@@ -265,6 +344,10 @@ export class ProjectSessionHistoryAgentExtractor
       readFirstExistingExcerpt(rootPath, README_CANDIDATES),
       loadProjectMemorySkill('project-memory-sessions-analysis'),
     ])
+    const sessionEvidenceCatalog = await formatSessionEvidenceCatalog(
+      input.sessions,
+      input.transcriptBaseRoot,
+    )
 
     const rawOutput = await runStructuredAgent({
       agent: this.getAgent(),
@@ -274,6 +357,7 @@ export class ProjectSessionHistoryAgentExtractor
         agentsExcerpt,
         readmeExcerpt,
         skillGuidance: skill?.markdown ?? null,
+        sessionEvidenceCatalog,
       }),
       contextDirectories: [
         input.canonicalMemoryDirectory,
@@ -306,6 +390,10 @@ export class ProjectSessionHistoryAgentExtractor
       readFirstExistingExcerpt(rootPath, README_CANDIDATES),
       loadProjectMemorySkill('project-memory-sessions-analysis'),
     ])
+    const sessionEvidenceCatalog = await formatSessionEvidenceCatalog(
+      input.sessions,
+      input.transcriptBaseRoot,
+    )
 
     return await prepareStructuredAgent({
       agent: this.getAgent(),
@@ -315,6 +403,7 @@ export class ProjectSessionHistoryAgentExtractor
         agentsExcerpt,
         readmeExcerpt,
         skillGuidance: skill?.markdown ?? null,
+        sessionEvidenceCatalog,
       }),
       contextDirectories: [
         input.canonicalMemoryDirectory,

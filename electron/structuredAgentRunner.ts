@@ -5,6 +5,10 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type { SkillAiMergeAgent } from '../src/shared/skills'
+import {
+  buildQuotaFailureSummary,
+  detectQuotaFailure,
+} from './agentFailureSummary'
 
 const MAX_PROCESS_OUTPUT_BYTES = 4_000
 
@@ -88,6 +92,16 @@ async function runCommand(
       cleanupScript?.()
       if (code === 0) {
         resolve(stdout)
+        return
+      }
+
+      const combinedOutput = `${stderr}\n${stdout}`
+      if (detectQuotaFailure(combinedOutput)) {
+        reject(
+          new Error(
+            `${command} exited with code ${code ?? 'unknown'}. ${buildQuotaFailureSummary(command)}`,
+          ),
+        )
         return
       }
 
