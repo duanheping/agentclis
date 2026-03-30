@@ -1,3 +1,8 @@
+import {
+  buildQuotaFailureSummary,
+  detectQuotaFailure,
+} from './agentFailureSummary'
+
 const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'
 const DIM = '\x1b[2m'
@@ -29,6 +34,8 @@ interface AgentEvent {
  */
 export class AnalysisEventFormatter {
   private buffer = ''
+  private failureSummary: string | null = null
+  private emittedQuotaWarning = false
 
   /**
    * Feed raw PTY data and receive formatted terminal output.
@@ -47,6 +54,12 @@ export class AnalysisEventFormatter {
       const line = raw.replace(/\r$/, '')
       if (!line.trim()) {
         output += '\r\n'
+        continue
+      }
+
+      const normalizedRaw = this.tryFormatRawLine(line)
+      if (normalizedRaw !== null) {
+        output += normalizedRaw
         continue
       }
 
@@ -69,8 +82,16 @@ export class AnalysisEventFormatter {
     const rest = this.buffer.trim()
     this.buffer = ''
     if (!rest) return ''
+    const normalizedRaw = this.tryFormatRawLine(rest)
+    if (normalizedRaw !== null) {
+      return normalizedRaw
+    }
     const formatted = this.tryFormatJsonLine(rest)
     return formatted ?? `${rest}\r\n`
+  }
+
+  getFailureSummary(): string | null {
+    return this.failureSummary
   }
 
   private tryFormatJsonLine(line: string): string | null {
@@ -85,6 +106,20 @@ export class AnalysisEventFormatter {
 
     if (!event.type) return null
     return this.formatEvent(event)
+  }
+
+  private tryFormatRawLine(line: string): string | null {
+    if (!detectQuotaFailure(line)) {
+      return null
+    }
+
+    this.failureSummary = buildQuotaFailureSummary('analysis agent')
+    if (this.emittedQuotaWarning) {
+      return ''
+    }
+
+    this.emittedQuotaWarning = true
+    return `\r\n${YELLOW}${BOLD}${this.failureSummary}${RESET}\r\n`
   }
 
   private formatEvent(event: AgentEvent): string {

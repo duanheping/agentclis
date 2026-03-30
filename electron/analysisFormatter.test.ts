@@ -67,6 +67,24 @@ describe('AnalysisEventFormatter', () => {
     expect(out).toContain('PS C:\\Users> some prompt text')
   })
 
+  it('normalizes quota exhaustion lines into a concise warning', () => {
+    const fmt = new AnalysisEventFormatter()
+    const out = fmt.push('ERROR: limit exceeded, 额度用完了\n')
+    expect(out).toContain('Analysis agent quota exceeded during structured analysis.')
+    expect(out).not.toContain('额度用完了')
+    expect(fmt.getFailureSummary()).toBe(
+      'Analysis agent quota exceeded during structured analysis. Retry later or switch agents.',
+    )
+  })
+
+  it('suppresses repeated quota exhaustion lines after the first warning', () => {
+    const fmt = new AnalysisEventFormatter()
+    const first = fmt.push('ERROR: limit exceeded, 额度用完了\n')
+    const second = fmt.push('ERROR: limit exceeded, 额度用完了\n')
+    expect(first).toContain('quota exceeded')
+    expect(second).toBe('')
+  })
+
   it('handles partial chunks by buffering until newline', () => {
     const fmt = new AnalysisEventFormatter()
     const event = makeEvent('assistant.turn_start', { turnId: '5' })

@@ -11,6 +11,7 @@ import type {
   ProjectMemoryExtractor,
   ProjectMemoryExtractionResult,
 } from './projectMemoryManager'
+import { buildTranscriptEvidenceDigest } from './projectMemoryEvidence'
 import { extractJsonObject, runStructuredAgent, truncateUtf8 } from './structuredAgentRunner'
 
 const VALID_CANDIDATE_KINDS = new Set(PROJECT_MEMORY_CANDIDATE_KINDS)
@@ -18,6 +19,7 @@ const VALID_CANDIDATE_SCOPES = new Set(PROJECT_MEMORY_SCOPES)
 export const MAX_PROJECT_MEMORY_PROMPT_BYTES = 240_000
 const MAX_TRANSCRIPT_DIGEST_BYTES = 120_000
 const MAX_TRANSCRIPT_EVENT_PREVIEW_BYTES = 90_000
+const MAX_TRANSCRIPT_EVIDENCE_BYTES = 24_000
 const MAX_TRANSCRIPT_EVENT_PREVIEW_LINES = 160
 const MAX_TRANSCRIPT_EVENT_PREVIEW_CHARS = 320
 
@@ -183,6 +185,10 @@ export function buildPrompt(
     input.transcript,
     MAX_TRANSCRIPT_EVENT_PREVIEW_BYTES,
   )
+  const transcriptEvidence = buildTranscriptEvidenceDigest(
+    input.transcript,
+    MAX_TRANSCRIPT_EVIDENCE_BYTES,
+  )
 
   return truncateUtf8(
     [
@@ -193,6 +199,8 @@ export function buildPrompt(
       'Do not modify the repository.',
       'Prefer high-signal, project-specific guidance over generic summaries.',
       'If evidence is weak, omit the item.',
+      'When the session shows multiple attempted approaches, preserve the final working method and why it should be preferred.',
+      'Capture user corrections and tool-choice convergence aggressively when they are likely to matter again.',
       'Memory kinds:',
       '- fact: stable verifiable project facts that will stay useful',
       '- decision: technical choices, constraints, or chosen approaches',
@@ -209,6 +217,7 @@ export function buildPrompt(
       '- Use relative repo paths when useful. Never include machine-specific absolute paths.',
       '- Do not record branch names, temporary worktrees, or ephemeral environment details.',
       '- Do not record ticket-specific progress state such as numbered PRs, current branch/commit state, force-push history, or Jenkins/build status updates.',
+      '- It is valid to record a durable workflow or preference such as "prefer GitHub REST API for PR creation over gh CLI or MCP" when the session establishes that as the repeatable successful path.',
       '- sourceEventIds may be empty if the item mainly comes from repo inspection rather than a specific transcript event.',
       '- Use scope="location" only if the guidance is specific to this local checkout.',
       `Logical project title: ${input.project.title}`,
@@ -218,6 +227,9 @@ export function buildPrompt(
       `Known remote fingerprint: ${input.project.identity?.remoteFingerprint ?? 'n/a'}`,
       'Transcript digest:',
       transcriptDigest,
+      '',
+      'High-signal evidence from across the session:',
+      transcriptEvidence,
       '',
       'Transcript events with ids:',
       transcriptPreview,

@@ -127,6 +127,7 @@ const windowsCommandPromptManager = new WindowsCommandPromptManager({
 let analysisWindow: BrowserWindow | null = null
 let analysisTerminal: IPty | null = null
 let analysisFormatter: AnalysisEventFormatter | null = null
+let analysisFailureSummary: string | null = null
 let analysisContext: {
   kind: 'architecture' | 'sessions'
   tempRoot: string
@@ -235,6 +236,7 @@ function launchNextAnalysisProject(kind: 'architecture' | 'sessions'): void {
 
   analysisTerminal = terminal
   analysisFormatter = new AnalysisEventFormatter()
+  analysisFailureSummary = null
 
   terminal.onData((chunk) => {
     const formatted = analysisFormatter ? analysisFormatter.push(chunk) : chunk
@@ -246,6 +248,7 @@ function launchNextAnalysisProject(kind: 'architecture' | 'sessions'): void {
   terminal.onExit(({ exitCode }) => {
     if (analysisFormatter) {
       const remaining = analysisFormatter.flush()
+      analysisFailureSummary = analysisFormatter.getFailureSummary()
       if (remaining) {
         analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalData, { chunk: remaining })
       }
@@ -268,6 +271,7 @@ function closeAnalysisTerminal(): void {
     analysisTerminal = null
   }
   analysisFormatter = null
+  analysisFailureSummary = null
   if (analysisContext) {
     void cleanupStructuredAgentTemp(analysisContext.tempRoot)
     analysisContext = null
@@ -290,7 +294,9 @@ async function finalizeAnalysis(
     if (exitCode !== 0) {
       // Non-zero exit for one project — log but continue with remaining
       analysisWindow?.webContents.send(IPC_CHANNELS.analysisTerminalData, {
-        chunk: `\r\n\x1b[33mAgent exited with code ${exitCode} for project "${item.project.title}". Skipping.\x1b[0m\r\n`,
+        chunk: analysisFailureSummary
+          ? `\r\n\x1b[33m${analysisFailureSummary} Project "${item.project.title}" was skipped.\x1b[0m\r\n`
+          : `\r\n\x1b[33mAgent exited with code ${exitCode} for project "${item.project.title}". Skipping.\x1b[0m\r\n`,
       })
     } else {
       let rawOutput: string
@@ -327,6 +333,7 @@ async function finalizeAnalysis(
       chunk: `\r\n\x1b[31mFailed to finalize project "${item.project.title}": ${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`,
     })
   } finally {
+    analysisFailureSummary = null
     void cleanupStructuredAgentTemp(ctx.tempRoot)
   }
 
