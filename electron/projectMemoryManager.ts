@@ -288,6 +288,67 @@ function normalizeCandidateContent(value: string): string {
   return normalizeWhitespace(value)
 }
 
+function normalizeCandidateComparisonText(value: string): string {
+  return normalizeCandidateContent(value)
+    .toLowerCase()
+    .replace(/[`'"]/g, '')
+    .replace(/[^a-z0-9/_<>:-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function tokenizeCandidateComparisonText(value: string): Set<string> {
+  return new Set(
+    normalizeCandidateComparisonText(value)
+      .split(' ')
+      .filter((token) => token.length >= 3),
+  )
+}
+
+function isCandidateAnchorToken(token: string): boolean {
+  return /[./_<>:-]/.test(token) || /\.(?:c|h|ts|tsx|js|jsx|json|md|arxml|bat|gpj|dpa)$/iu.test(token)
+}
+
+function areCandidateContentsNearDuplicate(left: string, right: string): boolean {
+  const normalizedLeft = normalizeCandidateComparisonText(left)
+  const normalizedRight = normalizeCandidateComparisonText(right)
+  if (!normalizedLeft || !normalizedRight) {
+    return false
+  }
+
+  if (normalizedLeft === normalizedRight) {
+    return true
+  }
+
+  const shorter =
+    normalizedLeft.length <= normalizedRight.length ? normalizedLeft : normalizedRight
+  const longer =
+    normalizedLeft.length > normalizedRight.length ? normalizedLeft : normalizedRight
+  if (shorter.length >= 48 && longer.includes(shorter)) {
+    return true
+  }
+
+  const leftTokens = tokenizeCandidateComparisonText(normalizedLeft)
+  const rightTokens = tokenizeCandidateComparisonText(normalizedRight)
+  if (leftTokens.size < 4 || rightTokens.size < 4) {
+    return false
+  }
+
+  let intersection = 0
+  let hasAnchorOverlap = false
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      intersection += 1
+      if (isCandidateAnchorToken(token)) {
+        hasAnchorOverlap = true
+      }
+    }
+  }
+
+  const overlap = intersection / Math.max(leftTokens.size, rightTokens.size)
+  return hasAnchorOverlap && overlap >= 0.82
+}
+
 function isLowSignalCandidate(value: string): boolean {
   const normalized = normalizeCandidateContent(value).toLowerCase()
   if (!normalized) {
@@ -794,25 +855,6 @@ function humanizeCandidateKey(value: string): string {
   return normalized.replace(/\b\w/g, (match) => match.toUpperCase())
 }
 
-function buildCandidateListSection(
-  sections: string[],
-  title: string,
-  items: ProjectMemoryCandidate[],
-  limit = items.length,
-): void {
-  sections.push(`## ${title}`)
-  const activeItems = getActiveCandidates(items).slice(0, limit)
-  if (activeItems.length === 0) {
-    sections.push('No entries yet.', '')
-    return
-  }
-
-  for (const item of activeItems) {
-    sections.push(`- ${item.content}`)
-  }
-  sections.push('')
-}
-
 function buildFocusedMemoryMarkdown(input: {
   projectTitle: string
   title: string
@@ -825,7 +867,10 @@ function buildFocusedMemoryMarkdown(input: {
     input.intro,
     '',
   ]
-  const activeItems = getActiveCandidates(input.items)
+  const activeItems = selectDistinctCandidates(
+    getActiveCandidates(input.items),
+    getActiveCandidates(input.items).length,
+  )
 
   if (activeItems.length === 0) {
     sections.push('No entries yet.', '')
@@ -904,6 +949,33 @@ function buildHistoricalSessionsAnalysisMarkdown(input: {
   return `${sections.join('\n').trim()}\n`
 }
 
+function selectDistinctCandidates(
+  items: ProjectMemoryCandidate[],
+  limit: number,
+  existingContent: string[] = [],
+): ProjectMemoryCandidate[] {
+  const selected: ProjectMemoryCandidate[] = []
+  const seenContents = [...existingContent]
+
+  for (const item of items) {
+    if (
+      seenContents.some((content) =>
+        areCandidateContentsNearDuplicate(content, item.content),
+      )
+    ) {
+      continue
+    }
+
+    selected.push(item)
+    seenContents.push(item.content)
+    if (selected.length >= limit) {
+      break
+    }
+  }
+
+  return selected
+}
+
 function buildMemoryMarkdown(
   projectTitle: string,
   snapshot: ProjectMemorySnapshot,
@@ -914,7 +986,7 @@ function buildMemoryMarkdown(
     `# ${projectTitle}`,
     '',
     '## Memory Map',
-    'Start with the focused docs that match the task:',
+    'Start with the focused docs that match the task. Keep this file as a quick index, not the full playbook:',
   ]
 
   if (architectureSnapshot) {
@@ -928,7 +1000,7 @@ function buildMemoryMarkdown(
     }
 
     sections.push(
-      `- \`${bucket.docFileName}\`: ${bucket.docDescription ?? bucket.sectionTitle}`,
+      `- \`${bucket.docFileName}\`: ${bucket.docDescription ?? bucket.sectionTitle} (${items.length} item${items.length === 1 ? '' : 's'})`,
     )
   }
 
@@ -954,20 +1026,30 @@ function buildMemoryMarkdown(
     )
   }
 
-  buildCandidateListSection(sections, 'Decisions', snapshot.decisions, 6)
-  buildCandidateListSection(sections, 'Project Conventions', snapshot.projectConventions, 6)
-  buildCandidateListSection(sections, 'Component Workflows', snapshot.componentWorkflows, 4)
-  buildCandidateListSection(
-    sections,
-    'Troubleshooting Highlights',
-    snapshot.troubleshootingPatterns,
-    4,
-  )
-  buildCandidateListSection(sections, 'Debug Playbook', snapshot.debugApproaches, 4)
-  buildCandidateListSection(sections, 'Critical Files', snapshot.criticalFiles, 6)
-  buildCandidateListSection(sections, 'Task Workflows', snapshot.workflows, 4)
-  buildCandidateListSection(sections, 'Preferences', snapshot.preferences, 4)
-  buildCandidateListSection(sections, 'Facts', snapshot.facts, 4)
+  const seenHighlights: string[] = []
+  const addHighlightSection = (
+    title: string,
+    items: ProjectMemoryCandidate[],
+    limit: number,
+  ) => {
+    sections.push(`## ${title}`)
+    const selected = selectDistinctCandidates(getActiveCandidates(items), limit, seenHighlights)
+    if (selected.length === 0) {
+      sections.push('No entries yet.', '')
+      return
+    }
+
+    for (const item of selected) {
+      sections.push(`- ${item.content}`)
+      seenHighlights.push(item.content)
+    }
+    sections.push('')
+  }
+
+  addHighlightSection('Decisions', snapshot.decisions, 3)
+  addHighlightSection('Project Conventions', snapshot.projectConventions, 3)
+  addHighlightSection('Critical Files', snapshot.criticalFiles, 3)
+  addHighlightSection('Task Workflows', snapshot.workflows, 2)
 
   return `${sections.join('\n').trim()}\n`
 }
@@ -975,6 +1057,10 @@ function buildMemoryMarkdown(
 function buildArchitectureMarkdown(
   snapshot: ProjectArchitectureSnapshot,
 ): string {
+  if (isAutosarArchitectureSnapshot(snapshot)) {
+    return buildAutosarArchitectureMarkdown(snapshot)
+  }
+
   const moduleNameById = new Map(
     snapshot.modules.map((module) => [module.id, module.name]),
   )
@@ -1072,6 +1158,165 @@ function buildArchitectureMarkdown(
     sections.push('No cross-module invariants recorded yet.', '')
   } else {
     for (const invariant of snapshot.invariants) {
+      sections.push(`- ${invariant.statement}`)
+    }
+    sections.push('')
+  }
+
+  sections.push('## Glossary')
+  if (snapshot.glossary.length === 0) {
+    sections.push('No glossary terms recorded yet.', '')
+  } else {
+    for (const entry of snapshot.glossary) {
+      sections.push(`- ${entry.term}: ${entry.meaning}`)
+    }
+    sections.push('')
+  }
+
+  return `${sections.join('\n').trim()}\n`
+}
+
+function isAutosarArchitectureSnapshot(
+  snapshot: ProjectArchitectureSnapshot,
+): boolean {
+  return snapshot.modules.some((module) => module.id.startsWith('autosar-'))
+}
+
+function appendModuleSummary(
+  sections: string[],
+  module: ArchitectureModuleCard | undefined,
+  moduleNameById: Map<string, string>,
+): void {
+  if (!module) {
+    sections.push('No module recorded yet.', '')
+    return
+  }
+
+  sections.push(`### ${module.name}`)
+  sections.push(`- Paths: ${module.paths.length > 0 ? module.paths.join(', ') : 'n/a'}`)
+  sections.push(`- Responsibility: ${module.responsibility}`)
+  if (module.owns.length > 0) {
+    sections.push(`- Owns: ${module.owns.join('; ')}`)
+  }
+  if (module.dependsOn.length > 0) {
+    sections.push(
+      `- Depends on: ${module.dependsOn
+        .map((moduleId) => moduleNameById.get(moduleId) ?? moduleId)
+        .join(', ')}`,
+    )
+  }
+  if (module.publicInterfaces.length > 0) {
+    sections.push(`- Entry points: ${module.publicInterfaces.join(', ')}`)
+  }
+  if (module.keyTypes.length > 0) {
+    sections.push(`- Key facts: ${module.keyTypes.join('; ')}`)
+  }
+  if (module.changeGuidance.length > 0) {
+    sections.push(`- Change guidance: ${module.changeGuidance.join('; ')}`)
+  }
+  if (module.testLocations.length > 0) {
+    sections.push(`- Tests: ${module.testLocations.join(', ')}`)
+  }
+  sections.push('')
+}
+
+function buildAutosarArchitectureMarkdown(
+  snapshot: ProjectArchitectureSnapshot,
+): string {
+  const moduleNameById = new Map(
+    snapshot.modules.map((module) => [module.id, module.name]),
+  )
+  const moduleById = new Map(
+    snapshot.modules.map((module) => [module.id, module]),
+  )
+  const userModules = snapshot.modules.filter((module) =>
+    [
+      'autosar-user-source-root',
+      'autosar-vmcu-framework',
+      'autosar-diagnostics',
+      'autosar-wake-management',
+      'autosar-communication-hal',
+      'autosar-flash-security',
+    ].includes(module.id),
+  )
+  const boundaryModules = snapshot.modules.filter((module) =>
+    ['autosar-generated-platform', 'autosar-tooling-and-third-party'].includes(
+      module.id,
+    ),
+  )
+  const sections: string[] = [
+    `# ${snapshot.title} Architecture`,
+    '',
+    '## System Overview',
+    snapshot.systemOverview || 'No architecture overview available yet.',
+    '',
+    '## Build System',
+  ]
+
+  appendModuleSummary(
+    sections,
+    moduleById.get('autosar-build-entrypoints'),
+    moduleNameById,
+  )
+
+  sections.push('## Variant Map')
+  appendModuleSummary(
+    sections,
+    moduleById.get('autosar-variant-layout'),
+    moduleNameById,
+  )
+
+  sections.push('## User Code Modules')
+  if (userModules.length === 0) {
+    sections.push('No user-code modules recorded yet.', '')
+  } else {
+    for (const module of userModules) {
+      appendModuleSummary(sections, module, moduleNameById)
+    }
+  }
+
+  sections.push('## Vendor And Generated Boundaries')
+  if (boundaryModules.length === 0) {
+    sections.push('No generated or vendor-owned boundaries recorded yet.', '')
+  } else {
+    for (const module of boundaryModules) {
+      appendModuleSummary(sections, module, moduleNameById)
+    }
+  }
+
+  sections.push('## Interaction Flow')
+  const interactions = selectRelevantInteractions(
+    snapshot.interactions,
+    snapshot.modules.map((module) => module.id),
+  )
+  if (interactions.length === 0) {
+    sections.push('No interaction cards available yet.', '')
+  } else {
+    for (const interaction of interactions) {
+      const fromName = moduleNameById.get(interaction.from) ?? interaction.from
+      const toName = moduleNameById.get(interaction.to) ?? interaction.to
+      sections.push(
+        `- ${fromName} -> ${toName} via ${interaction.via}: ${interaction.purpose}`,
+      )
+      sections.push(`  Trigger: ${interaction.trigger}`)
+      if (interaction.failureModes.length > 0) {
+        sections.push(`  Failure modes: ${interaction.failureModes.join('; ')}`)
+      }
+      if (interaction.notes.length > 0) {
+        sections.push(`  Notes: ${interaction.notes.join('; ')}`)
+      }
+    }
+    sections.push('')
+  }
+
+  sections.push('## Edit Boundaries')
+  const invariants = snapshot.invariants.filter((invariant) =>
+    invariant.relatedModules.some((moduleId) => moduleNameById.has(moduleId)),
+  )
+  if (invariants.length === 0) {
+    sections.push('No cross-module invariants recorded yet.', '')
+  } else {
+    for (const invariant of invariants) {
       sections.push(`- ${invariant.statement}`)
     }
     sections.push('')
@@ -1720,7 +1965,19 @@ export class ProjectMemoryManager {
         continue
       }
 
-      for (const entry of sameKeyEntries.filter((item) => item.status === 'active')) {
+      const conflictingEntries = next.filter(
+        (entry) =>
+          entry.kind === candidate.kind &&
+          entry.scope === candidate.scope &&
+          entry.locationId === candidate.locationId &&
+          entry.status === 'active' &&
+          (
+            entry.key === candidate.key ||
+            areCandidateContentsNearDuplicate(entry.content, candidate.content)
+          ),
+      )
+
+      for (const entry of conflictingEntries) {
         entry.status = 'conflicted'
         entry.updatedAt = candidate.updatedAt
       }

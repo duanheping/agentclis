@@ -208,6 +208,47 @@ async function createArchitectureFixture(): Promise<string> {
   return repoRoot
 }
 
+async function createAutosarArchitectureFixture(): Promise<string> {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-autosar-fixture-'))
+  tempRoots.push(repoRoot)
+
+  const files = new Map<string, string>([
+    ['Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.bat', '@echo off\n'],
+    ['Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.gpj', 'project ECG2_VMCU\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Vmcu/VmcuToken.c', 'void VmcuToken(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Diag/DiagInboundApp.c', 'void DiagInboundApp(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Wm/Wm.c', 'void Wm(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Can/CanTpWrapper.c', 'void CanTpWrapper(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Cdd/UartCdd.c', 'void UartCdd(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Ipc_Hal/Uart/UartIpc.c', 'void UartIpc(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/Flash/OTA_Flash.c', 'void OTA_Flash(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Source/hse_driver/hse_comm.c', 'void hse_comm(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/Include/Vmcu/VmcuToken.h', 'void VmcuToken(void);\n'],
+    ['Applications/SipAddon/StartApplication/Appl/GenData_P708_MY23/Rte.c', 'void Rte_Start(void) {}\n'],
+    ['Applications/SipAddon/StartApplication/Appl/ECG2_VMCU_P708_MY23/build.log', 'ok\n'],
+    ['Applications/SipAddon/StartApplication/Config_P708_MY23/ECUC/Can_ecuc.arxml', '<AUTOSAR></AUTOSAR>\n'],
+    ['Applications/SipAddon/StartApplication/ECG_CAN_ETH_P708_MY23.dpa', '<dpa />\n'],
+    ['BSW/BswInit.c', 'void BswInit(void) {}\n'],
+    ['BSWMD/BswInit.arxml', '<ECUC></ECUC>\n'],
+    ['DaVinciConfigurator/project.dpa', '<dpa />\n'],
+    ['Generators/generate.bat', '@echo off\n'],
+    ['Tools/helper.ps1', 'Write-Host test\n'],
+    ['ThirdParty/vector/lib.c', 'void lib(void) {}\n'],
+    ['vpconfig/variant.ecuc.arxml', '<AUTOSAR></AUTOSAR>\n'],
+    ['README.md', 'AUTOSAR ECU repository for generated BSW, variant configuration, and VMCU application integration.\n'],
+  ])
+
+  await Promise.all(
+    Array.from(files.entries()).map(async ([relativePath, content]) => {
+      const filePath = path.join(repoRoot, relativePath)
+      await mkdir(path.dirname(filePath), { recursive: true })
+      await writeFile(filePath, content, 'utf8')
+    }),
+  )
+
+  return repoRoot
+}
+
 describe('ProjectMemoryManager', () => {
   afterEach(async () => {
     await Promise.all(tempRoots.splice(0).map((tempRoot) => rm(tempRoot, { recursive: true, force: true })))
@@ -429,6 +470,69 @@ describe('ProjectMemoryManager', () => {
     await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.toContain(
       '`troubleshooting.md`',
     )
+    await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.not.toContain(
+      'Session creation flows from renderer request to SessionManager',
+    )
+    await expect(readFile(path.join(memoryRoot, 'memory.md'), 'utf8')).resolves.not.toContain(
+      'assembleContext output',
+    )
+  })
+
+  it('renders AUTOSAR architecture markdown with build, variant, user-code, and boundary sections', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createAutosarArchitectureFixture()
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async () => ({
+        summary: 'Captured AUTOSAR architecture memory.',
+        candidates: [],
+      }),
+    })
+
+    await manager.captureSession({
+      project: {
+        ...buildProjectAt(repoRoot),
+        title: 'msar43_s32g',
+        identity: {
+          repoRoot,
+          gitCommonDir: path.join(repoRoot, '.git'),
+          remoteFingerprint: 'github.com/ford/msar43_s32g',
+        },
+      },
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
+      transcript: buildTranscript(),
+    })
+
+    const memoryRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'remote-github.com-ford-msar43_s32g',
+    )
+    const architectureMarkdown = await readFile(
+      path.join(memoryRoot, 'architecture.md'),
+      'utf8',
+    )
+
+    expect(architectureMarkdown).toContain('## Build System')
+    expect(architectureMarkdown).toContain('## Variant Map')
+    expect(architectureMarkdown).toContain('## User Code Modules')
+    expect(architectureMarkdown).toContain('## Vendor And Generated Boundaries')
+    expect(architectureMarkdown).toContain('## Interaction Flow')
+    expect(architectureMarkdown).toContain(
+      'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.bat',
+    )
+    expect(architectureMarkdown).toContain(
+      'Applications/SipAddon/StartApplication/Config_P708_MY23',
+    )
+    expect(architectureMarkdown).toContain(
+      'Applications/SipAddon/StartApplication/Appl/Source/Diag',
+    )
+    expect(architectureMarkdown).toContain(
+      'Generated AUTOSAR platform and BSW',
+    )
+    expect(architectureMarkdown).not.toContain('## Modules')
   })
 
   it('assembles a short bootstrap context from canonical memory files', async () => {
@@ -650,6 +754,89 @@ describe('ProjectMemoryManager', () => {
     await expect(
       readFile(path.join(sharedRoot, 'project.json'), 'utf8'),
     ).resolves.toContain('"title": "agenclis"')
+  })
+
+  it('conflicts stale near-duplicate guidance when a corrected command supersedes it', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async (input: {
+        project: ProjectConfig
+        location: ProjectLocation | null
+        session: SessionConfig
+        transcript: TranscriptEvent[]
+        normalizedTranscript: string
+      }) => ({
+        summary: 'Bench command guidance was corrected.',
+        candidates: [
+          {
+            kind: 'debug-approach' as const,
+            scope: 'project' as const,
+            key:
+              input.session.id === 'session-1'
+                ? 'bench-hse-img-wrong'
+                : 'bench-hse-img-correct',
+            content:
+              input.session.id === 'session-1'
+                ? 'Run sys hse_img from the bench command session to inspect the HSE image.'
+                : 'Run >sys hse_img from the bench command session to inspect the HSE image.',
+            confidence: 0.94,
+            sourceEventIds: ['event-1'],
+          },
+        ],
+      }),
+    })
+
+    await manager.captureSession({
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
+      transcript: buildTranscript(),
+    })
+    await manager.captureSession({
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: {
+        ...buildSessionAt(repoRoot),
+        id: 'session-2',
+      },
+      transcript: buildTranscript().map((event) => ({
+        ...event,
+        id: event.id === 'event-1' ? 'event-3' : 'event-4',
+        sessionId: 'session-2',
+      })),
+    })
+
+    const snapshot = await manager.readSnapshot(buildProjectAt(repoRoot))
+    const activeDebugApproaches = snapshot.debugApproaches.filter(
+      (candidate) => candidate.status === 'active',
+    )
+
+    expect(activeDebugApproaches).toHaveLength(1)
+    expect(activeDebugApproaches[0]?.content).toContain('>sys hse_img')
+    expect(snapshot.debugApproaches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content:
+            'Run sys hse_img from the bench command session to inspect the HSE image.',
+          status: 'conflicted',
+        }),
+      ]),
+    )
+
+    const memoryRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'remote-github.com-openai-agenclis',
+    )
+    await expect(readFile(path.join(memoryRoot, 'debug-playbook.md'), 'utf8')).resolves.toContain(
+      'Run >sys hse_img from the bench command session',
+    )
+    await expect(readFile(path.join(memoryRoot, 'debug-playbook.md'), 'utf8')).resolves.not.toContain(
+      'Run sys hse_img from the bench command session to inspect the HSE image.',
+    )
   })
 
   it('refreshes stored historical memory before transcript backfill', async () => {
@@ -904,8 +1091,6 @@ describe('ProjectMemoryManager', () => {
   it('composite scoring ranks high-confidence recent entries above low-confidence old entries', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)
-    const recentTimestamp = new Date().toISOString()
-    const oldTimestamp = '2024-01-01T00:00:00.000Z'
     const manager = new ProjectMemoryManager(() => libraryRoot, {
       extract: async () => ({
         summary: 'Session with mixed confidence entries.',
