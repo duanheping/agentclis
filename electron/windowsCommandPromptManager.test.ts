@@ -20,11 +20,13 @@ const mocks = vi.hoisted(() => {
   })
 
   return {
+    killTerminalProcessTree: vi.fn(),
     prompts,
     spawn,
     reset: () => {
       nextPid = 2000
       prompts.length = 0
+      mocks.killTerminalProcessTree.mockReset()
       spawn.mockReset()
       spawn.mockImplementation(() => {
         const prompt = createPrompt()
@@ -34,6 +36,10 @@ const mocks = vi.hoisted(() => {
     },
   }
 })
+
+vi.mock('./ptyProcessTree', () => ({
+  killTerminalProcessTree: mocks.killTerminalProcessTree,
+}))
 
 vi.mock('node:module', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:module')>()
@@ -80,7 +86,8 @@ describe('WindowsCommandPromptManager', () => {
 
     manager.close('session-a')
 
-    expect(mocks.prompts[0].kill).toHaveBeenCalledTimes(1)
+    expect(mocks.killTerminalProcessTree).toHaveBeenCalledTimes(1)
+    expect(mocks.killTerminalProcessTree).toHaveBeenCalledWith(mocks.prompts[0])
     expect(manager.listOpenSessionIds()).toEqual([])
     expect(onExit).not.toHaveBeenCalled()
   })

@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     createProjectSessionWorktree,
+    killTerminalProcessTree: vi.fn(),
     terminals,
     spawn,
     getFile: (filePath: string) => files.get(filePath)?.content,
@@ -62,6 +63,7 @@ const mocks = vi.hoisted(() => {
       nextPid = 1000
       files.clear()
       terminals.length = 0
+      mocks.killTerminalProcessTree.mockReset()
       spawn.mockReset()
       spawn.mockImplementation(() => {
         const terminal = createTerminal()
@@ -76,6 +78,10 @@ const mocks = vi.hoisted(() => {
     },
   }
 })
+
+vi.mock('./ptyProcessTree', () => ({
+  killTerminalProcessTree: mocks.killTerminalProcessTree,
+}))
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -1102,7 +1108,7 @@ describe('SessionManager project lifecycle', () => {
     vi.runOnlyPendingTimers()
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
 
-    manager.closeSession(session.config.id)
+    await manager.closeSession(session.config.id)
 
     expect(manager.listSessions()).toEqual({
       projects: [
@@ -1117,6 +1123,8 @@ describe('SessionManager project lifecycle', () => {
       ],
       activeSessionId: null,
     })
+    expect(mocks.killTerminalProcessTree).toHaveBeenCalledTimes(1)
+    expect(mocks.killTerminalProcessTree).toHaveBeenCalledWith(mocks.terminals[0])
   })
 
   it('launches Codex in true bypass mode when full-access is selected', async () => {

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 
 import type { SessionDataEvent, SessionExitMeta } from '../src/shared/session'
+import { killTerminalProcessTree } from './ptyProcessTree'
 import { resolveCommandPromptCommand } from './windowsShell'
 
 type IPty = import('node-pty').IPty
@@ -85,7 +86,7 @@ export class WindowsCommandPromptManager {
     this.prompts.delete(sessionId)
 
     try {
-      prompt.kill()
+      killTerminalProcessTree(prompt)
     } catch {
       this.suppressedExit.delete(sessionId)
     }
