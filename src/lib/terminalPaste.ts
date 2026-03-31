@@ -282,6 +282,10 @@ export function attachPlainTextPasteHandler(
   // after the user has already moved on (e.g. pressed Enter to submit).
   let activePasteToken: object | null = null
 
+  function invalidatePasteToken(): void {
+    activePasteToken = null
+  }
+
   function createPasteToken(): object {
     const token = {}
     activePasteToken = token
@@ -294,6 +298,7 @@ export function attachPlainTextPasteHandler(
 
   const handlePaste = (event: Event) => {
     const pasteEvent = event as ClipboardEvent
+    invalidatePasteToken()
     const text = extractClipboardText(pasteEvent.clipboardData)
 
     if (text !== null) {
@@ -336,6 +341,7 @@ export function attachPlainTextPasteHandler(
 
   const handleDrop = (event: Event) => {
     const dragEvent = event as DragEvent
+    invalidatePasteToken()
     if (hasFileTransferPayload(dragEvent.dataTransfer)) {
       dragEvent.preventDefault()
       dragEvent.stopPropagation()
@@ -371,7 +377,12 @@ export function attachPlainTextPasteHandler(
   const handleKeyDown = (event: Event) => {
     const keyboardEvent = event as KeyboardEvent
 
-    if (isCopyShortcut(keyboardEvent) && terminal.hasSelection()) {
+    if (isCopyShortcut(keyboardEvent)) {
+      invalidatePasteToken()
+      if (!terminal.hasSelection()) {
+        return
+      }
+
       const selectedText = terminal.getSelection()
       if (!selectedText) {
         return
@@ -386,7 +397,7 @@ export function attachPlainTextPasteHandler(
     if (!isPasteShortcut(keyboardEvent)) {
       // Any non-paste keystroke invalidates pending async paste operations
       // so a slow clipboard read cannot paste after the user moved on.
-      activePasteToken = null
+      invalidatePasteToken()
       return
     }
 
