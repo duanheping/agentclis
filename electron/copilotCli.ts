@@ -87,6 +87,7 @@ export interface CopilotSessionMeta {
 interface ParsedCopilotCommand {
   executable: string
   resumeOptions: string[]
+  optionNames: Set<string>
 }
 
 export function supportsCopilotSessionResume(command: string): boolean {
@@ -108,6 +109,23 @@ export function buildCopilotResumeCommand(
     '--resume',
     sessionId,
   ])
+}
+
+export function withCopilotFullAccess(command: string): string | null {
+  const parsed = parseCopilotCommand(command)
+  if (!parsed) {
+    return null
+  }
+
+  const resumeOptions = [...parsed.resumeOptions]
+  if (!parsed.optionNames.has('--allow-all')) {
+    resumeOptions.push('--allow-all')
+  }
+  if (!parsed.optionNames.has('--no-ask-user')) {
+    resumeOptions.push('--no-ask-user')
+  }
+
+  return joinCommandTokens([parsed.executable, ...resumeOptions])
 }
 
 export function extractCopilotSessionMeta(content: string): CopilotSessionMeta | null {
@@ -137,6 +155,7 @@ function parseCopilotCommand(command: string): ParsedCopilotCommand | null {
   }
 
   const resumeOptions: string[] = []
+  const optionNames = new Set<string>()
 
   for (let index = 1; index < tokens.length; index += 1) {
     const token = tokens[index]
@@ -167,11 +186,13 @@ function parseCopilotCommand(command: string): ParsedCopilotCommand | null {
 
     if (FLAG_OPTIONS.has(optionName)) {
       resumeOptions.push(token)
+      optionNames.add(optionName)
       continue
     }
 
     if (OPTIONS_WITH_SINGLE_VALUE.has(optionName)) {
       resumeOptions.push(token)
+      optionNames.add(optionName)
       if (!hasInlineValue) {
         const consumed = consumeSingleValue(tokens, index)
         if (consumed === 1) {
@@ -184,6 +205,7 @@ function parseCopilotCommand(command: string): ParsedCopilotCommand | null {
 
     if (OPTIONS_WITH_OPTIONAL_VALUE.has(optionName)) {
       resumeOptions.push(token)
+      optionNames.add(optionName)
       if (!hasInlineValue) {
         const consumed = consumeOptionalValue(tokens, index)
         if (consumed === 1) {
@@ -196,6 +218,7 @@ function parseCopilotCommand(command: string): ParsedCopilotCommand | null {
 
     if (OPTIONS_WITH_MULTI_VALUE.has(optionName)) {
       resumeOptions.push(token)
+      optionNames.add(optionName)
       if (!hasInlineValue) {
         const consumedValues = collectFollowingValues(tokens, index)
         for (const value of consumedValues) {
@@ -208,6 +231,7 @@ function parseCopilotCommand(command: string): ParsedCopilotCommand | null {
 
     if (token.startsWith('-')) {
       resumeOptions.push(token)
+      optionNames.add(optionName)
       continue
     }
 
@@ -221,6 +245,7 @@ function parseCopilotCommand(command: string): ParsedCopilotCommand | null {
   return {
     executable,
     resumeOptions,
+    optionNames,
   }
 }
 

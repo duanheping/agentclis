@@ -44,6 +44,7 @@ import {
   buildCopilotResumeCommand,
   extractCopilotSessionMeta,
   supportsCopilotSessionResume,
+  withCopilotFullAccess,
 } from './copilotCli'
 import {
   buildCodexResumeCommand,
@@ -900,8 +901,8 @@ export class SessionManager {
     }
 
     const provider = this.detectResumableProvider(command)
-    if (provider === 'copilot' && !command.includes('--no-ask-user')) {
-      return `${command} --no-ask-user`
+    if (provider === 'copilot') {
+      return withCopilotFullAccess(command) ?? command
     }
 
     if (
