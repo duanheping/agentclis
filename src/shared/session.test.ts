@@ -110,6 +110,7 @@ describe('session helpers', () => {
     expect(runtime.sessionId).toBe('test-session')
     expect(runtime.status).toBe('exited')
     expect(runtime.attention).toBeNull()
+    expect(runtime.awaitingResponse).toBe(false)
     expect(runtime.lastActiveAt).toBeTruthy()
   })
 

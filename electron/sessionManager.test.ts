@@ -1357,6 +1357,123 @@ describe('SessionManager project lifecycle', () => {
     ).toBeNull()
   })
 
+  it('marks Copilot sessions as awaiting a response after user input and clears it on completion', async () => {
+    const onRuntime = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot',
+    })
+
+    manager.writeToSession(session.config.id, 'please investigate')
+    manager.writeToSession(session.config.id, '\r')
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.awaitingResponse,
+    ).toBe(true)
+
+    const eventsFilePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      'copilot-session-1',
+      'events.jsonl',
+    )
+    mocks.setFile(
+      eventsFilePath,
+      [
+        '{"type":"user.message","data":{"content":"please investigate"}}',
+        '{"type":"assistant.turn_start","data":{"turnId":"1"}}',
+        '{"type":"assistant.message","data":{"content":"All done.","toolRequests":[]}}',
+      ].join('\n'),
+      '2026-03-31T18:40:00.000Z',
+    )
+
+    const externalConfig = manager
+      .listSessions()
+      .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)?.config
+
+    expect(externalConfig?.externalSession?.provider).toBeUndefined()
+    expect(externalConfig).toBeDefined()
+
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.copilot',
+        'session-state',
+        'copilot-session-1',
+        'workspace.yaml',
+      ),
+      [
+        'id: copilot-session-1',
+        'cwd: C:\\repo',
+        'summary: Investigate reminder state',
+        'created_at: 2026-03-31T18:35:05.000Z',
+      ].join('\n'),
+      '2026-03-31T18:35:05.000Z',
+    )
+
+    ;(manager as unknown as {
+      attachExternalSession: (
+        config: typeof session.config,
+        detectedSession: {
+          provider: 'copilot'
+          sessionId: string
+          timestamp: string
+          cwd: string
+          startedAt: number
+          sourcePath: string
+        },
+      ) => void
+    }).attachExternalSession(
+      externalConfig!,
+      {
+        provider: 'copilot',
+        sessionId: 'copilot-session-1',
+        timestamp: '2026-03-31T18:35:05.000Z',
+        cwd: 'C:\\repo',
+        startedAt: Date.parse('2026-03-31T18:35:05.000Z'),
+        sourcePath: eventsFilePath,
+      },
+    )
+
+    await vi.waitFor(() => {
+      expect(
+        manager.listSessions().projects[0]?.sessions.find(
+          (entry) => entry.config.id === session.config.id,
+        )?.runtime.awaitingResponse,
+      ).toBe(false)
+    })
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.attention,
+    ).toBe('task-complete')
+    expect(onRuntime).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      runtime: expect.objectContaining({
+        awaitingResponse: true,
+      }),
+    })
+    expect(onRuntime).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      runtime: expect.objectContaining({
+        awaitingResponse: false,
+        attention: 'task-complete',
+      }),
+    })
+  })
+
   it('routes terminal data to the correct session when multiple sessions run concurrently', async () => {
     const onData = vi.fn()
     const manager = new SessionManager({
