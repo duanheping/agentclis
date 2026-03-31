@@ -11,6 +11,7 @@ import {
   getSessionAttentionNotificationBody,
   getSessionAttentionTitleLabel,
   reduceCodexAttentionState,
+  reduceCopilotAwaitingResponseState,
   reduceCopilotAttentionState,
   selectHighestPriorityAttentionSession,
 } from './sessionAttention'
@@ -220,6 +221,38 @@ describe('sessionAttention', () => {
     )
 
     expect(attention).toBeNull()
+  })
+
+  it('tracks Copilot awaiting-response state across a turn lifecycle', () => {
+    let awaitingResponse = reduceCopilotAwaitingResponseState(
+      false,
+      '{"type":"user.message","data":{"content":"next task"}}',
+    )
+
+    expect(awaitingResponse).toBe(true)
+
+    awaitingResponse = reduceCopilotAwaitingResponseState(
+      awaitingResponse,
+      '{"type":"assistant.message","data":{"content":"Working on it.","toolRequests":[{"name":"view"}]}}',
+    )
+
+    expect(awaitingResponse).toBe(true)
+
+    awaitingResponse = reduceCopilotAwaitingResponseState(
+      awaitingResponse,
+      '{"type":"assistant.message","data":{"content":"All done.","toolRequests":[]}}',
+    )
+
+    expect(awaitingResponse).toBe(false)
+  })
+
+  it('clears Copilot awaiting-response state on assistant turn end', () => {
+    const awaitingResponse = reduceCopilotAwaitingResponseState(
+      true,
+      '{"type":"assistant.turn_end","data":{"turnId":"7"}}',
+    )
+
+    expect(awaitingResponse).toBe(false)
   })
 
   it('classifies text with question mark as needs-user-decision', () => {

@@ -625,14 +625,20 @@ export function SessionSidebar({
                       const active = session.config.id === activeSessionId
                       const editing = session.config.id === editingId
                       const attention = session.runtime.attention ?? null
+                      const awaitingResponse = session.runtime.awaitingResponse === true
                       const sessionLocationLabel = findSessionLocationLabel(project, session)
+                      const reminderClassName = awaitingResponse
+                        ? ' is-awaiting-response'
+                        : attention
+                          ? ` has-attention is-attention-${attention}`
+                          : ''
 
                       return (
                         <div
                           key={session.config.id}
                           role="button"
                           tabIndex={0}
-                          className={`session-item is-nested${active ? ' is-active' : ''}${editing ? ' is-editing' : ''}`}
+                          className={`session-item is-nested${active ? ' is-active' : ''}${editing ? ' is-editing' : ''}${reminderClassName}`}
                           onClick={() => {
                             void onSelect(session.config.id)
                           }}
