@@ -17,6 +17,21 @@ interface ClipboardStub {
   files?: ArrayLike<File>
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+
+  return {
+    promise,
+    resolve,
+    reject,
+  }
+}
+
 function createClipboardData(data: {
   plainText?: string
   html?: string
@@ -464,6 +479,170 @@ describe('attachPlainTextPasteHandler', () => {
       expect(paste).toHaveBeenCalledWith('"C:\\temp\\clipboard.png"')
     })
     expect(keydownEvent.defaultPrevented).toBe(true)
+
+    detach()
+  })
+
+  it('does not paste stale clipboard text after Enter is pressed', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const readText = vi.fn<() => Promise<string>>()
+    const deferred = createDeferred<string>()
+    readText.mockReturnValueOnce(deferred.promise)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText,
+      },
+    })
+
+    const paste = vi.fn()
+    const detach = attachPlainTextPasteHandler({
+      element,
+      textarea,
+      paste,
+      hasSelection: () => false,
+      getSelection: () => '',
+    })
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'v',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    deferred.resolve('stale clipboard text')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(paste).not.toHaveBeenCalled()
+
+    detach()
+  })
+
+  it('does not paste stale clipboard image path after Enter is pressed', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const readText = vi.fn().mockResolvedValue('')
+    const read = vi.fn().mockResolvedValue([
+      {
+        types: ['image/png'],
+        getType: vi.fn().mockResolvedValue(new Blob(['png'], { type: 'image/png' })),
+      },
+    ])
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText,
+        read,
+      },
+    })
+
+    const deferredPersist = createDeferred<string>()
+    const paste = vi.fn()
+    const persistFile = vi
+      .fn<(file: File) => Promise<string>>()
+      .mockReturnValueOnce(deferredPersist.promise)
+    const detach = attachPlainTextPasteHandler(
+      {
+        element,
+        textarea,
+        paste,
+        hasSelection: () => false,
+        getSelection: () => '',
+      },
+      {
+        persistFile,
+      },
+    )
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'v',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    await waitFor(() => {
+      expect(persistFile).toHaveBeenCalledTimes(1)
+    })
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    deferredPersist.resolve('C:\\temp\\clipboard.png')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(paste).not.toHaveBeenCalled()
+
+    detach()
+  })
+
+  it('does not allow an older async Ctrl+V to paste after a later paste event', async () => {
+    const element = document.createElement('div')
+    const textarea = document.createElement('textarea')
+    element.append(textarea)
+
+    const deferred = createDeferred<string>()
+    const readText = vi.fn<() => Promise<string>>().mockReturnValueOnce(deferred.promise)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText,
+      },
+    })
+
+    const paste = vi.fn()
+    const detach = attachPlainTextPasteHandler({
+      element,
+      textarea,
+      paste,
+      hasSelection: () => false,
+      getSelection: () => '',
+    })
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'v',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }))
+
+    const pasteEvent = new Event('paste', {
+      bubbles: true,
+      cancelable: true,
+    })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: createClipboardData({
+        plainText: 'fresh text',
+        items: [{ kind: 'string', type: 'text/plain' }],
+        types: ['text/plain'],
+      }),
+    })
+
+    textarea.dispatchEvent(pasteEvent)
+
+    deferred.resolve('stale clipboard text')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(paste).toHaveBeenCalledTimes(1)
+    expect(paste).toHaveBeenCalledWith('fresh text')
 
     detach()
   })
