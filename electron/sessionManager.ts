@@ -613,10 +613,6 @@ export class SessionManager {
       this.stopExternalSessionAttentionTracking(sessionId)
     }
 
-    for (const config of Array.from(this.configs.values())) {
-      void this.queueProjectMemoryCapture(config)
-    }
-
     for (const id of Array.from(this.terminals.keys())) {
       this.stopSession(id, true)
     }

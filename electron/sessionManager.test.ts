@@ -2193,7 +2193,7 @@ describe('SessionManager logical project identity and project context', () => {
     )
   })
 
-  it('queues project memory capture for open sessions during shutdown', async () => {
+  it('does not queue project memory capture for open sessions during shutdown', async () => {
     const projectMemory = buildProjectMemoryServiceMock()
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
@@ -2221,7 +2221,7 @@ describe('SessionManager logical project identity and project context', () => {
       },
     )
 
-    const session = await manager.createSession({
+    await manager.createSession({
       projectTitle: 'Workspace',
       projectRootPath: 'C:\\repo',
       startupCommand: 'codex',
@@ -2229,16 +2229,10 @@ describe('SessionManager logical project identity and project context', () => {
 
     manager.dispose()
     await vi.waitFor(() => {
-      expect(projectMemory.captureSession).toHaveBeenCalledTimes(1)
+      expect(projectMemory.dispose).toHaveBeenCalledTimes(1)
     })
 
-    expect(projectMemory.captureSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          id: session.config.id,
-        }),
-      }),
-    )
+    expect(projectMemory.captureSession).not.toHaveBeenCalled()
     expect(projectMemory.dispose).toHaveBeenCalledTimes(1)
   })
 

@@ -235,10 +235,16 @@ export class ProjectMemoryService {
   }
 
   async captureSession(input: ProjectMemoryJobPayload): Promise<void> {
+    if (this.disposed) {
+      return
+    }
     this.enqueueJob('capture-session', 'high', input)
   }
 
   scheduleBackfillSessions(inputs: ProjectMemoryJobPayload[]): void {
+    if (this.disposed) {
+      return
+    }
     for (const input of inputs) {
       this.enqueueJob('backfill-session', 'low', input)
     }
@@ -409,6 +415,10 @@ export class ProjectMemoryService {
     priority: ProjectMemoryJobPriority,
     payload: ProjectMemoryJobPayload,
   ): void {
+    if (this.disposed) {
+      return
+    }
+
     const dedupeKey = dedupeKeyForSession(payload.session.id)
     const now = new Date().toISOString()
     const existingJob = this.state.jobs.find((job) => job.dedupeKey === dedupeKey)
