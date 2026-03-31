@@ -1153,6 +1153,106 @@ describe('SessionManager project lifecycle', () => {
     ])
   })
 
+  it('launches Copilot with full-access flags when full-access is selected', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --allow-all --no-ask-user',
+    ])
+  })
+
+  it('adds Copilot full-access flags even when related allow flags are already present', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --allow-all-paths --no-color',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --allow-all-paths --no-color --allow-all --no-ask-user',
+    ])
+  })
+
+  it('does not mistake Copilot option values for existing full-access flags', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --config-dir "C:\\tmp\\--allow-all" --no-ask-user',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --config-dir C:\\tmp\\--allow-all --no-ask-user --allow-all',
+    ])
+  })
+
+  it('does not duplicate existing Copilot full-access flags', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --allow-all --no-ask-user',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --allow-all --no-ask-user',
+    ])
+  })
+
   it('starts a fresh Codex session instead of reviving project history', async () => {
     const now = new Date('2026-03-27T15:00:00.000Z')
     vi.setSystemTime(now)
