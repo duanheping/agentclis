@@ -276,6 +276,22 @@ export function attachPlainTextPasteHandler(
     return () => {}
   }
 
+  // Token tracking for async paste/drop operations. Any new paste, drop,
+  // or non-paste keystroke invalidates the current token so that a slow
+  // clipboard read or file-persist IPC cannot paste into the terminal
+  // after the user has already moved on (e.g. pressed Enter to submit).
+  let activePasteToken: object | null = null
+
+  function createPasteToken(): object {
+    const token = {}
+    activePasteToken = token
+    return token
+  }
+
+  function isPasteTokenValid(token: object): boolean {
+    return activePasteToken === token
+  }
+
   const handlePaste = (event: Event) => {
     const pasteEvent = event as ClipboardEvent
     const text = extractClipboardText(pasteEvent.clipboardData)
@@ -290,13 +306,14 @@ export function attachPlainTextPasteHandler(
     if (hasBinaryClipboardPayload(pasteEvent.clipboardData)) {
       pasteEvent.preventDefault()
       pasteEvent.stopPropagation()
+      const token = createPasteToken()
       void resolveFilePaths(
         extractTransferFiles(pasteEvent.clipboardData),
         resolveFilePath,
         persistFile,
       )
         .then((filePaths) => {
-          if (filePaths.length > 0) {
+          if (isPasteTokenValid(token) && filePaths.length > 0) {
             terminal.paste(formatDroppedFilePaths(filePaths))
           }
         })
@@ -322,13 +339,14 @@ export function attachPlainTextPasteHandler(
     if (hasFileTransferPayload(dragEvent.dataTransfer)) {
       dragEvent.preventDefault()
       dragEvent.stopPropagation()
+      const token = createPasteToken()
       void resolveFilePaths(
         extractTransferFiles(dragEvent.dataTransfer),
         resolveFilePath,
         persistFile,
       )
         .then((filePaths) => {
-          if (filePaths.length > 0) {
+          if (isPasteTokenValid(token) && filePaths.length > 0) {
             terminal.paste(formatDroppedFilePaths(filePaths))
           }
         })
@@ -366,20 +384,28 @@ export function attachPlainTextPasteHandler(
     }
 
     if (!isPasteShortcut(keyboardEvent)) {
+      // Any non-paste keystroke invalidates pending async paste operations
+      // so a slow clipboard read cannot paste after the user moved on.
+      activePasteToken = null
       return
     }
 
     keyboardEvent.preventDefault()
     keyboardEvent.stopPropagation()
 
+    const token = createPasteToken()
+
     void (async () => {
       const text = await readClipboardText()
+      if (!isPasteTokenValid(token)) return
+
       if (text !== null) {
         terminal.paste(text)
         return
       }
 
       const clipboardFiles = await readClipboardFiles()
+      if (!isPasteTokenValid(token)) return
       if (clipboardFiles.length === 0) {
         return
       }
@@ -389,6 +415,7 @@ export function attachPlainTextPasteHandler(
         resolveFilePath,
         persistFile,
       )
+      if (!isPasteTokenValid(token)) return
       if (filePaths.length > 0) {
         terminal.paste(formatDroppedFilePaths(filePaths))
       }
