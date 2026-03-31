@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -11,6 +11,7 @@ import {
 } from './agentFailureSummary'
 
 const MAX_PROCESS_OUTPUT_BYTES = 4_000
+const activeStructuredAgentProcesses = new Set<ReturnType<typeof spawn>>()
 
 function formatProcessOutput(label: string, output: string): string | null {
   const trimmed = output.trim()
@@ -45,6 +46,18 @@ async function runCommand(
   return await new Promise<string>((resolve, reject) => {
     let child: ReturnType<typeof spawn>
     let cleanupScript: (() => void) | null = null
+    let settled = false
+
+    const finalize = () => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      activeStructuredAgentProcesses.delete(child)
+      cleanupScript?.()
+      cleanupScript = null
+    }
 
     if (process.platform === 'win32') {
       // Write the command to a temp batch script to avoid the ~32KB
@@ -75,6 +88,8 @@ async function runCommand(
       })
     }
 
+    activeStructuredAgentProcesses.add(child)
+
     let stdout = ''
     let stderr = ''
 
@@ -85,11 +100,11 @@ async function runCommand(
       stderr += chunk.toString()
     })
     child.on('error', (error) => {
-      cleanupScript?.()
+      finalize()
       reject(error)
     })
     child.on('close', (code) => {
-      cleanupScript?.()
+      finalize()
       if (code === 0) {
         resolve(stdout)
         return
@@ -123,6 +138,37 @@ async function runCommand(
     }
     child.stdin!.end()
   })
+}
+
+function killStructuredAgentProcessTree(
+  child: ReturnType<typeof spawn>,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (
+    platform === 'win32' &&
+    typeof child.pid === 'number' &&
+    Number.isInteger(child.pid) &&
+    child.pid > 0
+  ) {
+    const result = spawnSync(
+      'taskkill.exe',
+      ['/PID', String(child.pid), '/T', '/F'],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    )
+
+    if (!result.error && result.status === 0) {
+      return
+    }
+  }
+
+  try {
+    child.kill()
+  } catch {
+    // Ignore kill failures during app shutdown.
+  }
 }
 
 export function truncateUtf8(value: string, maxBytes: number): string {
@@ -458,6 +504,12 @@ export async function cleanupStructuredAgentTemp(
   tempRoot: string,
 ): Promise<void> {
   await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined)
+}
+
+export function abortStructuredAgentProcesses(): void {
+  for (const child of Array.from(activeStructuredAgentProcesses)) {
+    killStructuredAgentProcessTree(child)
+  }
 }
 
 /**
