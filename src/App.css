@@ -1277,6 +1277,7 @@
 .terminal-workspace {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   border: 0;
@@ -1291,6 +1292,7 @@
   --terminal-split-resizer-size: 12px;
   position: absolute;
   inset: 0;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   opacity: 0;
@@ -1313,6 +1315,7 @@
 }
 
 .terminal-pane {
+  min-width: 0;
   min-height: 0;
   height: 100%;
   background: rgba(18, 18, 18, 0.98);
@@ -1381,12 +1384,14 @@
 }
 
 .terminal-surface {
+  min-width: 0;
   min-height: 0;
   height: 100%;
   padding: 0;
 }
 
 .terminal-surface .xterm {
+  width: 100%;
   height: 100%;
   padding: 0;
 }
@@ -3322,11 +3327,13 @@
 
 .analysis-window__terminal {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   padding: 4px 0 0;
 }
 
 .analysis-window__terminal .xterm {
+  width: 100%;
   height: 100%;
   padding: 0;
 }
@@ -3334,5 +3341,4 @@
 .analysis-window__terminal .xterm-viewport {
   border-radius: 0;
 }
-
 
