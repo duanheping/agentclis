@@ -579,12 +579,6 @@ function App() {
       updateRuntime(runtime)
     })
 
-    const unsubscribeExit = agentCli.onSessionExit(({ sessionId }) => {
-      void closeSessionInWorkspace(sessionId).catch((error) => {
-        setErrorMessage(getErrorMessage(error))
-      })
-    })
-
     const unsubscribeWindowsCommandPromptExit = agentCli.onWindowsCommandPromptExit(
       ({ sessionId }) => {
         pendingWindowsCommandPromptCloseSessionIdsRef.current.delete(sessionId)
@@ -651,14 +645,12 @@ function App() {
       unsubscribeConfig()
       unsubscribeWindowsCommandPromptData()
       unsubscribeRuntime()
-      unsubscribeExit()
       unsubscribeWindowsCommandPromptExit()
       unsubscribeFullSyncProgress()
       unsubscribeFullSyncDone()
     }
   }, [
     agentCli,
-    closeSessionInWorkspace,
     hideWindowsCommandPrompt,
     refreshSkillState,
     setInitialData,

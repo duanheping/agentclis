@@ -52,7 +52,7 @@ import { AnalysisWindow } from './AnalysisWindow'
 
 describe('AnalysisWindow', () => {
   let resizeObserverCallback: (() => void) | null = null
-  let resizeObserverDisconnect: ReturnType<typeof vi.fn>
+  let resizeObserverDisconnect: () => void
 
   beforeEach(() => {
     resizeObserverDisconnect = vi.fn()
@@ -88,7 +88,7 @@ describe('AnalysisWindow', () => {
 
   afterEach(() => {
     cleanup()
-    delete window.agentCli
+    Reflect.deleteProperty(window, 'agentCli')
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })

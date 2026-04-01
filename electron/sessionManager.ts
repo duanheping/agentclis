@@ -96,18 +96,51 @@ type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
 const CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions')
 const COPILOT_SESSIONS_ROOT = path.join(os.homedir(), '.copilot', 'session-state')
 const CODEX_SESSION_FILE_PREFIX_BYTES = 4096
-const CODEX_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
-const CODEX_SESSION_DISCOVERY_INTERVAL_MS = 750
-const CODEX_SESSION_DISCOVERY_ATTEMPTS = 24
+const EXTERNAL_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
+const COPILOT_SESSION_DISCOVERY_RETRY_DELAYS_MS = Array.from(
+  { length: 23 },
+  () => 750,
+)
+const CODEX_SESSION_DISCOVERY_RETRY_DELAYS_MS = [
+  750,
+  750,
+  1_500,
+  3_000,
+  5_000,
+  8_000,
+  12_000,
+  15_000,
+  15_000,
+  15_000,
+  15_000,
+  15_000,
+  15_000,
+  15_000,
+  15_000,
+  15_000,
+]
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
 const HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT = 256
 const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
+const HISTORICAL_EXTERNAL_SESSION_FALLBACK_DISTANCE_GAP_MS = 5 * 60 * 1_000
 const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
 const FIRST_PROMPT_TITLE_LIMIT = 80
 const BACKGROUND_IDENTITY_REFRESH_DELAY_MS = 1_500
 const BACKGROUND_MEMORY_BACKFILL_DELAY_MS = 4_500
 const EXTERNAL_ATTENTION_POLL_INTERVAL_MS = 1_500
+const EXTERNAL_ATTENTION_RESOLUTION_RETRY_DELAYS_MS = [
+  1_500,
+  1_500,
+  3_000,
+  3_000,
+  5_000,
+  5_000,
+  8_000,
+  8_000,
+  12_000,
+  12_000,
+]
 const LIVE_ATTENTION_BUFFER_LIMIT = 4_096
 const ANSI_ESCAPE_REGEX = new RegExp(
   `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
@@ -286,6 +319,10 @@ export class SessionManager {
   private readonly liveAttentionBuffers = new Map<string, string>()
   private readonly claimedExternalSessions = new Map<string, string>()
   private readonly pendingExternalSessionDetections = new Map<string, NodeJS.Timeout>()
+  private readonly pendingExternalSessionAttentionResolutions = new Map<
+    string,
+    NodeJS.Timeout
+  >()
   private readonly externalSessionAttentionTrackers = new Map<
     string,
     ExternalSessionAttentionTracker
@@ -668,6 +705,12 @@ export class SessionManager {
       this.stopExternalSessionAttentionTracking(sessionId)
     }
 
+    for (const sessionId of Array.from(
+      this.pendingExternalSessionAttentionResolutions.keys(),
+    )) {
+      this.stopExternalSessionAttentionTracking(sessionId)
+    }
+
     for (const id of Array.from(this.terminals.keys())) {
       this.stopSession(id, true)
     }
@@ -705,41 +748,8 @@ export class SessionManager {
         this.persist()
       }
 
-      if (normalizedConfig.externalSession) {
-        const shouldKeepStoredSession =
-          await this.shouldKeepStoredExternalSession(normalizedConfig)
-        if (!shouldKeepStoredSession) {
-          this.releaseExternalSession(normalizedConfig)
-          const nextConfig: SessionConfig = {
-            ...normalizedConfig,
-            externalSession: undefined,
-          }
-          this.configs.set(nextConfig.id, nextConfig)
-          this.trackHistoricalExternalSessionRecovery(nextConfig)
-          this.persist()
-          this.events.onConfig({
-            sessionId: nextConfig.id,
-            config: nextConfig,
-          })
-          normalizedConfig = nextConfig
-        }
-      }
-
-      const resumableProvider =
-        normalizedConfig.externalSession === undefined &&
-        this.historicalExternalSessionRecovery.has(normalizedConfig.id)
-          ? this.detectResumableProvider(normalizedConfig.startupCommand)
-          : null
-      if (resumableProvider) {
-        const historicalSession = await this.findHistoricalExternalSession(
-          normalizedConfig,
-          resumableProvider,
-        )
-        if (historicalSession) {
-          this.attachExternalSession(normalizedConfig, historicalSession)
-          normalizedConfig = this.requireConfig(config.id)
-        }
-      }
+      normalizedConfig =
+        await this.prepareManagedSessionLaunchConfig(normalizedConfig)
 
       const launchCommand = this.resolveStartupCommand(normalizedConfig)
       const launchesInline = supportsInlineShellCommand(shell)
@@ -1019,6 +1029,86 @@ export class SessionManager {
     )
   }
 
+  private async prepareManagedSessionLaunchConfig(
+    config: SessionConfig,
+  ): Promise<SessionConfig> {
+    let nextConfig = config
+
+    if (nextConfig.externalSession) {
+      const storedSessionState =
+        await this.inspectStoredExternalSession(nextConfig)
+      if (storedSessionState !== 'valid') {
+        const staleExternalSession = nextConfig.externalSession
+        if (storedSessionState === 'ineligible') {
+          this.releaseExternalSession(nextConfig)
+          nextConfig = {
+            ...nextConfig,
+            externalSession: undefined,
+          }
+          this.configs.set(nextConfig.id, nextConfig)
+          this.trackHistoricalExternalSessionRecovery(nextConfig)
+          this.persist()
+          this.events.onConfig({
+            sessionId: nextConfig.id,
+            config: nextConfig,
+          })
+        }
+
+        const recoveredSession = await this.findHistoricalExternalSession(
+          nextConfig,
+          staleExternalSession.provider,
+          {
+            allowTitleMismatchFallback: true,
+          },
+        )
+        if (!recoveredSession) {
+          throw new Error(
+            this.buildExternalSessionRecoveryFailureMessage(
+              staleExternalSession.provider,
+              nextConfig,
+            ),
+          )
+        }
+
+        this.attachExternalSession(nextConfig, recoveredSession)
+        nextConfig = this.requireConfig(config.id)
+      }
+    }
+
+    const resumableProvider =
+      nextConfig.externalSession === undefined &&
+      this.historicalExternalSessionRecovery.has(nextConfig.id) &&
+      !this.isExplicitResumeCommand(nextConfig.startupCommand)
+        ? this.detectResumableProvider(nextConfig.startupCommand)
+        : null
+    if (!resumableProvider) {
+      return nextConfig
+    }
+
+    const historicalSession = await this.findHistoricalExternalSession(
+      nextConfig,
+      resumableProvider,
+    )
+    if (!historicalSession) {
+      throw new Error(
+        this.buildExternalSessionRecoveryFailureMessage(
+          resumableProvider,
+          nextConfig,
+        ),
+      )
+    }
+
+    this.attachExternalSession(nextConfig, historicalSession)
+    return this.requireConfig(config.id)
+  }
+
+  private buildExternalSessionRecoveryFailureMessage(
+    provider: 'codex' | 'copilot',
+    config: SessionConfig,
+  ): string {
+    return `Unable to recover the previous ${provider} session for "${config.title}". Create a new session to start over.`
+  }
+
   private async pollForExternalSessionRef(
     sessionId: string,
     provider: 'codex' | 'copilot',
@@ -1042,7 +1132,11 @@ export class SessionManager {
       return
     }
 
-    if (attempt + 1 >= CODEX_SESSION_DISCOVERY_ATTEMPTS) {
+    const nextDelayMs = this.getExternalSessionDiscoveryRetryDelayMs(
+      provider,
+      attempt,
+    )
+    if (nextDelayMs === null) {
       if (this.shouldAllowHistoricalExternalSessionMatching(config)) {
         const historicalSession = await this.findHistoricalExternalSession(
           config,
@@ -1062,8 +1156,20 @@ export class SessionManager {
         startedAt,
         attempt + 1,
       )
-    }, CODEX_SESSION_DISCOVERY_INTERVAL_MS)
+    }, nextDelayMs)
     this.pendingExternalSessionDetections.set(sessionId, timer)
+  }
+
+  private getExternalSessionDiscoveryRetryDelayMs(
+    provider: 'codex' | 'copilot',
+    attempt: number,
+  ): number | null {
+    const retryDelays =
+      provider === 'codex'
+        ? CODEX_SESSION_DISCOVERY_RETRY_DELAYS_MS
+        : COPILOT_SESSION_DISCOVERY_RETRY_DELAYS_MS
+
+    return retryDelays[attempt] ?? null
   }
 
   private async findMatchingExternalSession(
@@ -1073,7 +1179,7 @@ export class SessionManager {
   ): Promise<DetectedExternalSession | null> {
     const candidates = await this.listRecentExternalSessions(
       provider,
-      startedAt - CODEX_SESSION_DISCOVERY_LOOKBACK_MS,
+      startedAt - EXTERNAL_SESSION_DISCOVERY_LOOKBACK_MS,
     )
     const normalizedCwd = this.normalizePath(config.cwd)
     const allowHistoricalMatch =
@@ -1107,6 +1213,9 @@ export class SessionManager {
   private async findHistoricalExternalSession(
     config: SessionConfig,
     provider: 'codex' | 'copilot',
+    options: {
+      allowTitleMismatchFallback?: boolean
+    } = {},
   ): Promise<DetectedExternalSession | null> {
     const referenceTimestamps = this.getExternalSessionReferenceTimes(config)
     if (referenceTimestamps.length === 0) {
@@ -1171,17 +1280,28 @@ export class SessionManager {
     // When the session has a meaningful title, require a title match to
     // prevent cross-session bleed between sessions that share the same CWD.
     if (shouldMatchTitle && !best.titleMatches) {
-      return null
+      if (!options.allowTitleMismatchFallback) {
+        return null
+      }
+
+      const secondBest = sorted[1]
+      if (
+        secondBest &&
+        secondBest.distance - best.distance <
+          HISTORICAL_EXTERNAL_SESSION_FALLBACK_DISTANCE_GAP_MS
+      ) {
+        return null
+      }
     }
 
     return best.candidate
   }
 
-  private async shouldKeepStoredExternalSession(
+  private async inspectStoredExternalSession(
     config: SessionConfig,
-  ): Promise<boolean> {
+  ): Promise<'valid' | 'missing' | 'ineligible'> {
     if (!config.externalSession) {
-      return true
+      return 'valid'
     }
 
     const candidate = await this.findRecentExternalSessionById(
@@ -1191,10 +1311,12 @@ export class SessionManager {
     )
 
     if (!candidate) {
-      return false
+      return 'missing'
     }
 
     return this.isEligibleExternalSessionCandidate(candidate)
+      ? 'valid'
+      : 'ineligible'
   }
 
   private async findRecentExternalSessionById(
@@ -1206,15 +1328,42 @@ export class SessionManager {
       return null
     }
 
-    const candidates = await this.listRecentExternalSessions(
-      provider,
-      Math.max(
-        0,
-        Math.min(...referenceTimestamps) - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
-      ),
-    )
+    if (provider === 'copilot') {
+      return (
+        await this.readCopilotSessionMeta(
+          path.join(COPILOT_SESSIONS_ROOT, sessionId, 'workspace.yaml'),
+        )
+      )
+    }
 
-    return candidates.find((candidate) => candidate.sessionId === sessionId) ?? null
+    const sinceMs = Math.max(
+      0,
+      Math.min(...referenceTimestamps) - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
+    )
+    const dayDirectories = this.getCodexSessionDayDirectories(sinceMs)
+
+    for (const dayDirectory of dayDirectories) {
+      let entries: Dirent[] = []
+      try {
+        entries = await readdir(dayDirectory, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      const matchingEntry = entries.find(
+        (entry) =>
+          entry.isFile() && entry.name.endsWith(`${sessionId}.jsonl`),
+      )
+      if (!matchingEntry) {
+        continue
+      }
+
+      return await this.readCodexSessionMeta(
+        path.join(dayDirectory, matchingEntry.name),
+      )
+    }
+
+    return null
   }
 
   private getExternalSessionReferenceTimes(config: SessionConfig): number[] {
@@ -1317,21 +1466,34 @@ export class SessionManager {
         entry.name,
         'workspace.yaml',
       )
+      const eventsFilePath = path.join(
+        COPILOT_SESSIONS_ROOT,
+        entry.name,
+        'events.jsonl',
+      )
 
-      let details
+      let workspaceDetails
       try {
-        details = await stat(workspaceFilePath)
+        workspaceDetails = await stat(workspaceFilePath)
       } catch {
         continue
       }
 
-      if (details.mtimeMs < sinceMs) {
+      let modifiedAt = workspaceDetails.mtimeMs
+      try {
+        const eventsDetails = await stat(eventsFilePath)
+        modifiedAt = Math.max(modifiedAt, eventsDetails.mtimeMs)
+      } catch {
+        // Ignore missing Copilot event logs and fall back to the workspace file.
+      }
+
+      if (modifiedAt < sinceMs) {
         continue
       }
 
       candidates.push({
         workspaceFilePath,
-        modifiedAt: details.mtimeMs,
+        modifiedAt,
       })
     }
 
@@ -1610,6 +1772,7 @@ export class SessionManager {
   private async ensureExternalSessionAttentionTracking(
     config: SessionConfig,
     sourcePath?: string,
+    resolutionAttempt = 0,
   ): Promise<void> {
     if (!config.externalSession) {
       this.stopExternalSessionAttentionTracking(config.id)
@@ -1623,8 +1786,14 @@ export class SessionManager {
         config.externalSession.sessionId,
       ))
     if (!filePath) {
+      this.scheduleExternalSessionAttentionResolutionRetry(
+        config,
+        resolutionAttempt,
+      )
       return
     }
+
+    this.cancelExternalSessionAttentionResolution(config.id)
 
     const existingTracker = this.externalSessionAttentionTrackers.get(config.id)
     if (
@@ -1652,6 +1821,10 @@ export class SessionManager {
         filePath,
       )
     } catch {
+      this.scheduleExternalSessionAttentionResolutionRetry(
+        config,
+        resolutionAttempt,
+      )
       return
     }
 
@@ -1721,6 +1894,8 @@ export class SessionManager {
   }
 
   private stopExternalSessionAttentionTracking(sessionId: string): void {
+    this.cancelExternalSessionAttentionResolution(sessionId)
+
     const tracker = this.externalSessionAttentionTrackers.get(sessionId)
     if (!tracker) {
       return
@@ -1737,7 +1912,8 @@ export class SessionManager {
     if (provider === 'copilot') {
       const filePath = path.join(COPILOT_SESSIONS_ROOT, sessionId, 'events.jsonl')
       try {
-        return (await stat(filePath)).isFile() ? filePath : null
+        await stat(filePath)
+        return filePath
       } catch {
         return null
       }
@@ -1768,6 +1944,48 @@ export class SessionManager {
     }
 
     return null
+  }
+
+  private scheduleExternalSessionAttentionResolutionRetry(
+    config: SessionConfig,
+    attempt: number,
+  ): void {
+    const delayMs = EXTERNAL_ATTENTION_RESOLUTION_RETRY_DELAYS_MS[attempt]
+    if (delayMs === undefined || !config.externalSession) {
+      return
+    }
+
+    this.cancelExternalSessionAttentionResolution(config.id)
+    const provider = config.externalSession.provider
+    const externalSessionId = config.externalSession.sessionId
+    const timer = setTimeout(() => {
+      this.pendingExternalSessionAttentionResolutions.delete(config.id)
+      const latestConfig = this.configs.get(config.id)
+      if (
+        !latestConfig?.externalSession ||
+        latestConfig.externalSession.provider !== provider ||
+        latestConfig.externalSession.sessionId !== externalSessionId
+      ) {
+        return
+      }
+
+      void this.ensureExternalSessionAttentionTracking(
+        latestConfig,
+        undefined,
+        attempt + 1,
+      )
+    }, delayMs)
+    this.pendingExternalSessionAttentionResolutions.set(config.id, timer)
+  }
+
+  private cancelExternalSessionAttentionResolution(sessionId: string): void {
+    const timer = this.pendingExternalSessionAttentionResolutions.get(sessionId)
+    if (!timer) {
+      return
+    }
+
+    clearTimeout(timer)
+    this.pendingExternalSessionAttentionResolutions.delete(sessionId)
   }
 
   private async pollExternalSessionAttention(sessionId: string): Promise<void> {
