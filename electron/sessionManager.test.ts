@@ -769,6 +769,77 @@ describe('SessionManager restore policy', () => {
     })
   })
 
+  it('restores a Codex session when the saved title is an ellipsized first prompt', async () => {
+    const fullPrompt =
+      'let review agentclis session save and resume logic because restart recovery still fails for older codex sessions'
+    const truncatedTitle =
+      'let review agentclis session save and resume logic because restart recovery...'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-15T18:10:00.000Z',
+          updatedAt: '2026-03-15T18:12:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: truncatedTitle,
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-15T18:10:24.756Z',
+          updatedAt: '2026-03-15T18:12:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const sessionFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '15',
+      'rollout-2026-03-15T18-10-31-019cf7a4-db19-78a0-a9b1-b9e3d2b0126a.jsonl',
+    )
+    mocks.setFile(
+      sessionFilePath,
+      [
+        '{"timestamp":"2026-03-15T18:10:31.000Z","type":"session_meta","payload":{"id":"019cf7a4-db19-78a0-a9b1-b9e3d2b0126a","timestamp":"2026-03-15T18:10:31.000Z","cwd":"C:\\\\repo","originator":"codex_cli_rs","source":"cli"}}',
+        `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"${fullPrompt}"}]}}`,
+      ].join('\n'),
+      '2026-03-15T18:10:35.000Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
+    ])
+  })
+
   it('keeps a restore session failed when only an ineligible Codex Desktop transcript is available', async () => {
     mocks.setPersistedState({
       projects: [

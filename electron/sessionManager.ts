@@ -217,6 +217,23 @@ function isLowSignalSessionTitle(
   )
 }
 
+function getSessionTitleMatchTerms(title: string): string[] {
+  const normalizedTitle = normalizeSessionTitleForComparison(title)
+  if (!normalizedTitle) {
+    return []
+  }
+
+  const terms = [normalizedTitle]
+  if (normalizedTitle.endsWith('...')) {
+    const truncatedPrefix = normalizedTitle.slice(0, -3).trimEnd()
+    if (truncatedPrefix) {
+      terms.push(truncatedPrefix)
+    }
+  }
+
+  return Array.from(new Set(terms))
+}
+
 interface PersistedSessionState {
   projects: ProjectConfig[]
   locations: ProjectLocation[]
@@ -1381,11 +1398,18 @@ export class SessionManager {
     candidate: DetectedExternalSession,
     normalizedTitle: string,
   ): Promise<boolean> {
+    const matchTerms = getSessionTitleMatchTerms(normalizedTitle)
+    if (matchTerms.length === 0) {
+      return false
+    }
+
     if (candidate.summary) {
       const normalizedSummary = candidate.summary.trim().toLowerCase()
       if (
-        normalizedSummary.includes(normalizedTitle) ||
-        normalizedTitle.includes(normalizedSummary)
+        matchTerms.some(
+          (term) =>
+            normalizedSummary.includes(term) || term.includes(normalizedSummary),
+        )
       ) {
         return true
       }
@@ -1400,7 +1424,8 @@ export class SessionManager {
         return false
       }
 
-      return transcriptPrefix.toLowerCase().includes(normalizedTitle)
+      const normalizedTranscriptPrefix = transcriptPrefix.toLowerCase()
+      return matchTerms.some((term) => normalizedTranscriptPrefix.includes(term))
     }
 
     if (!candidate.sourcePath) {
@@ -1415,7 +1440,8 @@ export class SessionManager {
       return false
     }
 
-    return prefix.toLowerCase().includes(normalizedTitle)
+    const normalizedPrefix = prefix.toLowerCase()
+    return matchTerms.some((term) => normalizedPrefix.includes(term))
   }
 
   private async listRecentExternalSessions(
