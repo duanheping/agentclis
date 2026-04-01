@@ -480,6 +480,12 @@ function buildPrompt(input: {
   architectureDocExcerpt: string | null
   skillGuidance: string | null
 }): string {
+  const isAutosarRepo =
+    input.project.title.toLowerCase().includes('msar') ||
+    input.project.identity?.remoteFingerprint?.toLowerCase().includes('msar') ||
+    input.heuristicSnapshot?.modules.some((module) => module.id.startsWith('autosar-')) ||
+    false
+
   return truncateUtf8(
     [
       'You are synthesizing a durable repository architecture reference for Agent CLIs.',
@@ -491,8 +497,16 @@ function buildPrompt(input: {
       '- how work flows between components',
       '- what invariants and edit boundaries must be preserved',
       '- which files or modules matter first when changing behavior',
+      '- which build entrypoints, generated-code areas, and third-party boundaries matter first when the repo is not a simple app',
       'Prefer project-specific terminology and relative repo paths.',
       'If the evidence is weak, return fewer modules and interactions rather than inventing detail.',
+      'Do not stop at top-level folder names when the repo exposes stronger, concrete subpaths.',
+      isAutosarRepo
+        ? 'AUTOSAR/MSAR focus: explicitly identify the compile/build entrypoints, the variant layout and count when visible, the generated-code destinations, the third-party/vendor-owned areas, and the user-owned source modules with concrete relative paths.'
+        : null,
+      isAutosarRepo
+        ? 'For AUTOSAR/MSAR modules, prefer concrete names such as diagnostics, wake management, CAN/IPC, framework utilities, build scripts, Config_<VARIANT>, and GenData_<VARIANT> over generic labels like "application layer" or "configuration toolchain".'
+        : null,
       '',
       'Task skill guidance:',
       input.skillGuidance ?? '(none found)',

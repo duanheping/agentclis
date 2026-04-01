@@ -34,6 +34,7 @@ import {
 import {
   extractTerminalAttentionFromText,
   reduceCodexAttentionState,
+  reduceCopilotAwaitingResponseState,
   reduceCopilotAttentionState,
 } from '../src/shared/sessionAttention'
 import type {
@@ -44,6 +45,7 @@ import {
   buildCopilotResumeCommand,
   extractCopilotSessionMeta,
   supportsCopilotSessionResume,
+  withCopilotFullAccess,
 } from './copilotCli'
 import {
   buildCodexResumeCommand,
@@ -60,6 +62,7 @@ import {
   resolveShellCommand,
   supportsInlineShellCommand,
 } from './windowsShell'
+import { killTerminalProcessTree } from './ptyProcessTree'
 
 type IPty = import('node-pty').IPty
 
@@ -97,6 +100,7 @@ const CODEX_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
 const CODEX_SESSION_DISCOVERY_INTERVAL_MS = 750
 const CODEX_SESSION_DISCOVERY_ATTEMPTS = 24
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
+const HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT = 256
 const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
 const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
@@ -611,10 +615,6 @@ export class SessionManager {
       this.stopExternalSessionAttentionTracking(sessionId)
     }
 
-    for (const config of Array.from(this.configs.values())) {
-      void this.queueProjectMemoryCapture(config)
-    }
-
     for (const id of Array.from(this.terminals.keys())) {
       this.stopSession(id, true)
     }
@@ -631,6 +631,7 @@ export class SessionManager {
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
       attention: null,
+      awaitingResponse: false,
       status: 'starting',
       pid: undefined,
       exitCode: undefined,
@@ -753,6 +754,7 @@ export class SessionManager {
         const status = exitCode === 0 ? 'exited' : 'error'
         this.setRuntime(sessionId, {
           status,
+          awaitingResponse: false,
           pid: undefined,
           exitCode,
         })
@@ -794,6 +796,7 @@ export class SessionManager {
     } catch (error) {
       this.setRuntime(config.id, {
         status: 'error',
+        awaitingResponse: false,
         pid: undefined,
         exitCode: -1,
       })
@@ -841,7 +844,7 @@ export class SessionManager {
     this.terminals.delete(id)
     this.liveAttentionBuffers.delete(id)
     try {
-      terminal.kill()
+      killTerminalProcessTree(terminal)
     } catch {
       this.suppressedExit.delete(id)
     }
@@ -902,8 +905,8 @@ export class SessionManager {
     }
 
     const provider = this.detectResumableProvider(command)
-    if (provider === 'copilot' && !command.includes('--no-ask-user')) {
-      return `${command} --no-ask-user`
+    if (provider === 'copilot') {
+      return withCopilotFullAccess(command) ?? command
     }
 
     if (
@@ -1063,6 +1066,7 @@ export class SessionManager {
         0,
         Math.min(...referenceTimestamps) - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
       ),
+      HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT,
     )
     const normalizedCwd = this.normalizePath(config.cwd)
     const defaultTitle = deriveSessionTitle(undefined, config.startupCommand, config.cwd)
@@ -1203,12 +1207,13 @@ export class SessionManager {
   private async listRecentExternalSessions(
     provider: 'codex' | 'copilot',
     sinceMs: number,
+    limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
   ): Promise<DetectedExternalSession[]> {
     if (provider === 'copilot') {
-      return this.listRecentCopilotSessions(sinceMs)
+      return this.listRecentCopilotSessions(sinceMs, limit)
     }
 
-    const candidateFiles = await this.listRecentCodexSessionFiles(sinceMs)
+    const candidateFiles = await this.listRecentCodexSessionFiles(sinceMs, limit)
     const sessions: DetectedExternalSession[] = []
 
     for (const filePath of candidateFiles) {
@@ -1223,6 +1228,7 @@ export class SessionManager {
 
   private async listRecentCopilotSessions(
     sinceMs: number,
+    limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
   ): Promise<DetectedExternalSession[]> {
     let entries
     try {
@@ -1267,7 +1273,7 @@ export class SessionManager {
     const sessions: DetectedExternalSession[] = []
     for (const candidate of candidates
       .sort((left, right) => right.modifiedAt - left.modifiedAt)
-      .slice(0, CODEX_SESSION_DISCOVERY_FILE_LIMIT)) {
+      .slice(0, limit)) {
       const sessionMeta = await this.readCopilotSessionMeta(candidate.workspaceFilePath)
       if (sessionMeta) {
         sessions.push(sessionMeta)
@@ -1277,7 +1283,10 @@ export class SessionManager {
     return sessions
   }
 
-  private async listRecentCodexSessionFiles(sinceMs: number): Promise<string[]> {
+  private async listRecentCodexSessionFiles(
+    sinceMs: number,
+    limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
+  ): Promise<string[]> {
     const dayDirectories = this.getCodexSessionDayDirectories(sinceMs)
     const candidates: Array<{
       filePath: string
@@ -1318,7 +1327,7 @@ export class SessionManager {
 
     return candidates
       .sort((left, right) => right.modifiedAt - left.modifiedAt)
-      .slice(0, CODEX_SESSION_DISCOVERY_FILE_LIMIT)
+      .slice(0, limit)
       .map((candidate) => candidate.filePath)
   }
 
@@ -1563,11 +1572,17 @@ export class SessionManager {
     }
 
     let initialOffset = 0
-    let initialAttention: SessionAttentionKind | null = null
+    let initialRuntimeState: Pick<
+      SessionRuntime,
+      'attention' | 'awaitingResponse'
+    > = {
+      attention: null,
+      awaitingResponse: false,
+    }
     try {
       const details = await stat(filePath)
       initialOffset = details.size
-      initialAttention = await this.readPersistedExternalSessionAttention(
+      initialRuntimeState = await this.readPersistedExternalSessionState(
         config.externalSession.provider,
         filePath,
       )
@@ -1576,8 +1591,13 @@ export class SessionManager {
     }
 
     this.stopExternalSessionAttentionTracking(config.id)
-    if (initialAttention) {
-      this.setSessionAttention(config.id, initialAttention)
+    const currentRuntime = this.runtimes.get(config.id) ?? buildRuntime(config.id)
+    if (
+      currentRuntime.attention !== initialRuntimeState.attention ||
+      (currentRuntime.awaitingResponse ?? false) !==
+        initialRuntimeState.awaitingResponse
+    ) {
+      this.setRuntime(config.id, initialRuntimeState)
     }
     const interval = setInterval(() => {
       void this.pollExternalSessionAttention(config.id)
@@ -1594,32 +1614,45 @@ export class SessionManager {
     })
   }
 
-  private async readPersistedExternalSessionAttention(
+  private async readPersistedExternalSessionState(
     provider: 'codex' | 'copilot',
     filePath: string,
-  ): Promise<SessionAttentionKind | null> {
+  ): Promise<Pick<SessionRuntime, 'attention' | 'awaitingResponse'>> {
     const content = await this.readFileTail(
       filePath,
       EXTERNAL_ATTENTION_HISTORY_SCAN_BYTES,
     )
     if (!content) {
-      return null
+      return {
+        attention: null,
+        awaitingResponse: false,
+      }
     }
 
     let attention: SessionAttentionKind | null = null
+    let awaitingResponse = false
     const lines = content.split(/\r?\n/u)
     for (const line of lines) {
       if (!line.trim()) {
         continue
       }
 
-      attention =
-        provider === 'codex'
-          ? reduceCodexAttentionState(attention, line)
-          : reduceCopilotAttentionState(attention, line)
+      if (provider === 'codex') {
+        attention = reduceCodexAttentionState(attention, line)
+        continue
+      }
+
+      attention = reduceCopilotAttentionState(attention, line)
+      awaitingResponse = reduceCopilotAwaitingResponseState(
+        awaitingResponse,
+        line,
+      )
     }
 
-    return attention
+    return {
+      attention,
+      awaitingResponse,
+    }
   }
 
   private stopExternalSessionAttentionTracking(sessionId: string): void {
@@ -1732,16 +1765,29 @@ export class SessionManager {
       return
     }
 
-    const currentAttention = this.runtimes.get(sessionId)?.attention ?? null
+    const currentRuntime = this.runtimes.get(sessionId) ?? buildRuntime(sessionId)
+    const currentAttention = currentRuntime.attention ?? null
     const nextAttention =
       provider === 'codex'
         ? reduceCodexAttentionState(currentAttention, line)
         : reduceCopilotAttentionState(currentAttention, line)
-    if (nextAttention === currentAttention) {
+    const currentAwaitingResponse = currentRuntime.awaitingResponse ?? false
+    const nextAwaitingResponse =
+      provider === 'copilot'
+        ? reduceCopilotAwaitingResponseState(currentAwaitingResponse, line)
+        : currentAwaitingResponse
+
+    if (
+      nextAttention === currentAttention &&
+      nextAwaitingResponse === currentAwaitingResponse
+    ) {
       return
     }
 
-    this.setSessionAttention(sessionId, nextAttention)
+    this.setRuntime(sessionId, {
+      attention: nextAttention,
+      awaitingResponse: nextAwaitingResponse,
+    })
   }
 
   private claimExternalSession(config: SessionConfig): void {
@@ -2289,10 +2335,6 @@ export class SessionManager {
     return this.setSessionAttention(id, null)
   }
 
-  private clearSessionAttention(id: string): boolean {
-    return this.setSessionAttention(id, null)
-  }
-
   private setRuntime(
     id: string,
     patch: Partial<Omit<SessionRuntime, 'sessionId'>>,
@@ -2313,6 +2355,7 @@ export class SessionManager {
         source: 'system',
         metadata: {
           attention: nextRuntime.attention ?? null,
+          awaitingResponse: nextRuntime.awaitingResponse ?? false,
           status: nextRuntime.status,
           pid: nextRuntime.pid ?? null,
           exitCode: nextRuntime.exitCode ?? null,
@@ -2333,9 +2376,29 @@ export class SessionManager {
   ): void {
     if (source === 'user') {
       this.clearLiveAttentionBuffer(id)
-      const attentionCleared = this.clearSessionAttention(id)
+      const config = this.configs.get(id)
+      const currentRuntime = this.runtimes.get(id) ?? buildRuntime(id)
+      const runtimePatch: Partial<Omit<SessionRuntime, 'sessionId'>> = {}
+
+      if (currentRuntime.attention !== null) {
+        runtimePatch.attention = null
+      }
+
+      if (
+        config &&
+        /[\r\n]/u.test(data) &&
+        (config.externalSession?.provider === 'copilot' ||
+          supportsCopilotSessionResume(config.startupCommand)) &&
+        currentRuntime.awaitingResponse !== true
+      ) {
+        runtimePatch.awaitingResponse = true
+      }
+
       this.capturePendingFirstPromptTitle(id, data)
-      if (!attentionCleared) {
+
+      if (Object.keys(runtimePatch).length > 0) {
+        this.setRuntime(id, runtimePatch)
+      } else {
         this.touchRuntime(id)
       }
     }

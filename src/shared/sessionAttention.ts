@@ -164,6 +164,16 @@ function parseCopilotEvent(line: string): {
     : null
 }
 
+function isCopilotAssistantTurnComplete(
+  parsed: ReturnType<typeof parseCopilotEvent>,
+): boolean {
+  if (!parsed || parsed.type !== 'assistant.message') {
+    return false
+  }
+
+  return Array.isArray(parsed.data?.toolRequests) && parsed.data.toolRequests.length === 0
+}
+
 function extractCopilotAttentionFromParsedEvent(
   parsed: ReturnType<typeof parseCopilotEvent>,
 ): SessionAttentionKind | null {
@@ -260,6 +270,30 @@ export function reduceCopilotAttentionState(
   }
 
   return extractCopilotAttentionFromParsedEvent(parsed) ?? current
+}
+
+export function reduceCopilotAwaitingResponseState(
+  current: boolean,
+  line: string,
+): boolean {
+  const parsed = parseCopilotEvent(line)
+  if (!parsed) {
+    return current
+  }
+
+  if (parsed.type === 'user.message') {
+    return true
+  }
+
+  if (parsed.type === 'assistant.turn_end') {
+    return false
+  }
+
+  if (isCopilotAssistantTurnComplete(parsed)) {
+    return false
+  }
+
+  return current
 }
 
 export function getSessionAttentionBadgeLabel(

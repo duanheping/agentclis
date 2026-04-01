@@ -25,6 +25,12 @@ Use this workflow:
    If sessions disagree, keep the claim that matches the current codebase or appears repeatedly across sessions with stronger evidence.
 8. Capture user corrections aggressively.
    If the user corrected a wrong assumption and that correction is repo-relevant and durable, prefer preserving that lesson over generic implementation notes.
+9. Keep one lesson in one category.
+   Do not repeat the same file, command, or rule across facts, workflows, conventions, debug approaches, and component workflows unless each entry adds meaning that the others do not.
+10. Preserve exact corrected syntax.
+   When the user corrected a command, prompt prefix, shell marker, or literal token, keep only the corrected final form and drop the earlier wrong spelling.
+11. Treat generic instruction docs carefully.
+   Files such as `AGENTS.md`, `README.md`, or `github/copilot-instructions.md` should appear only when they are the authoritative source for a repo-specific rule; prefer code, configs, build scripts, and tests over generic instruction files.
 
 Quality bar:
 
@@ -33,4 +39,5 @@ Quality bar:
 - Emit fewer items when they are higher signal.
 - Write each item so a future agent can act on it immediately.
 - Prefer memory that explains how to succeed in this repo over summaries of what happened in a past session.
+- Top-level memory should stay outline-first: keep long detail in the focused docs, not in repeated generic summaries.
 - Do not preserve session-specific titles, shell paths, branch names, commit SHAs, PR numbers, build numbers, or temporary checkout details.

@@ -6,6 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TranscriptEvent } from '../src/shared/projectMemory'
+import type { SessionDataEvent } from '../src/shared/session'
 import type { ProjectLocationIdentity } from './projectIdentity'
 
 function normalizeMockPath(filePath: string): string {
@@ -37,6 +38,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     createProjectSessionWorktree,
+    killTerminalProcessTree: vi.fn(),
     terminals,
     spawn,
     getFile: (filePath: string) => files.get(filePath)?.content,
@@ -62,6 +64,7 @@ const mocks = vi.hoisted(() => {
       nextPid = 1000
       files.clear()
       terminals.length = 0
+      mocks.killTerminalProcessTree.mockReset()
       spawn.mockReset()
       spawn.mockImplementation(() => {
         const terminal = createTerminal()
@@ -76,6 +79,10 @@ const mocks = vi.hoisted(() => {
     },
   }
 })
+
+vi.mock('./ptyProcessTree', () => ({
+  killTerminalProcessTree: mocks.killTerminalProcessTree,
+}))
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -941,6 +948,115 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(2)
     })
   })
+
+  it('restores a historical Codex session even when newer transcripts push it past the recent-file window', async () => {
+    const createdAt = '2026-03-30T15:10:31.377Z'
+    const updatedAt = '2026-03-30T15:12:35.672Z'
+    const startedAt = new Date('2026-03-30T15:10:33.570Z')
+    vi.setSystemTime(new Date('2026-03-30T17:00:00.000Z'))
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt,
+          updatedAt,
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'inspect codex hook plugins',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt,
+          updatedAt,
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const targetSessionFilePath = path.join(
+      os.homedir(),
+      '.codex',
+      'sessions',
+      '2026',
+      '03',
+      '30',
+      'rollout-target-session.jsonl',
+    )
+    mocks.setFile(
+      targetSessionFilePath,
+      [
+        `{"timestamp":"${startedAt.toISOString()}","type":"session_meta","payload":{"id":"019historical-codex-session","timestamp":"${startedAt.toISOString()}","cwd":"C:\\\\repo","originator":"codex_cli_rs","source":"cli"}}`,
+        '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect codex hook plugins"}]}}',
+      ].join('\n'),
+      startedAt.getTime(),
+    )
+
+    for (let index = 0; index < 40; index += 1) {
+      const decoyStartedAt = new Date(startedAt.getTime() + (index + 1) * 60_000)
+      const decoySessionFilePath = path.join(
+        os.homedir(),
+        '.codex',
+        'sessions',
+        '2026',
+        '03',
+        '30',
+        `rollout-decoy-session-${index}.jsonl`,
+      )
+      mocks.setFile(
+        decoySessionFilePath,
+        [
+          `{"timestamp":"${decoyStartedAt.toISOString()}","type":"session_meta","payload":{"id":"019decoy-session-${index}","timestamp":"${decoyStartedAt.toISOString()}","cwd":"C:\\\\other-${index}","originator":"codex_cli_rs","source":"cli"}}`,
+        ].join('\n'),
+        decoyStartedAt.getTime(),
+      )
+    }
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'codex resume 019historical-codex-session',
+    ])
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: {
+              provider: string
+              sessionId: string
+            }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toEqual(
+      expect.objectContaining({
+        provider: 'codex',
+        sessionId: '019historical-codex-session',
+      }),
+    )
+  })
 })
 
 describe('SessionManager project lifecycle', () => {
@@ -993,7 +1109,7 @@ describe('SessionManager project lifecycle', () => {
     vi.runOnlyPendingTimers()
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
 
-    manager.closeSession(session.config.id)
+    await manager.closeSession(session.config.id)
 
     expect(manager.listSessions()).toEqual({
       projects: [
@@ -1008,6 +1124,8 @@ describe('SessionManager project lifecycle', () => {
       ],
       activeSessionId: null,
     })
+    expect(mocks.killTerminalProcessTree).toHaveBeenCalledTimes(1)
+    expect(mocks.killTerminalProcessTree).toHaveBeenCalledWith(mocks.terminals[0])
   })
 
   it('launches Codex in true bypass mode when full-access is selected', async () => {
@@ -1032,6 +1150,106 @@ describe('SessionManager project lifecycle', () => {
       '-NoExit',
       '-Command',
       'codex --dangerously-bypass-approvals-and-sandbox',
+    ])
+  })
+
+  it('launches Copilot with full-access flags when full-access is selected', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --allow-all --no-ask-user',
+    ])
+  })
+
+  it('adds Copilot full-access flags even when related allow flags are already present', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --allow-all-paths --no-color',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --allow-all-paths --no-color --allow-all --no-ask-user',
+    ])
+  })
+
+  it('does not mistake Copilot option values for existing full-access flags', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --config-dir "C:\\tmp\\--allow-all" --no-ask-user',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --config-dir C:\\tmp\\--allow-all --no-ask-user --allow-all',
+    ])
+  })
+
+  it('does not duplicate existing Copilot full-access flags', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --allow-all --no-ask-user',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(spawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'copilot --allow-all --no-ask-user',
     ])
   })
 
@@ -1239,6 +1457,123 @@ describe('SessionManager project lifecycle', () => {
     ).toBeNull()
   })
 
+  it('marks Copilot sessions as awaiting a response after user input and clears it on completion', async () => {
+    const onRuntime = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot',
+    })
+
+    manager.writeToSession(session.config.id, 'please investigate')
+    manager.writeToSession(session.config.id, '\r')
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.awaitingResponse,
+    ).toBe(true)
+
+    const eventsFilePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      'copilot-session-1',
+      'events.jsonl',
+    )
+    mocks.setFile(
+      eventsFilePath,
+      [
+        '{"type":"user.message","data":{"content":"please investigate"}}',
+        '{"type":"assistant.turn_start","data":{"turnId":"1"}}',
+        '{"type":"assistant.message","data":{"content":"All done.","toolRequests":[]}}',
+      ].join('\n'),
+      '2026-03-31T18:40:00.000Z',
+    )
+
+    const externalConfig = manager
+      .listSessions()
+      .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)?.config
+
+    expect(externalConfig?.externalSession?.provider).toBeUndefined()
+    expect(externalConfig).toBeDefined()
+
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.copilot',
+        'session-state',
+        'copilot-session-1',
+        'workspace.yaml',
+      ),
+      [
+        'id: copilot-session-1',
+        'cwd: C:\\repo',
+        'summary: Investigate reminder state',
+        'created_at: 2026-03-31T18:35:05.000Z',
+      ].join('\n'),
+      '2026-03-31T18:35:05.000Z',
+    )
+
+    ;(manager as unknown as {
+      attachExternalSession: (
+        config: typeof session.config,
+        detectedSession: {
+          provider: 'copilot'
+          sessionId: string
+          timestamp: string
+          cwd: string
+          startedAt: number
+          sourcePath: string
+        },
+      ) => void
+    }).attachExternalSession(
+      externalConfig!,
+      {
+        provider: 'copilot',
+        sessionId: 'copilot-session-1',
+        timestamp: '2026-03-31T18:35:05.000Z',
+        cwd: 'C:\\repo',
+        startedAt: Date.parse('2026-03-31T18:35:05.000Z'),
+        sourcePath: eventsFilePath,
+      },
+    )
+
+    await vi.waitFor(() => {
+      expect(
+        manager.listSessions().projects[0]?.sessions.find(
+          (entry) => entry.config.id === session.config.id,
+        )?.runtime.awaitingResponse,
+      ).toBe(false)
+    })
+
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.attention,
+    ).toBe('task-complete')
+    expect(onRuntime).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      runtime: expect.objectContaining({
+        awaitingResponse: true,
+      }),
+    })
+    expect(onRuntime).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      runtime: expect.objectContaining({
+        awaitingResponse: false,
+        attention: 'task-complete',
+      }),
+    })
+  })
+
   it('routes terminal data to the correct session when multiple sessions run concurrently', async () => {
     const onData = vi.fn()
     const manager = new SessionManager({
@@ -1284,24 +1619,27 @@ describe('SessionManager project lifecycle', () => {
     terminal3Listener?.('output-from-session-3')
     terminal2Listener?.('output-from-session-2')
 
-    const session1Events = onData.mock.calls.filter(
-      ([event]: [{ sessionId: string }]) => event.sessionId === session1.config.id,
+    const dataEvents = onData.mock.calls.map(
+      ([event]) => event as SessionDataEvent,
     )
-    const session2Events = onData.mock.calls.filter(
-      ([event]: [{ sessionId: string }]) => event.sessionId === session2.config.id,
+    const session1Events = dataEvents.filter(
+      (event) => event.sessionId === session1.config.id,
     )
-    const session3Events = onData.mock.calls.filter(
-      ([event]: [{ sessionId: string }]) => event.sessionId === session3.config.id,
+    const session2Events = dataEvents.filter(
+      (event) => event.sessionId === session2.config.id,
+    )
+    const session3Events = dataEvents.filter(
+      (event) => event.sessionId === session3.config.id,
     )
 
     expect(session1Events).toHaveLength(1)
-    expect(session1Events[0]?.[0].chunk).toBe('output-from-session-1')
+    expect(session1Events[0]?.chunk).toBe('output-from-session-1')
 
     expect(session2Events).toHaveLength(1)
-    expect(session2Events[0]?.[0].chunk).toBe('output-from-session-2')
+    expect(session2Events[0]?.chunk).toBe('output-from-session-2')
 
     expect(session3Events).toHaveLength(1)
-    expect(session3Events[0]?.[0].chunk).toBe('output-from-session-3')
+    expect(session3Events[0]?.chunk).toBe('output-from-session-3')
   })
 
   it('ignores terminal data from a replaced terminal after session restart', async () => {
@@ -2072,7 +2410,7 @@ describe('SessionManager logical project identity and project context', () => {
     )
   })
 
-  it('queues project memory capture for open sessions during shutdown', async () => {
+  it('does not queue project memory capture for open sessions during shutdown', async () => {
     const projectMemory = buildProjectMemoryServiceMock()
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
@@ -2100,7 +2438,7 @@ describe('SessionManager logical project identity and project context', () => {
       },
     )
 
-    const session = await manager.createSession({
+    await manager.createSession({
       projectTitle: 'Workspace',
       projectRootPath: 'C:\\repo',
       startupCommand: 'codex',
@@ -2108,16 +2446,10 @@ describe('SessionManager logical project identity and project context', () => {
 
     manager.dispose()
     await vi.waitFor(() => {
-      expect(projectMemory.captureSession).toHaveBeenCalledTimes(1)
+      expect(projectMemory.dispose).toHaveBeenCalledTimes(1)
     })
 
-    expect(projectMemory.captureSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          id: session.config.id,
-        }),
-      }),
-    )
+    expect(projectMemory.captureSession).not.toHaveBeenCalled()
     expect(projectMemory.dispose).toHaveBeenCalledTimes(1)
   })
 

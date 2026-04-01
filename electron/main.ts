@@ -50,9 +50,13 @@ import { TransientFileStore } from './transientFileStore'
 import { TranscriptStore } from './transcriptStore'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
 import { resolveShellCommand, buildShellArgs, supportsInlineShellCommand } from './windowsShell'
-import { cleanupStructuredAgentTemp } from './structuredAgentRunner'
+import {
+  abortStructuredAgentProcesses,
+  cleanupStructuredAgentTemp,
+} from './structuredAgentRunner'
 import type { PreparedStructuredAgent } from './structuredAgentRunner'
 import { AnalysisEventFormatter } from './analysisFormatter'
+import { killTerminalProcessTree } from './ptyProcessTree'
 
 type IPty = import('node-pty').IPty
 const requireNative = createRequire(import.meta.url)
@@ -267,7 +271,11 @@ function launchNextAnalysisProject(kind: 'architecture' | 'sessions'): void {
 
 function closeAnalysisTerminal(): void {
   if (analysisTerminal) {
-    try { analysisTerminal.kill() } catch { /* ignore */ }
+    try {
+      killTerminalProcessTree(analysisTerminal)
+    } catch {
+      /* ignore */
+    }
     analysisTerminal = null
   }
   analysisFormatter = null
@@ -833,6 +841,8 @@ if (!gotSingleInstanceLock) {
   })
 
   app.on('before-quit', () => {
+    closeAnalysisTerminal()
+    abortStructuredAgentProcesses()
     windowsCommandPromptManager.dispose()
     sessionManager.dispose()
     void transientFileStore.dispose()

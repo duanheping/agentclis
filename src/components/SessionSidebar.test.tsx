@@ -282,6 +282,22 @@ describe('SessionSidebar', () => {
 
     expect(screen.getByText('Reply')).toBeInTheDocument()
     expect(screen.getByText("why you don't show session title")).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /why you don't show session title/i }),
+    ).toHaveClass('has-attention', 'is-attention-needs-user-decision')
+  })
+
+  it('adds a waiting reminder class while a session is awaiting response', () => {
+    const project = buildProject()
+    project.sessions[0]!.runtime.awaitingResponse = true
+
+    renderSidebar({
+      projects: [project],
+    })
+
+    expect(
+      screen.getByRole('button', { name: /why you don't show session title/i }),
+    ).toHaveClass('is-awaiting-response')
   })
 
   it('keeps library setup feedback inline while hiding sync diagnostics', async () => {

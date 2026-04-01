@@ -66,6 +66,7 @@ export interface SessionRuntime {
   sessionId: string
   status: SessionStatus
   attention?: SessionAttentionKind | null
+  awaitingResponse?: boolean
   pid?: number
   exitCode?: number
   lastActiveAt: string
@@ -220,6 +221,7 @@ export function buildRuntime(
     sessionId,
     status,
     attention: null,
+    awaitingResponse: false,
     lastActiveAt,
   }
 }

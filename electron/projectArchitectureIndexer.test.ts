@@ -88,16 +88,36 @@ Persists durable state, history, and job progress for later reads and retries.
 
 async function createAutosarArchitectureFixture(): Promise<string> {
   return await createFixture({
-    'Applications/AppMain.c': 'void AppMain(void) {}\n',
-    'SWC/Feature.c': 'void Feature(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.bat': '@echo off\n',
+    'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.gpj': 'project ECG2_VMCU\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Vmcu/VmcuToken.c': 'void VmcuToken(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Diag/DiagInboundApp.c': 'void DiagInboundApp(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Wm/Wm.c': 'void Wm(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Can/CanTpWrapper.c': 'void CanTpWrapper(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Ipc_Hal/Uart/UartIpc.c': 'void UartIpc(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Cdd/UartCdd.c': 'void UartCdd(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/Flash/OTA_Flash.c': 'void OTA_Flash(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Source/hse_driver/hse_comm.c': 'void hse_comm(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/Include/Vmcu/VmcuToken.h': 'void VmcuToken(void);\n',
+    'Applications/SipAddon/StartApplication/Appl/GenData_P708_MY23/Rte.c': 'void Rte_Start(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/GenData_CX727_MY26_BEV/Rte.c': 'void Rte_Start(void) {}\n',
+    'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU_P708_MY23/build.log': 'ok\n',
+    'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU_CX727_MY26_BEV/build.log': 'ok\n',
+    'Applications/SipAddon/StartApplication/Config_P708_MY23/ECUC/Can_ecuc.arxml': '<AUTOSAR></AUTOSAR>\n',
+    'Applications/SipAddon/StartApplication/Config_CX727_MY26_BEV/ECUC/Wm_ecuc.arxml': '<AUTOSAR></AUTOSAR>\n',
+    'Applications/SipAddon/StartApplication/ECG_CAN_ETH_P708_MY23.dpa': '<dpa />\n',
+    'Applications/SipAddon/StartApplication/ECG_CAN_ETH_CX727_MY26_BEV.dpa': '<dpa />\n',
     'BSW/BswInit.c': 'void BswInit(void) {}\n',
     'BSWMD/BswInit.arxml': '<ECUC></ECUC>\n',
     'DaVinciConfigurator/project.dpa': '<dpa />\n',
     'Generators/generate.bat': '@echo off\n',
     'vpconfig/variant.ecuc.arxml': '<AUTOSAR></AUTOSAR>\n',
     'unit_test/test_BswInit.c': 'void test_BswInit(void) {}\n',
+    'unit_test/UnitTest_ECG2_Diag/test/test_diag.c': 'void test_diag(void) {}\n',
+    'unit_test/UnitTest_Wm/test/test_wm.c': 'void test_wm(void) {}\n',
     'Tools/helper.ps1': 'Write-Host test\n',
-    'README.md': 'AUTOSAR ECU repository for generated BSW and application integration.\n',
+    'ThirdParty/vector/lib.c': 'void lib(void) {}\n',
+    'README.md': 'AUTOSAR ECU repository for generated BSW, variant configuration, and VMCU application integration.\n',
   })
 }
 
@@ -211,29 +231,55 @@ describe('projectArchitectureIndexer', () => {
     })
 
     expect(snapshot).not.toBeNull()
-    expect(snapshot?.systemOverview).toContain('AUTOSAR-style repository layout')
+    expect(snapshot?.systemOverview).toContain('ECG2_VMCU.bat')
+    expect(snapshot?.systemOverview).toContain('Detected 2 variant-specific')
     expect(snapshot?.modules.map((module) => module.id)).toEqual(
       expect.arrayContaining([
-        'autosar-application-layer',
-        'autosar-bsw-platform',
-        'autosar-configuration-toolchain',
-        'autosar-verification',
+        'autosar-build-entrypoints',
+        'autosar-variant-layout',
+        'autosar-user-source-root',
+        'autosar-generated-platform',
+        'autosar-diagnostics',
+        'autosar-wake-management',
+      ]),
+    )
+    expect(
+      snapshot?.modules.find((module) => module.id === 'autosar-build-entrypoints')?.paths,
+    ).toEqual(
+      expect.arrayContaining([
+        'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.bat',
+        'Applications/SipAddon/StartApplication/Appl/ECG2_VMCU.gpj',
+      ]),
+    )
+    expect(
+      snapshot?.modules.find((module) => module.id === 'autosar-variant-layout')?.paths,
+    ).toEqual(
+      expect.arrayContaining([
+        'Applications/SipAddon/StartApplication/Config_P708_MY23',
+        'Applications/SipAddon/StartApplication/Config_CX727_MY26_BEV',
+      ]),
+    )
+    expect(
+      snapshot?.modules.find((module) => module.id === 'autosar-user-source-root')?.paths,
+    ).toEqual(
+      expect.arrayContaining([
+        'Applications/SipAddon/StartApplication/Appl/Source',
       ]),
     )
     expect(snapshot?.interactions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'autosar-config-to-bsw',
+          id: 'autosar-variant-to-build',
         }),
         expect.objectContaining({
-          id: 'autosar-application-to-bsw',
+          id: 'autosar-user-to-platform',
         }),
       ]),
     )
     expect(snapshot?.glossary).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          term: 'BSW',
+          term: 'Config_<VARIANT>',
         }),
       ]),
     )
