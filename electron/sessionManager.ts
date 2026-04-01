@@ -118,17 +118,70 @@ const EXTERNAL_ATTENTION_HISTORY_SCAN_BYTES = 512 * 1024
 const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
 
+function normalizeSessionTitleForComparison(title: string): string {
+  return title.trim().toLowerCase()
+}
+
+function isPathLikeSessionTitle(title: string): boolean {
+  const normalized = title.trim()
+  if (!normalized) {
+    return false
+  }
+
+  return (
+    /^\/\S*$/u.test(normalized) ||
+    /^[A-Za-z]:[\\/]\S*$/u.test(normalized) ||
+    /^\\\\\S+$/u.test(normalized)
+  )
+}
+
 function isMeaningfulSessionTitleCandidate(title: string): boolean {
   const normalized = title.trim()
   if (!normalized) {
     return false
   }
 
-  if (/^\/\S*$/u.test(normalized)) {
+  if (isPathLikeSessionTitle(normalized)) {
     return false
   }
 
   return /[\p{L}\p{N}]/u.test(normalized)
+}
+
+function deriveLegacySessionDefaultTitle(startupCommand: string, cwd: string): string {
+  const commandLabel = startupCommand.trim().split(/\s+/)[0]
+  if (commandLabel) {
+    return commandLabel
+  }
+
+  const normalizedPath = cwd.trim().replace(/[\\/]+$/, '')
+  const pathParts = normalizedPath.split(/[\\/]/).filter(Boolean)
+  return pathParts.at(-1) ?? 'New Session'
+}
+
+function isLowSignalSessionTitle(
+  title: string,
+  startupCommand: string,
+  cwd: string,
+): boolean {
+  const normalizedTitle = title.trim()
+  if (!normalizedTitle) {
+    return true
+  }
+
+  if (!isMeaningfulSessionTitleCandidate(normalizedTitle)) {
+    return true
+  }
+
+  const comparableTitle = normalizeSessionTitleForComparison(normalizedTitle)
+  return (
+    comparableTitle === normalizeSessionTitleForComparison(
+      deriveSessionTitle(undefined, startupCommand, cwd),
+    ) ||
+    comparableTitle === normalizeSessionTitleForComparison(
+      deriveLegacySessionDefaultTitle(startupCommand, cwd),
+    )
+  )
 }
 
 interface PersistedSessionState {
@@ -1952,7 +2005,9 @@ export class SessionManager {
     config: StoredSessionConfig,
     cwd: string,
   ): string {
-    const title = deriveSessionTitle(config.title, config.startupCommand, cwd)
+    const title = isLowSignalSessionTitle(config.title, config.startupCommand, cwd)
+      ? deriveSessionTitle(undefined, config.startupCommand, cwd)
+      : deriveSessionTitle(config.title, config.startupCommand, cwd)
     const externalTitle = this.readStoredExternalSessionTitle(config.externalSession)
 
     if (!externalTitle) {
@@ -1994,11 +2049,7 @@ export class SessionManager {
       return true
     }
 
-    if (!isMeaningfulSessionTitleCandidate(title)) {
-      return true
-    }
-
-    return title === deriveSessionTitle(undefined, config.startupCommand, cwd)
+    return isLowSignalSessionTitle(title, config.startupCommand, cwd)
   }
 
   private shouldCaptureFirstPromptTitle(
@@ -2028,7 +2079,7 @@ export class SessionManager {
       return false
     }
 
-    return title === deriveSessionTitle(undefined, config.startupCommand, cwd)
+    return isLowSignalSessionTitle(title, config.startupCommand, cwd)
   }
 
   private capturePendingFirstPromptTitle(id: string, data: string): void {

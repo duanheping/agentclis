@@ -77,6 +77,19 @@ describe('session helpers', () => {
     expect(deriveSessionTitle('', 'npx codex --profile dev', 'C:\\repo')).toBe('npx')
   })
 
+  it('extracts base name from full-path startup command', () => {
+    expect(deriveSessionTitle('', 'C:\\Users\\hduan10\\AppData\\Local\\Temp\\codex.exe --model gpt', 'C:\\repo'))
+      .toBe('codex')
+    expect(deriveSessionTitle('', '/usr/local/bin/copilot', '/repo'))
+      .toBe('copilot')
+    expect(deriveSessionTitle('', 'C:\\tools\\codex.exe', 'C:\\repo'))
+      .toBe('codex')
+    expect(deriveSessionTitle('', 'C:\\tools\\.exe', 'C:\\repo'))
+      .toBe('.exe')
+    expect(deriveSessionTitle('', '/usr/local/bin/.sh', '/repo'))
+      .toBe('.sh')
+  })
+
   it('resolveSessionCwd returns trimmed cwd when provided', () => {
     expect(resolveSessionCwd('  D:\\work  ', 'C:\\default')).toBe('D:\\work')
   })
