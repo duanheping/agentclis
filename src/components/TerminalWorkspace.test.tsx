@@ -27,6 +27,12 @@ vi.mock('@xterm/xterm', () => ({
     open = vi.fn((container: HTMLElement) => {
       const terminalRoot = document.createElement('div')
       terminalRoot.className = 'xterm'
+      const scrollable = document.createElement('div')
+      scrollable.className = 'xterm-scrollable-element'
+      const scrollbar = document.createElement('div')
+      scrollbar.className = 'scrollbar invisible fade'
+      scrollable.appendChild(scrollbar)
+      terminalRoot.appendChild(scrollable)
       const viewport = document.createElement('div')
       viewport.className = 'xterm-viewport'
       terminalRoot.appendChild(viewport)
@@ -272,5 +278,21 @@ describe('TerminalWorkspace', () => {
       expect(textareas).toHaveLength(2)
       expect(document.activeElement).toBe(textareas[1])
     })
+  })
+
+  it('keeps the xterm overlay scrollbar interactive for pointer dragging', () => {
+    const { container } = render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    const scrollbar = container.querySelector(
+      '.terminal-surface .xterm .xterm-scrollable-element > .scrollbar.invisible.fade',
+    ) as HTMLDivElement | null
+
+    expect(scrollbar).not.toBeNull()
   })
 })

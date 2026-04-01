@@ -1396,6 +1396,17 @@
   padding: 0;
 }
 
+.terminal-surface .xterm .xterm-scrollable-element > .scrollbar.invisible,
+.analysis-window__terminal .xterm .xterm-scrollable-element > .scrollbar.invisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.terminal-surface .xterm .xterm-scrollable-element > .scrollbar.invisible.fade,
+.analysis-window__terminal .xterm .xterm-scrollable-element > .scrollbar.invisible.fade {
+  transition: none;
+}
+
 .terminal-surface .xterm-viewport {
   border-radius: 0;
 }
