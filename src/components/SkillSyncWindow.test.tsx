@@ -72,7 +72,7 @@ describe('SkillSyncWindow', () => {
 
   afterEach(() => {
     cleanup()
-    delete window.agentCli
+    Reflect.deleteProperty(window, 'agentCli')
     vi.restoreAllMocks()
   })
 
