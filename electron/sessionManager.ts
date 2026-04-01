@@ -705,9 +705,9 @@ export class SessionManager {
         this.persist()
       }
 
-      if (normalizedConfig.externalSession?.provider === 'codex') {
+      if (normalizedConfig.externalSession) {
         const shouldKeepStoredSession =
-          await this.shouldKeepStoredCodexExternalSession(normalizedConfig)
+          await this.shouldKeepStoredExternalSession(normalizedConfig)
         if (!shouldKeepStoredSession) {
           this.releaseExternalSession(normalizedConfig)
           const nextConfig: SessionConfig = {
@@ -1177,21 +1177,21 @@ export class SessionManager {
     return best.candidate
   }
 
-  private async shouldKeepStoredCodexExternalSession(
+  private async shouldKeepStoredExternalSession(
     config: SessionConfig,
   ): Promise<boolean> {
-    if (config.externalSession?.provider !== 'codex') {
+    if (!config.externalSession) {
       return true
     }
 
     const candidate = await this.findRecentExternalSessionById(
-      'codex',
+      config.externalSession.provider,
       config.externalSession.sessionId,
       this.getExternalSessionReferenceTimes(config),
     )
 
     if (!candidate) {
-      return true
+      return false
     }
 
     return this.isEligibleExternalSessionCandidate(candidate)
@@ -1242,7 +1242,19 @@ export class SessionManager {
       }
     }
 
-    if (candidate.provider !== 'codex' || !candidate.sourcePath) {
+    if (candidate.provider === 'copilot') {
+      const transcriptPrefix = await this.readFilePrefix(
+        path.join(COPILOT_SESSIONS_ROOT, candidate.sessionId, 'events.jsonl'),
+        EXTERNAL_SESSION_TITLE_SCAN_BYTES,
+      )
+      if (!transcriptPrefix) {
+        return false
+      }
+
+      return transcriptPrefix.toLowerCase().includes(normalizedTitle)
+    }
+
+    if (!candidate.sourcePath) {
       return false
     }
 

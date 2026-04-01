@@ -832,6 +832,117 @@ describe('SessionManager restore policy', () => {
     ).toBeUndefined()
   })
 
+  it('drops a stale saved Copilot session id and recovers a matching historical session before restore', async () => {
+    const onConfig = vi.fn()
+    const staleExternalSessionId = 'stale-copilot-session'
+    const recoveredExternalSessionId = '11111111-2222-3333-4444-555555555555'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'review callout analysis',
+          startupCommand: 'copilot',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+          externalSession: {
+            provider: 'copilot',
+            sessionId: staleExternalSessionId,
+            detectedAt: '2026-03-20T08:01:00.000Z',
+          },
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    const recoveredWorkspacePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      recoveredExternalSessionId,
+      'workspace.yaml',
+    )
+    const recoveredEventsPath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      recoveredExternalSessionId,
+      'events.jsonl',
+    )
+
+    mocks.setFile(
+      recoveredWorkspacePath,
+      [
+        `id: ${recoveredExternalSessionId}`,
+        'cwd: C:\\repo',
+        'created_at: 2026-03-20T08:00:31.000Z',
+      ].join('\n'),
+      '2026-03-20T08:15:00.000Z',
+    )
+    mocks.setFile(
+      recoveredEventsPath,
+      [
+        '{"type":"user.message","data":{"content":"review callout analysis"}}',
+        '{"type":"assistant.message","data":{"content":"All set.","toolRequests":[]}}',
+      ].join('\n'),
+      '2026-03-20T08:15:00.000Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      `copilot --resume ${recoveredExternalSessionId}`,
+    ])
+
+    expect(onConfig).toHaveBeenCalledWith({
+      sessionId: 'session-a',
+      config: expect.objectContaining({
+        externalSession: {
+          provider: 'copilot',
+          sessionId: recoveredExternalSessionId,
+          detectedAt: expect.any(String),
+        },
+      }),
+    })
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: { sessionId: string }
+          }>
+        }
+      ).sessions[0]?.externalSession?.sessionId,
+    ).toBe(recoveredExternalSessionId)
+  })
+
   it('does not cross-match external sessions between sibling sessions in the same project', async () => {
     const sessionACreated = '2026-03-22T12:00:00.000Z'
     const sessionBCreated = '2026-03-22T12:05:00.000Z'
@@ -1847,6 +1958,102 @@ describe('SessionManager project lifecycle', () => {
         }
       ).sessions[0]?.title,
     ).toBe('Review ECG2 Callout Analysis')
+  })
+
+  it('hydrates Copilot historical matches from events when workspace summary is missing', async () => {
+    const externalSessionId = '7b66ea2f-c5fe-4665-89b3-5236c54bb5f7'
+    const workspaceFilePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      externalSessionId,
+      'workspace.yaml',
+    )
+    const eventsFilePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      externalSessionId,
+      'events.jsonl',
+    )
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-21T09:00:00.000Z',
+          updatedAt: '2026-03-21T09:02:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: 'review callout analysis',
+          startupCommand: 'copilot',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-21T09:00:32.043Z',
+          updatedAt: '2026-03-21T09:02:55.564Z',
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    mocks.setFile(
+      workspaceFilePath,
+      [
+        `id: ${externalSessionId}`,
+        'cwd: C:\\repo',
+        'created_at: 2026-03-21T09:00:40.918Z',
+      ].join('\n'),
+      '2026-03-21T09:02:00.000Z',
+    )
+    mocks.setFile(
+      eventsFilePath,
+      [
+        '{"type":"user.message","data":{"content":"review callout analysis"}}',
+        '{"type":"assistant.message","data":{"content":"All done.","toolRequests":[]}}',
+      ].join('\n'),
+      '2026-03-21T09:02:00.000Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      `copilot --resume ${externalSessionId}`,
+    ])
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: { provider: string; sessionId: string }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toEqual({
+      provider: 'copilot',
+      sessionId: externalSessionId,
+      detectedAt: expect.any(String),
+    })
   })
 })
 
