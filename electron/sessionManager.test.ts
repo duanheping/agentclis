@@ -1730,6 +1730,55 @@ describe('SessionManager project lifecycle', () => {
     })
   })
 
+  it('keeps restored legacy path titles eligible for first-prompt inference', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-13T13:29:32.043Z',
+          updatedAt: '2026-03-13T13:29:32.043Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: 'C:\\Users\\hduan10\\AppData\\Local\\Temp\\codex.exe',
+          startupCommand: 'C:\\Users\\hduan10\\AppData\\Local\\Temp\\codex.exe --model gpt',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-13T13:29:32.043Z',
+          updatedAt: '2026-03-13T13:29:55.564Z',
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const restoredSession = manager.listSessions().projects[0]?.sessions[0]
+
+    expect(restoredSession?.config.title).toBe('codex')
+    expect(restoredSession?.config.pendingFirstPromptTitle).toBe(true)
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{ title: string; pendingFirstPromptTitle?: boolean }>
+        }
+      ).sessions[0],
+    ).toMatchObject({
+      title: 'codex',
+      pendingFirstPromptTitle: true,
+    })
+  })
+
   it('hydrates Copilot sessions from workspace summaries when the stored title is low-signal', () => {
     const externalSessionId = '33301b34-0c7c-4968-aa11-cc87fe2bdea4'
     const workspaceFilePath = path.join(

@@ -164,7 +164,11 @@ export function deriveSessionTitle(
 
   const commandLabel = startupCommand.trim().split(/\s+/)[0]
   if (commandLabel) {
-    return commandLabel
+    // Extract base name from path-like commands (e.g. C:\tools\codex.exe → codex)
+    const fileName = commandLabel.replace(/^.*[\\/]/, '')
+    const baseName = fileName
+      .replace(/\.(?:exe|cmd|bat|ps1|sh|bash)$/i, '')
+    return baseName || fileName
   }
 
   const normalizedPath = cwd.trim().replace(/[\\/]+$/, '')
