@@ -88,7 +88,7 @@ describe('AnalysisWindow', () => {
 
   afterEach(() => {
     cleanup()
-    window.agentCli = undefined as unknown as typeof window.agentCli
+    Reflect.deleteProperty(window, 'agentCli')
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })

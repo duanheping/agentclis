@@ -12,6 +12,7 @@ vi.mock('./components/TerminalWorkspace', () => ({
 }))
 
 import App from './App'
+import type { AgentCliApi } from './shared/ipc'
 import type { ProjectGitOverview } from './shared/projectTools'
 import type {
   CreateSessionInput,
@@ -513,17 +514,7 @@ describe('App skills settings', () => {
   })
 
   it('keeps reply-needed attention in the title without showing a popup notification', async () => {
-    let runtimeListener:
-      | ((event: {
-        runtime: {
-          attention?: 'needs-user-decision' | 'task-complete' | null
-          lastActiveAt: string
-          sessionId: string
-          status: 'starting' | 'running' | 'exited' | 'error'
-        }
-        sessionId: string
-      }) => void)
-      | null = null
+    let runtimeListener: Parameters<AgentCliApi['onSessionRuntime']>[0] | null = null
 
     const { agentCli } = createAgentCliMock({
       projects: [
@@ -561,7 +552,11 @@ describe('App skills settings', () => {
       activeSessionId: 'session-1',
     })
 
-    agentCli.onSessionRuntime.mockImplementation((listener) => {
+    ;(
+      agentCli.onSessionRuntime as unknown as {
+        mockImplementation: (fn: AgentCliApi['onSessionRuntime']) => void
+      }
+    ).mockImplementation((listener) => {
       runtimeListener = listener
       return vi.fn()
     })
@@ -1071,9 +1066,9 @@ describe('App skills settings', () => {
     })
   })
 
-  it('closes a session immediately when the agent CLI exits on its own', async () => {
-    let exitListener: ((event: { sessionId: string; exitCode: number }) => void) | null = null
-    let workspacePayload: ListSessionsResponse = {
+  it('keeps a session in the workspace when its runtime exits', async () => {
+    let runtimeListener: Parameters<AgentCliApi['onSessionRuntime']>[0] | null = null
+    const workspacePayload: ListSessionsResponse = {
       projects: [
         {
           config: {
@@ -1111,23 +1106,13 @@ describe('App skills settings', () => {
     const { agentCli } = createAgentCliMock(workspacePayload)
     agentCli.listSessions.mockImplementation(async () => structuredClone(workspacePayload))
     agentCli.restoreSessions.mockImplementation(async () => structuredClone(workspacePayload))
-    agentCli.onSessionExit.mockImplementation((listener) => {
-      exitListener = listener
+    ;(
+      agentCli.onSessionRuntime as unknown as {
+        mockImplementation: (fn: AgentCliApi['onSessionRuntime']) => void
+      }
+    ).mockImplementation((listener) => {
+      runtimeListener = listener
       return vi.fn()
-    })
-    agentCli.closeSession.mockImplementation(async (sessionId: string) => {
-      workspacePayload = {
-        projects: workspacePayload.projects.map((project) => ({
-          ...project,
-          sessions: project.sessions.filter((session) => session.config.id !== sessionId),
-        })),
-        activeSessionId: null,
-      }
-
-      return {
-        closedSessionId: sessionId,
-        activeSessionId: null,
-      }
     })
 
     window.agentCli = agentCli
@@ -1136,17 +1121,29 @@ describe('App skills settings', () => {
 
     await screen.findByRole('button', { name: 'Toggle cmd' })
 
-    expect(exitListener).not.toBeNull()
+    expect(runtimeListener).not.toBeNull()
 
     await act(async () => {
-      exitListener?.({ sessionId: 'session-1', exitCode: 0 })
+      runtimeListener?.({
+        sessionId: 'session-1',
+        runtime: {
+          sessionId: 'session-1',
+          status: 'exited',
+          exitCode: 0,
+          lastActiveAt: '2026-03-13T16:01:00.000Z',
+        },
+      })
     })
 
     await waitFor(() => {
-      expect(agentCli.closeSession).toHaveBeenCalledWith('session-1')
-      expect(screen.getByText('Ready to build locally')).toBeInTheDocument()
-      expect(useSessionsStore.getState().activeSessionId).toBeNull()
-      expect(useSessionsStore.getState().projects[0]?.sessions).toHaveLength(0)
+      expect(agentCli.closeSession).not.toHaveBeenCalled()
+      expect(useSessionsStore.getState().activeSessionId).toBe('session-1')
+      expect(useSessionsStore.getState().projects[0]?.sessions).toHaveLength(1)
+      expect(
+        useSessionsStore
+          .getState()
+          .projects[0]?.sessions[0]?.runtime.status,
+      ).toBe('exited')
     })
   })
 

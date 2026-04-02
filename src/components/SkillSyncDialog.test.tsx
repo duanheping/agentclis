@@ -39,7 +39,7 @@ function buildResult(success = true): FullSyncDone {
 describe('SkillSyncDialog', () => {
   afterEach(() => {
     cleanup()
-    window.agentCli = undefined as unknown as typeof window.agentCli
+    Reflect.deleteProperty(window, 'agentCli')
   })
 
   it('starts a full sync when opened and shows the final result', async () => {
