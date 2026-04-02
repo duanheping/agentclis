@@ -13,7 +13,12 @@ vi.mock('./components/TerminalWorkspace', () => ({
 
 import App from './App'
 import type { ProjectGitOverview } from './shared/projectTools'
-import type { CreateSessionInput, ListSessionsResponse, SessionExitMeta } from './shared/session'
+import type {
+  CreateSessionInput,
+  ListSessionsResponse,
+  SessionExitMeta,
+  SessionRuntimeEvent,
+} from './shared/session'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -385,7 +390,9 @@ function createAgentCliMock(
     resizeWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
     onSessionData: vi.fn(() => vi.fn()),
     onSessionConfig: vi.fn(() => vi.fn()),
-    onSessionRuntime: vi.fn(() => vi.fn()),
+    onSessionRuntime: vi.fn<
+      (listener: (event: SessionRuntimeEvent) => void) => () => void
+    >(() => vi.fn()),
     onSessionExit: vi.fn<(listener: (event: SessionExitMeta) => void) => () => void>(
       () => vi.fn(),
     ),

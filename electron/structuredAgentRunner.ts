@@ -310,38 +310,66 @@ async function runClaudeStructured(input: {
   )
 }
 
+function buildCopilotPromptContent(input: {
+  prompt: string
+  schema: string
+  outputPath?: string
+}): string {
+  const parts = [input.prompt.trimEnd()]
+  const schema = input.schema.trim()
+
+  if (schema) {
+    parts.push('', 'JSON schema to follow:', schema)
+  }
+
+  if (input.outputPath) {
+    parts.push(
+      '',
+      `Write your complete JSON response to the file: ${input.outputPath}`,
+      'Do not print the raw JSON in your conversation response — only write it to that file.',
+    )
+  } else {
+    parts.push('', 'Return only JSON. Do not wrap it in markdown.')
+  }
+
+  return parts.join('\n')
+}
+
 async function runCopilotStructured(input: {
   tempRoot: string
+  schema: string
   prompt: string
   contextDirectories: string[]
 }): Promise<string> {
-  // Copilot's --prompt puts the full text on the process command line,
-  // which is limited to ~32K chars on Windows. Write the real prompt
-  // to a file and tell copilot to read it from there.
+  const outputPath = path.join(input.tempRoot, 'response.json')
   const promptPath = path.join(input.tempRoot, 'copilot-prompt.txt')
   await writeFile(
     promptPath,
-    `${input.prompt}\nReturn only JSON. Do not wrap it in markdown.`,
+    buildCopilotPromptContent({
+      prompt: input.prompt,
+      schema: input.schema,
+      outputPath,
+    }),
     'utf8',
   )
 
-  return await runCommand(
+  const workingDirectory = input.contextDirectories[0] ?? input.tempRoot
+  const stdout = await runCommand(
     'copilot',
-    input.tempRoot,
+    workingDirectory,
     [
-      '--output-format',
-      'json',
-      '--stream',
-      'off',
       '--allow-all',
       '--no-ask-user',
       '--no-custom-instructions',
       ...input.contextDirectories.flatMap((directory) => ['--add-dir', directory]),
       '--prompt',
-      `Read and follow the detailed instructions in the file at ${promptPath} exactly. Return only JSON matching the schema described there.`,
+      `Read and follow all instructions in the file at ${promptPath}.`,
     ],
     null,
   )
+
+  const fileOutput = await readFile(outputPath, 'utf8').catch(() => '')
+  return fileOutput.trim() ? fileOutput : stdout
 }
 
 export async function runStructuredAgent(input: {
@@ -381,6 +409,7 @@ export async function runStructuredAgent(input: {
 
     return await runCopilotStructured({
       tempRoot,
+      schema: input.schema,
       prompt: input.prompt,
       contextDirectories,
     })
@@ -412,16 +441,14 @@ export async function prepareStructuredAgent(input: {
   const scriptPath = path.join(tempRoot, 'run.ps1')
 
   await writeFile(schemaPath, `${input.schema}\n`, 'utf8')
-  let promptSuffix = ''
-  if (input.agent === 'copilot') {
-    promptSuffix = [
-      '',
-      '',
-      `Write your complete JSON response to the file: ${outputPath}`,
-      'Do not print the raw JSON in your conversation response — only write it to that file.',
-    ].join('\n')
-  }
-  await writeFile(promptPath, `${input.prompt}${promptSuffix}`, 'utf8')
+  const promptContent = input.agent === 'copilot'
+    ? buildCopilotPromptContent({
+      prompt: input.prompt,
+      schema: input.schema,
+      outputPath,
+    })
+    : input.prompt
+  await writeFile(promptPath, promptContent, 'utf8')
 
   const scriptContent = buildAnalysisScript({
     agent: input.agent,
@@ -438,7 +465,7 @@ export async function prepareStructuredAgent(input: {
     tempRoot,
     outputPath,
     startupCommand,
-    cwd: input.agent === 'claude'
+    cwd: input.agent === 'claude' || input.agent === 'copilot'
       ? (contextDirectories[0] ?? tempRoot)
       : tempRoot,
   }

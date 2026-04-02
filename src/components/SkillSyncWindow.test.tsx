@@ -72,7 +72,7 @@ describe('SkillSyncWindow', () => {
 
   afterEach(() => {
     cleanup()
-    delete window.agentCli
+    window.agentCli = undefined as unknown as typeof window.agentCli
     vi.restoreAllMocks()
   })
 
