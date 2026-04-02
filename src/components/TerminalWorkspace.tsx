@@ -367,6 +367,11 @@ function TerminalSurface({
       lineHeight: 1.25,
       scrollback: TERMINAL_SCROLLBACK_LINES,
       allowTransparency: true,
+      linkHandler: {
+        activate: (_event, text) => {
+          void window.agentCli.openExternalLink(text)
+        },
+      },
       windowsPty: {
         backend: 'conpty',
       },

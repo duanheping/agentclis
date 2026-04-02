@@ -261,6 +261,28 @@ describe('TerminalWorkspace', () => {
     )
   })
 
+  it('routes OSC hyperlinks through the Electron external-link bridge', () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    const terminalOptions = mockTerminalConstructor.mock.calls[0]?.[0] as {
+      linkHandler?: {
+        activate: (event: MouseEvent, text: string) => void
+      }
+    }
+
+    terminalOptions.linkHandler?.activate({} as MouseEvent, 'https://example.com')
+
+    expect(window.agentCli.openExternalLink).toHaveBeenCalledWith(
+      'https://example.com',
+    )
+  })
+
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
     render(
       <TerminalWorkspace

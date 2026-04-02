@@ -155,4 +155,28 @@ describe('AnalysisWindow', () => {
     expect(resizeObserverDisconnect).toHaveBeenCalledTimes(1)
     expect(inst?.dispose).toHaveBeenCalledTimes(1)
   })
+
+  it('routes OSC hyperlinks through the Electron external-link bridge', () => {
+    const openExternalLink = vi.fn().mockResolvedValue(undefined)
+
+    window.agentCli = {
+      onAnalysisTerminalData: vi.fn(() => vi.fn()),
+      onAnalysisTerminalExit: vi.fn(() => vi.fn()),
+      writeToAnalysisTerminal: vi.fn().mockResolvedValue(undefined),
+      resizeAnalysisTerminal: vi.fn().mockResolvedValue(undefined),
+      openExternalLink,
+    } as unknown as typeof window.agentCli
+
+    render(<AnalysisWindow />)
+
+    const terminalOptions = terminalConstructorSpy.mock.calls[0]?.[0] as {
+      linkHandler?: {
+        activate: (event: MouseEvent, text: string) => void
+      }
+    }
+
+    terminalOptions.linkHandler?.activate({} as MouseEvent, 'https://example.com')
+
+    expect(openExternalLink).toHaveBeenCalledWith('https://example.com')
+  })
 })
