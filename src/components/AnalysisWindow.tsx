@@ -24,6 +24,11 @@ export function AnalysisWindow() {
       lineHeight: 1.25,
       scrollback: SCROLLBACK_LINES,
       allowTransparency: true,
+      linkHandler: {
+        activate: (_event, text) => {
+          void agentCli.openExternalLink(text)
+        },
+      },
       windowsPty: { backend: 'conpty' },
       theme: {
         background: '#161616',
