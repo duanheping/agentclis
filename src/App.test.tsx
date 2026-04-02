@@ -14,7 +14,12 @@ vi.mock('./components/TerminalWorkspace', () => ({
 import App from './App'
 import type { AgentCliApi } from './shared/ipc'
 import type { ProjectGitOverview } from './shared/projectTools'
-import type { CreateSessionInput, ListSessionsResponse, SessionExitMeta } from './shared/session'
+import type {
+  CreateSessionInput,
+  ListSessionsResponse,
+  SessionExitMeta,
+  SessionRuntimeEvent,
+} from './shared/session'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -386,7 +391,9 @@ function createAgentCliMock(
     resizeWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
     onSessionData: vi.fn(() => vi.fn()),
     onSessionConfig: vi.fn(() => vi.fn()),
-    onSessionRuntime: vi.fn(() => vi.fn()),
+    onSessionRuntime: vi.fn<
+      (listener: (event: SessionRuntimeEvent) => void) => () => void
+    >(() => vi.fn()),
     onSessionExit: vi.fn<(listener: (event: SessionExitMeta) => void) => () => void>(
       () => vi.fn(),
     ),
@@ -1061,7 +1068,7 @@ describe('App skills settings', () => {
 
   it('keeps a session in the workspace when its runtime exits', async () => {
     let runtimeListener: Parameters<AgentCliApi['onSessionRuntime']>[0] | null = null
-    let workspacePayload: ListSessionsResponse = {
+    const workspacePayload: ListSessionsResponse = {
       projects: [
         {
           config: {
