@@ -1433,6 +1433,8 @@
 .analysis-window__terminal .xterm .xterm-scrollable-element > .scrollbar.invisible {
   opacity: 1;
   pointer-events: auto;
+  z-index: 11;
+  background: rgba(0, 0, 0, 0);
 }
 
 .terminal-surface .xterm .xterm-scrollable-element > .scrollbar.invisible.fade,
