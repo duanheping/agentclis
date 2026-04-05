@@ -2844,13 +2844,10 @@ describe('SessionManager logical project identity and project context', () => {
     })
   })
 
-  it('injects project context as system input without consuming the first user prompt title', async () => {
-    const transcriptEvents: TranscriptEvent[] = []
+  it('injects project context via startup command flags instead of PTY writes', async () => {
     const transcriptStore = {
-      append: vi.fn(async (event: TranscriptEvent) => {
-        transcriptEvents.push(event)
-      }),
-      readEvents: vi.fn(async () => structuredClone(transcriptEvents)),
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
     }
     const projectMemory = buildProjectMemoryServiceMock({
       assembleContext: vi.fn(async () => ({
@@ -2893,25 +2890,30 @@ describe('SessionManager logical project identity and project context', () => {
 
     await vi.runOnlyPendingTimersAsync()
 
-    expect(mocks.terminals[0]?.write).toHaveBeenCalledWith(
-      'Use the project memory.\nRead:\n- memory.md\r',
+    // Memory is NOT written to the PTY — it goes via -c developer_instructions
+    const writeCalls = (mocks.terminals[0]?.write.mock.calls ?? []) as unknown[][]
+    const memoryWritten = writeCalls.some(
+      (args) => typeof args[0] === 'string' && args[0].includes('project memory'),
     )
+    expect(memoryWritten).toBe(false)
 
+    // assembleContext was called during command resolution
+    expect(projectMemory.assembleContext).toHaveBeenCalled()
+
+    // The startup command includes developer_instructions (embedded in spawn args)
+    const spawnCall = mocks.spawn.mock.calls[0] as unknown[]
+    const spawnArgs = (spawnCall?.[1] ?? []) as string[]
+    const argsStr = spawnArgs.join(' ')
+    expect(argsStr).toContain('developer_instructions')
+
+    // Session config tracks the injection mode
     const bootstrappedSession = manager
       .listSessions()
       .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)
-
-    expect(bootstrappedSession?.config.title).toBe('codex')
+    expect(bootstrappedSession?.config.projectMemoryMode).toBe(
+      'codex-developer-instructions',
+    )
     expect(bootstrappedSession?.config.pendingFirstPromptTitle).toBe(true)
-    expect(projectMemory.assembleContext).toHaveBeenCalled()
-    expect(
-      transcriptStore.append.mock.calls.some(
-        ([event]) =>
-          event.kind === 'input' &&
-          event.source === 'system' &&
-          event.sessionId === session.config.id,
-      ),
-    ).toBe(true)
 
     manager.writeToSession(session.config.id, 'real user task')
     manager.writeToSession(session.config.id, '\r')
@@ -2923,27 +2925,18 @@ describe('SessionManager logical project identity and project context', () => {
     expect(renamedSession?.config.title).toBe('real user task')
   })
 
-  it('injects a deferred query-aware bootstrap after capturing the first user prompt', async () => {
-    const transcriptEvents: TranscriptEvent[] = []
+  it('does not inject deferred per-prompt memory via PTY for Codex sessions', async () => {
     const transcriptStore = {
-      append: vi.fn(async (event: TranscriptEvent) => {
-        transcriptEvents.push(event)
-      }),
-      readEvents: vi.fn(async () => structuredClone(transcriptEvents)),
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
     }
-    let assembleCallCount = 0
     const projectMemory = buildProjectMemoryServiceMock({
-      assembleContext: vi.fn(async (input: { query?: string }) => {
-        assembleCallCount += 1
-        return {
-          ...buildProjectMemoryContext(),
-          bootstrapMessage: input.query
-            ? `Task-specific memory for: ${input.query}`
-            : 'Use the project memory.\nRead:\n- memory.md',
-          fileReferences: ['memory.md'],
-          summaryExcerpt: 'Latest summary',
-        }
-      }),
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'Use the project memory.\nRead:\n- memory.md',
+        fileReferences: ['memory.md'],
+        summaryExcerpt: 'Latest summary',
+      })),
     })
     const identityResolver = {
       inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
@@ -2978,24 +2971,264 @@ describe('SessionManager logical project identity and project context', () => {
 
     await vi.runOnlyPendingTimersAsync()
 
-    expect(mocks.terminals[0]?.write).toHaveBeenCalledWith(
-      'Use the project memory.\nRead:\n- memory.md\r',
-    )
-    expect(assembleCallCount).toBe(1)
+    // assembleContext called once at session start (not again per prompt)
+    const callCountAfterStart = projectMemory.assembleContext.mock.calls.length
 
     manager.writeToSession(session.config.id, 'fix the login bug\r')
+    await vi.runOnlyPendingTimersAsync()
+
+    // No additional assembleContext call for user prompts
+    expect(projectMemory.assembleContext.mock.calls.length).toBe(callCountAfterStart)
+
+    // No PTY memory writes at any point
+    const writeCalls = (mocks.terminals[0]?.write.mock.calls ?? []) as unknown[][]
+    const memoryWritten = writeCalls.some(
+      (args) => typeof args[0] === 'string' && args[0].includes('project memory'),
+    )
+    expect(memoryWritten).toBe(false)
+  })
+
+  it('injects Copilot project context via copilot-instructions.md', async () => {
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
+    }
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'Copilot project memory payload',
+        fileReferences: ['memory.md'],
+        summaryExcerpt: 'Summary',
+      })),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --model gpt-5.2',
+      attachProjectContext: true,
+    })
 
     await vi.runOnlyPendingTimersAsync()
 
-    expect(assembleCallCount).toBe(2)
-    expect(projectMemory.assembleContext).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        query: 'fix the login bug',
-      }),
+    // Memory is NOT written to the PTY
+    const writeCalls = (mocks.terminals[0]?.write.mock.calls ?? []) as unknown[][]
+    const memoryWritten = writeCalls.some(
+      (args) => typeof args[0] === 'string' && args[0].includes('project memory'),
     )
-    expect(mocks.terminals[0]?.write).toHaveBeenCalledWith(
-      'Task-specific memory for: fix the login bug\r',
+    expect(memoryWritten).toBe(false)
+
+    // assembleContext was called during command resolution
+    expect(projectMemory.assembleContext).toHaveBeenCalled()
+
+    // The startup command does NOT include --config-dir (no hooks)
+    const spawnCall = mocks.spawn.mock.calls[0] as unknown[]
+    const spawnArgs = (spawnCall?.[1] ?? []) as string[]
+    const argsStr = spawnArgs.join(' ')
+    expect(argsStr).not.toContain('--config-dir')
+
+    // Session config tracks copilot-instructions mode
+    const copilotSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)
+    expect(copilotSession?.config.projectMemoryMode).toBe('copilot-instructions')
+  })
+
+  it('cleans up Copilot instructions file on session close', async () => {
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
+    }
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'memory',
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
     )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --model gpt-5.2',
+      attachProjectContext: true,
+    })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    // Close the session — cleanup is tested in copilotInstructions.test.ts
+    await manager.closeSession(session.config.id)
+  })
+
+  it('does not remove Copilot instructions while another session shares the same CWD', async () => {
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
+    }
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'shared memory',
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    // Two sessions in the same CWD
+    const sessionA = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --model gpt-5.2',
+      attachProjectContext: true,
+    })
+    await vi.runOnlyPendingTimersAsync()
+
+    const sessionB = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --model gpt-5.2',
+      attachProjectContext: true,
+    })
+    await vi.runOnlyPendingTimersAsync()
+
+    // Both sessions should have copilot-instructions mode
+    const sessions = manager.listSessions().projects[0]?.sessions ?? []
+    expect(sessions.every((s) => s.config.projectMemoryMode === 'copilot-instructions')).toBe(true)
+
+    // Close session A — instructions should stay (session B still active)
+    await manager.closeSession(sessionA.config.id)
+
+    // assembleContext was called twice (once per session)
+    expect(projectMemory.assembleContext).toHaveBeenCalledTimes(2)
+
+    // Close session B — now cleanup should run
+    await manager.closeSession(sessionB.config.id)
+  })
+
+  it('does not leak refcount when a Copilot session is restarted', async () => {
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
+    }
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'restart memory',
+        fileReferences: [],
+        summaryExcerpt: null,
+      })),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --model gpt-5.2',
+      attachProjectContext: true,
+    })
+    await vi.runOnlyPendingTimersAsync()
+
+    // Restart the session — should not leak the refcount
+    await manager.restartSession(session.config.id)
+    await vi.runOnlyPendingTimersAsync()
+
+    // assembleContext called twice (create + restart)
+    expect(projectMemory.assembleContext).toHaveBeenCalledTimes(2)
+
+    // Close — cleanup should still work (refcount should be 1, not 2)
+    await manager.closeSession(session.config.id)
   })
 
   it('queues project memory capture when a session is closed', async () => {

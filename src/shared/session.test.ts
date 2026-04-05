@@ -4,12 +4,14 @@ import {
   PERMISSION_LEVEL_DESCRIPTIONS,
   PERMISSION_LEVEL_LABELS,
   PERMISSION_LEVELS,
+  PROJECT_MEMORY_MODES,
   buildRuntime,
   deriveProjectTitle,
   deriveSessionTitle,
   resolveProjectRoot,
   resolveSessionCwd,
   summarizeCommand,
+  summarizeProjectMemoryStatus,
 } from './session'
 
 describe('session helpers', () => {
@@ -153,5 +155,34 @@ describe('session helpers', () => {
   it('exports PERMISSION_LEVEL_DESCRIPTIONS for each level', () => {
     expect(PERMISSION_LEVEL_DESCRIPTIONS['default']).toContain('approval')
     expect(PERMISSION_LEVEL_DESCRIPTIONS['full-access']).toContain('without approval')
+  })
+
+  it('exports PROJECT_MEMORY_MODES with expected values', () => {
+    expect(PROJECT_MEMORY_MODES).toContain('disabled')
+    expect(PROJECT_MEMORY_MODES).toContain('codex-developer-instructions')
+    expect(PROJECT_MEMORY_MODES).toContain('copilot-instructions')
+    expect(PROJECT_MEMORY_MODES).toContain('unsupported')
+  })
+
+  it('summarizeProjectMemoryStatus returns null for disabled', () => {
+    expect(summarizeProjectMemoryStatus('disabled')).toBeNull()
+  })
+
+  it('summarizeProjectMemoryStatus describes codex mode', () => {
+    expect(summarizeProjectMemoryStatus('codex-developer-instructions')).toBe(
+      'Project memory injected at session start',
+    )
+  })
+
+  it('summarizeProjectMemoryStatus describes copilot-instructions mode', () => {
+    expect(summarizeProjectMemoryStatus('copilot-instructions')).toBe(
+      'Project memory injected via custom instructions',
+    )
+  })
+
+  it('summarizeProjectMemoryStatus returns fallback reason for unsupported', () => {
+    expect(summarizeProjectMemoryStatus('unsupported', 'No provider found')).toBe(
+      'No provider found',
+    )
   })
 })
