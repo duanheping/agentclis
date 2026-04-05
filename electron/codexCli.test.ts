@@ -8,6 +8,7 @@ import {
   supportsCodexSessionResume,
   tokenizeCommand,
   withCodexDangerousBypass,
+  withCodexDeveloperInstructions,
 } from './codexCli'
 
 describe('codexCli', () => {
@@ -139,5 +140,61 @@ describe('codexCli', () => {
       originator: undefined,
       source: undefined,
     })
+  })
+
+  it('injects developer_instructions into a simple codex command', () => {
+    expect(withCodexDeveloperInstructions('codex', 'Remember TypeScript')).toBe(
+      'codex -c "developer_instructions=Remember TypeScript"',
+    )
+  })
+
+  it('handles memory text with double quotes', () => {
+    const result = withCodexDeveloperInstructions('codex --model gpt', 'He said "hi"')
+    expect(result).toContain('developer_instructions=')
+    expect(result).not.toBeNull()
+    // The result should be a properly quoted command — tokenize it to verify
+    const tokens = tokenizeCommand(result!)
+    const configIndex = tokens.indexOf('-c')
+    expect(configIndex).toBeGreaterThan(-1)
+    expect(tokens[configIndex + 1]).toBe('developer_instructions=He said "hi"')
+  })
+
+  it('handles memory text with newlines', () => {
+    const result = withCodexDeveloperInstructions('codex', 'line1\nline2')
+    expect(result).not.toBeNull()
+    const tokens = tokenizeCommand(result!)
+    const configIndex = tokens.indexOf('-c')
+    expect(tokens[configIndex + 1]).toContain('line1\nline2')
+  })
+
+  it('preserves quoted executable paths in developer_instructions', () => {
+    const result = withCodexDeveloperInstructions(
+      '"C:\\Program Files\\codex.exe" --model gpt',
+      'test memory',
+    )
+    expect(result).not.toBeNull()
+    const tokens = tokenizeCommand(result!)
+    expect(tokens[0]).toBe('C:\\Program Files\\codex.exe')
+  })
+
+  it('replaces existing developer_instructions', () => {
+    const result = withCodexDeveloperInstructions(
+      'codex -c developer_instructions=old --model gpt',
+      'new memory',
+    )
+    expect(result).not.toBeNull()
+    const tokens = tokenizeCommand(result!)
+    const configPairs = tokens.reduce((acc, token, i) => {
+      if (token === '-c' && tokens[i + 1]?.startsWith('developer_instructions=')) {
+        acc.push(tokens[i + 1])
+      }
+      return acc
+    }, [] as string[])
+    expect(configPairs).toHaveLength(1)
+    expect(configPairs[0]).toBe('developer_instructions=new memory')
+  })
+
+  it('returns null for non-codex commands', () => {
+    expect(withCodexDeveloperInstructions('node index.js', 'memory')).toBeNull()
   })
 })

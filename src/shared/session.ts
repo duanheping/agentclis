@@ -20,6 +20,15 @@ export const PERMISSION_LEVELS = ['default', 'full-access'] as const
 
 export type PermissionLevel = (typeof PERMISSION_LEVELS)[number]
 
+export const PROJECT_MEMORY_MODES = [
+  'disabled',
+  'codex-developer-instructions',
+  'copilot-instructions',
+  'unsupported',
+] as const
+
+export type ProjectMemoryMode = (typeof PROJECT_MEMORY_MODES)[number]
+
 export const PERMISSION_LEVEL_LABELS: Record<PermissionLevel, string> = {
   'default': 'Default permissions',
   'full-access': 'Full access',
@@ -57,6 +66,8 @@ export interface SessionConfig {
   permissionLevel?: PermissionLevel
   cwd: string
   shell: string
+  projectMemoryMode?: ProjectMemoryMode
+  projectMemoryFallbackReason?: string | null
   projectContextAttachedAt?: string
   createdAt: string
   updatedAt: string
@@ -198,6 +209,26 @@ export function resolveSessionCwd(
   }
 
   return fallbackCwd.trim()
+}
+
+export function summarizeProjectMemoryStatus(
+  mode?: ProjectMemoryMode,
+  fallbackReason?: string | null,
+): string | null {
+  if (mode === 'codex-developer-instructions') {
+    return 'Project memory injected at session start'
+  }
+
+  if (mode === 'copilot-instructions') {
+    return 'Project memory injected via custom instructions'
+  }
+
+  if (mode === 'unsupported') {
+    const normalizedReason = fallbackReason?.trim()
+    return normalizedReason || 'Project memory is unavailable for this session.'
+  }
+
+  return null
 }
 
 export function summarizeCommand(command: string, limit = 42): string {

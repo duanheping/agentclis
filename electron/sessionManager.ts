@@ -15,6 +15,7 @@ import {
   type CreateProjectInput,
   deriveProjectTitle,
   deriveSessionTitle,
+  PROJECT_MEMORY_MODES,
   resolveProjectRoot,
   resolveSessionCwd,
   type CreateSessionInput,
@@ -52,9 +53,15 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
   withCodexDangerousBypass,
+  withCodexDeveloperInstructions,
 } from './codexCli'
+import {
+  injectCopilotInstructions,
+  removeCopilotInstructions,
+} from './copilotInstructions'
 import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
+import { resolveProjectMemoryCapability } from './providerCapabilityResolver'
 import { createProjectSessionWorktree } from './projectWorktree'
 import type { TranscriptStore } from './transcriptStore'
 import {
@@ -346,7 +353,8 @@ export class SessionManager {
   >()
   private readonly historicalExternalSessionRecovery = new Set<string>()
   private readonly suppressedExit = new Set<string>()
-  private readonly pendingQueryBootstrapSessions = new Set<string>()
+  private readonly copilotInstructionsState = new Map<string, { cwd: string }>()
+  private readonly copilotInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
@@ -557,6 +565,9 @@ export class SessionManager {
   async createSession(input: CreateSessionInput): Promise<SessionSnapshot> {
     const now = new Date().toISOString()
     const { project, location } = await this.resolveProjectForCreate(input, now)
+    const projectMemoryCapability = input.attachProjectContext
+      ? resolveProjectMemoryCapability(input.startupCommand)
+      : null
     const id = crypto.randomUUID()
     const shell = resolveShellCommand()
     const cwd = input.createWithWorktree
@@ -582,6 +593,9 @@ export class SessionManager {
       permissionLevel: input.permissionLevel,
       cwd,
       shell,
+      projectMemoryMode: projectMemoryCapability?.mode ?? 'disabled',
+      projectMemoryFallbackReason:
+        projectMemoryCapability?.fallbackReason ?? null,
       createdAt: now,
       updatedAt: now,
     }
@@ -599,9 +613,6 @@ export class SessionManager {
     })
 
     await this.startSession(config)
-    if (input.attachProjectContext) {
-      this.scheduleProjectContextBootstrap(config.id)
-    }
     return this.snapshotFor(id)
   }
 
@@ -661,7 +672,7 @@ export class SessionManager {
     this.cancelExternalSessionDetection(id)
     this.stopExternalSessionAttentionTracking(id)
     this.pendingFirstPromptBuffers.delete(id)
-    this.pendingQueryBootstrapSessions.delete(id)
+    this.cleanupCopilotInstructions(id)
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.configs.delete(id)
@@ -733,6 +744,10 @@ export class SessionManager {
     }
 
     this.projectMemory.dispose()
+
+    for (const sessionId of this.copilotInstructionsState.keys()) {
+      this.cleanupCopilotInstructions(sessionId)
+    }
   }
 
   private async startSession(config: SessionConfig): Promise<void> {
@@ -740,7 +755,7 @@ export class SessionManager {
     this.cancelExternalSessionDetection(config.id)
     this.stopExternalSessionAttentionTracking(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
-    this.pendingQueryBootstrapSessions.delete(config.id)
+    this.cleanupCopilotInstructions(config.id)
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
       attention: null,
@@ -768,7 +783,7 @@ export class SessionManager {
       normalizedConfig =
         await this.prepareManagedSessionLaunchConfig(normalizedConfig)
 
-      const launchCommand = this.resolveStartupCommand(normalizedConfig)
+      const launchCommand = await this.resolveStartupCommand(normalizedConfig)
       const launchesInline = supportsInlineShellCommand(shell)
       const terminal = nodePty.spawn(
         shell,
@@ -952,28 +967,107 @@ export class SessionManager {
     this.setSessionAttention(id, attention)
   }
 
-  private resolveStartupCommand(config: SessionConfig): string {
+  private async resolveStartupCommand(config: SessionConfig): Promise<string> {
+    let command = config.startupCommand
+
     if (config.externalSession?.provider === 'codex') {
-      return this.applyPermissionFlags(
+      command =
         buildCodexResumeCommand(
-          config.startupCommand,
+          command,
           config.externalSession.sessionId,
-        ) ?? config.startupCommand,
-        config,
-      )
-    }
-
-    if (config.externalSession?.provider === 'copilot') {
-      return this.applyPermissionFlags(
+        ) ?? command
+    } else if (config.externalSession?.provider === 'copilot') {
+      command =
         buildCopilotResumeCommand(
-          config.startupCommand,
+          command,
           config.externalSession.sessionId,
-        ) ?? config.startupCommand,
-        config,
+        ) ?? command
+    }
+
+    command = this.applyPermissionFlags(command, config)
+
+    // Inject project memory via provider-native mechanisms
+    command = await this.applyProjectMemoryInjection(command, config)
+
+    return command
+  }
+
+  private async applyProjectMemoryInjection(
+    command: string,
+    config: SessionConfig,
+  ): Promise<string> {
+    const mode = config.projectMemoryMode
+    if (!mode || mode === 'disabled') return command
+
+    const location = config.locationId
+      ? this.locations.get(config.locationId) ?? null
+      : null
+    const project = this.projects.get(config.projectId)
+    if (!project) return command
+
+    try {
+      const context = await this.projectMemory.assembleContext({
+        project,
+        location,
+      })
+      const memoryText = context.bootstrapMessage?.trim()
+      if (!memoryText) return command
+
+      if (mode === 'codex-developer-instructions') {
+        return this.injectCodexDeveloperInstructions(command, memoryText)
+      }
+
+      if (mode === 'copilot-instructions') {
+        const normalizedCwd = this.normalizePath(config.cwd)
+        const existing = this.copilotInstructionsCwdRefs.get(normalizedCwd)
+        const result = injectCopilotInstructions(config.cwd, memoryText)
+        this.copilotInstructionsState.set(config.id, { cwd: config.cwd })
+        this.copilotInstructionsCwdRefs.set(normalizedCwd, {
+          count: (existing?.count ?? 0) + 1,
+          // Only treat as "created" if the very first session created it
+          created: existing ? existing.created : result.created,
+        })
+        return command
+      }
+    } catch (err) {
+      console.warn(
+        `[project-memory] Failed to inject memory for session ${config.id}:`,
+        err,
       )
     }
 
-    return this.applyPermissionFlags(config.startupCommand, config)
+    return command
+  }
+
+  private injectCodexDeveloperInstructions(
+    command: string,
+    memoryText: string,
+  ): string {
+    return withCodexDeveloperInstructions(command, memoryText) ?? command
+  }
+
+  private cleanupCopilotInstructions(sessionId: string): void {
+    const state = this.copilotInstructionsState.get(sessionId)
+    if (!state) return
+    this.copilotInstructionsState.delete(sessionId)
+
+    const normalizedCwd = this.normalizePath(state.cwd)
+    const ref = this.copilotInstructionsCwdRefs.get(normalizedCwd)
+    if (!ref) return
+
+    ref.count -= 1
+    if (ref.count > 0) return
+
+    // Last session for this CWD — clean up the file
+    this.copilotInstructionsCwdRefs.delete(normalizedCwd)
+    try {
+      removeCopilotInstructions(state.cwd, ref.created)
+    } catch (err) {
+      console.warn(
+        `[project-memory] Failed to clean up Copilot instructions for session ${sessionId}:`,
+        err,
+      )
+    }
   }
 
   private applyPermissionFlags(
@@ -2246,6 +2340,12 @@ export class SessionManager {
     const project = this.resolveProjectForHydration(config.projectId, cwd, config)
     const location = this.resolveLocationForHydration(project, config)
 
+    const projectMemoryMode = PROJECT_MEMORY_MODES.includes(
+      config.projectMemoryMode as typeof PROJECT_MEMORY_MODES[number],
+    )
+      ? (config.projectMemoryMode as typeof PROJECT_MEMORY_MODES[number])
+      : 'disabled'
+
     return {
       ...config,
       projectId: project.id,
@@ -2254,6 +2354,8 @@ export class SessionManager {
       pendingFirstPromptTitle: this.inferPendingFirstPromptTitle(config, cwd, title),
       cwd,
       shell: resolveShellCommand(config.shell),
+      projectMemoryMode,
+      projectMemoryFallbackReason: config.projectMemoryFallbackReason ?? null,
     }
   }
 
@@ -2453,7 +2555,6 @@ export class SessionManager {
       sessionId: id,
       config: nextConfig,
     })
-    this.scheduleDeferredQueryBootstrap(id, title)
   }
 
   private async resolveProjectForCreate(
@@ -2750,12 +2851,6 @@ export class SessionManager {
     })
   }
 
-  private scheduleProjectContextBootstrap(sessionId: string): void {
-    setTimeout(() => {
-      void this.attachProjectContextBootstrap(sessionId)
-    }, 140)
-  }
-
   private scheduleBackgroundProjectMaintenance(): void {
     if (!this.identityRefreshTimer) {
       this.identityRefreshTimer = setTimeout(() => {
@@ -2864,85 +2959,6 @@ export class SessionManager {
     }
 
     return true
-  }
-
-  private async attachProjectContextBootstrap(sessionId: string): Promise<void> {
-    const config = this.configs.get(sessionId)
-    if (!config || !this.terminals.has(sessionId)) {
-      return
-    }
-
-    const project = this.projects.get(config.projectId)
-    if (!project) {
-      return
-    }
-
-    const location = config.locationId
-      ? this.locations.get(config.locationId) ?? null
-      : null
-    const context = await this.projectMemory.assembleContext({
-      project,
-      location,
-    })
-    if (!context.bootstrapMessage?.trim()) {
-      return
-    }
-
-    const nextConfig: SessionConfig = {
-      ...config,
-      projectContextAttachedAt: context.generatedAt,
-    }
-    this.configs.set(sessionId, nextConfig)
-    this.persist()
-    this.events.onConfig({
-      sessionId,
-      config: nextConfig,
-    })
-    this.writeToSessionInternal(sessionId, `${context.bootstrapMessage}\r`, 'system')
-    this.pendingQueryBootstrapSessions.add(sessionId)
-  }
-
-  private scheduleDeferredQueryBootstrap(sessionId: string, query: string): void {
-    if (!this.pendingQueryBootstrapSessions.delete(sessionId)) {
-      return
-    }
-
-    setTimeout(() => {
-      void this.attachDeferredQueryBootstrap(sessionId, query)
-    }, 80)
-  }
-
-  private async attachDeferredQueryBootstrap(
-    sessionId: string,
-    query: string,
-  ): Promise<void> {
-    const config = this.configs.get(sessionId)
-    if (!config?.projectContextAttachedAt || !this.terminals.has(sessionId)) {
-      return
-    }
-
-    const project = this.projects.get(config.projectId)
-    if (!project) {
-      return
-    }
-
-    const location = config.locationId
-      ? this.locations.get(config.locationId) ?? null
-      : null
-    const context = await this.projectMemory.assembleContext({
-      project,
-      location,
-      query,
-    })
-    if (!context.bootstrapMessage?.trim()) {
-      return
-    }
-
-    this.writeToSessionInternal(
-      sessionId,
-      `${context.bootstrapMessage}\r`,
-      'system',
-    )
   }
 
   private collectBackfillInputs(): Array<{

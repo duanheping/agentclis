@@ -161,6 +161,51 @@ export function withCodexDangerousBypass(command: string): string | null {
   ])
 }
 
+export function withCodexDeveloperInstructions(
+  command: string,
+  memoryText: string,
+): string | null {
+  const parsed = parseCodexCommand(command)
+  if (!parsed) {
+    return null
+  }
+
+  const globalOptions = stripConfigOverride(
+    parsed.globalOptions,
+    'developer_instructions',
+  )
+  globalOptions.push('-c', `developer_instructions=${memoryText}`)
+
+  return joinCommandTokens([
+    parsed.executable,
+    ...globalOptions,
+    ...parsed.trailingTokens,
+  ])
+}
+
+function stripConfigOverride(
+  tokens: string[],
+  key: string,
+): string[] {
+  const result: string[] = []
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+
+    if (
+      (token === '-c' || token === '--config') &&
+      tokens[index + 1]?.startsWith(`${key}=`)
+    ) {
+      index += 1
+      continue
+    }
+
+    result.push(token)
+  }
+
+  return result
+}
+
 export function extractCodexSessionMeta(content: string): CodexSessionMeta | null {
   const match = content.match(
     /"type":"session_meta"[\s\S]*?"payload":\{"id":"([^"]+)","timestamp":"([^"]+)","cwd":"((?:\\.|[^"])*)"/u,
