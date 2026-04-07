@@ -316,5 +316,10 @@ describe('TerminalWorkspace', () => {
     ) as HTMLDivElement | null
 
     expect(scrollbar).not.toBeNull()
+    expect(scrollbar?.style.opacity).toBe('1')
+    expect(scrollbar?.style.pointerEvents).toBe('auto')
+    expect(scrollbar?.style.zIndex).toBe('11')
+    expect(scrollbar?.style.background).toBe('rgba(0, 0, 0, 0)')
+    expect(scrollbar?.style.transition).toBe('none')
   })
 })

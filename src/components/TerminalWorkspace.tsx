@@ -17,6 +17,7 @@ import {
 import { getTerminalShortcutInput } from '../lib/terminalKeybindings'
 import { createMarkdownFileLinkProvider } from '../lib/terminalMarkdownLinks'
 import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
+import { attachInteractiveXtermScrollbar } from '../lib/xtermScrollbar'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
@@ -404,6 +405,9 @@ function TerminalSurface({
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(containerRef.current!)
+    const detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
+      containerRef.current!,
+    )
     const markdownFileLinks = terminal.registerLinkProvider(
       createMarkdownFileLinkProvider(terminal, (target) => {
         void window.agentCli.openFileReference(target)
@@ -464,6 +468,7 @@ function TerminalSurface({
     requestAnimationFrame(fitTerminal)
 
     return () => {
+      detachInteractiveScrollbar()
       markdownFileLinks.dispose()
       detachPasteHandler()
       resizeObserver.disconnect()
