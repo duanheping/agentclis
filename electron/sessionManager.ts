@@ -246,6 +246,7 @@ interface PersistedSessionState {
   locations: ProjectLocation[]
   sessions: StoredSessionConfig[]
   runtimes: Array<Pick<SessionRuntime, 'sessionId' | 'lastActiveAt'>>
+  copilotInstructionSnapshots?: Record<string, string>
   activeSessionId: string | null
 }
 
@@ -355,6 +356,7 @@ export class SessionManager {
   private readonly suppressedExit = new Set<string>()
   private readonly copilotInstructionsState = new Map<string, { cwd: string }>()
   private readonly copilotInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
+  private readonly copilotInstructionSnapshots = new Map<string, string>()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
@@ -436,6 +438,18 @@ export class SessionManager {
       ) {
         shouldPersist = true
       }
+    }
+
+    for (const [sessionId, snapshot] of Object.entries(
+      persisted.copilotInstructionSnapshots ?? {},
+    )) {
+      const normalizedSnapshot = snapshot.trim()
+      if (!normalizedSnapshot || !this.configs.has(sessionId)) {
+        shouldPersist = true
+        continue
+      }
+
+      this.copilotInstructionSnapshots.set(sessionId, normalizedSnapshot)
     }
 
     if (this.activeSessionId && !this.configs.has(this.activeSessionId)) {
@@ -675,6 +689,7 @@ export class SessionManager {
     this.cleanupCopilotInstructions(id)
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
+    this.copilotInstructionSnapshots.delete(id)
     this.configs.delete(id)
     this.runtimes.delete(id)
 
@@ -970,6 +985,10 @@ export class SessionManager {
   private async resolveStartupCommand(config: SessionConfig): Promise<string> {
     let command = config.startupCommand
 
+    // Apply permission flags before resume so that withCopilotFullAccess
+    // does not strip the --resume flag added by buildCopilotResumeCommand.
+    command = this.applyPermissionFlags(command, config)
+
     if (config.externalSession?.provider === 'codex') {
       command =
         buildCodexResumeCommand(
@@ -983,8 +1002,6 @@ export class SessionManager {
           config.externalSession.sessionId,
         ) ?? command
     }
-
-    command = this.applyPermissionFlags(command, config)
 
     // Inject project memory via provider-native mechanisms
     command = await this.applyProjectMemoryInjection(command, config)
@@ -1006,11 +1023,11 @@ export class SessionManager {
     if (!project) return command
 
     try {
-      const context = await this.projectMemory.assembleContext({
+      const memoryText = await this.resolveProjectMemoryInjectionText(
+        config,
         project,
         location,
-      })
-      const memoryText = context.bootstrapMessage?.trim()
+      )
       if (!memoryText) return command
 
       if (mode === 'codex-developer-instructions') {
@@ -1044,6 +1061,51 @@ export class SessionManager {
     memoryText: string,
   ): string {
     return withCodexDeveloperInstructions(command, memoryText) ?? command
+  }
+
+  private async resolveProjectMemoryInjectionText(
+    config: SessionConfig,
+    project: ProjectConfig,
+    location: ProjectLocation | null,
+  ): Promise<string | null> {
+    if (config.projectMemoryMode === 'copilot-instructions') {
+      const storedSnapshot = this.copilotInstructionSnapshots.get(config.id)?.trim()
+      if (config.externalSession?.provider === 'copilot') {
+        return storedSnapshot || null
+      }
+    }
+
+    const context = await this.projectMemory.assembleContext({
+      project,
+      location,
+    })
+    const memoryText = context.bootstrapMessage?.trim()
+    if (!memoryText) {
+      return null
+    }
+
+    if (config.projectMemoryMode === 'copilot-instructions') {
+      this.storeCopilotInstructionSnapshot(config.id, memoryText)
+    }
+
+    return memoryText
+  }
+
+  private storeCopilotInstructionSnapshot(
+    sessionId: string,
+    memoryText: string,
+  ): void {
+    const normalizedMemoryText = memoryText.trim()
+    if (!normalizedMemoryText) {
+      return
+    }
+
+    if (this.copilotInstructionSnapshots.get(sessionId) === normalizedMemoryText) {
+      return
+    }
+
+    this.copilotInstructionSnapshots.set(sessionId, normalizedMemoryText)
+    this.persist()
   }
 
   private cleanupCopilotInstructions(sessionId: string): void {
@@ -3309,6 +3371,12 @@ export class SessionManager {
         sessionId: runtime.sessionId,
         lastActiveAt: runtime.lastActiveAt,
       })),
+      copilotInstructionSnapshots: Object.fromEntries(
+        Array.from(this.copilotInstructionSnapshots.entries()).filter(
+          ([sessionId, snapshot]) =>
+            this.configs.has(sessionId) && snapshot.trim().length > 0,
+        ),
+      ),
       activeSessionId: this.activeSessionId,
     })
   }

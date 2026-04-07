@@ -123,5 +123,4 @@ export function removeCopilotInstructions(
   // Either we modified an existing file, or the user added content after
   // we created it — strip markers only, preserve user content
   fs.writeFileSync(filePath, cleaned.endsWith('\n') ? cleaned : cleaned + '\n', 'utf8')
-  fs.writeFileSync(filePath, cleaned.endsWith('\n') ? cleaned : cleaned + '\n', 'utf8')
 }

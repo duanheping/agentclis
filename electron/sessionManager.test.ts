@@ -1679,6 +1679,79 @@ describe('SessionManager project lifecycle', () => {
     ])
   })
 
+  it('preserves --resume when restoring a Copilot session with full-access', async () => {
+    const externalSessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'my copilot session',
+          startupCommand: 'copilot',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+          permissionLevel: 'full-access',
+          externalSession: {
+            provider: 'copilot',
+            sessionId: externalSessionId,
+            detectedAt: '2026-03-20T08:01:00.000Z',
+          },
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.copilot',
+        'session-state',
+        externalSessionId,
+        'workspace.yaml',
+      ),
+      [
+        `id: ${externalSessionId}`,
+        'cwd: C:\\repo',
+        'summary: My Copilot Session',
+        'created_at: 2026-03-20T08:00:31.000Z',
+      ].join('\n'),
+      '2026-03-20T08:15:00.000Z',
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      `copilot --allow-all --no-ask-user --resume ${externalSessionId}`,
+    ])
+  })
+
   it('starts a fresh Codex session instead of reviving project history', async () => {
     const now = new Date('2026-03-27T15:00:00.000Z')
     vi.setSystemTime(now)
@@ -3055,6 +3128,185 @@ describe('SessionManager logical project identity and project context', () => {
       .listSessions()
       .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)
     expect(copilotSession?.config.projectMemoryMode).toBe('copilot-instructions')
+    expect(
+      (
+        mocks.getPersistedState() as {
+          copilotInstructionSnapshots?: Record<string, string>
+        }
+      ).copilotInstructionSnapshots?.[session.config.id],
+    ).toBe('Copilot project memory payload')
+  })
+
+  it('reuses the persisted Copilot instructions snapshot when restoring a resumed session', async () => {
+    const projectRootPath = path.join(
+      os.tmpdir(),
+      'agenclis-copilot-restore-snapshot',
+    )
+    const externalSessionId = '5b38b4a7-7b77-4ef6-a8b3-1f8d7d3c9a1f'
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'new memory that must not be used on resume',
+      })),
+    })
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: projectRootPath,
+          createdAt: '2026-04-07T13:00:00.000Z',
+          updatedAt: '2026-04-07T13:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: 'copilot restore',
+          startupCommand: 'copilot --model gpt-5.2',
+          pendingFirstPromptTitle: false,
+          cwd: projectRootPath,
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          projectMemoryMode: 'copilot-instructions',
+          createdAt: '2026-04-07T13:00:00.000Z',
+          updatedAt: '2026-04-07T13:01:00.000Z',
+          externalSession: {
+            provider: 'copilot',
+            sessionId: externalSessionId,
+            detectedAt: '2026-04-07T13:00:10.000Z',
+          },
+        },
+      ],
+      copilotInstructionSnapshots: {
+        'session-1': 'original hidden memory snapshot',
+      },
+      activeSessionId: 'session-1',
+    })
+
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.copilot',
+        'session-state',
+        externalSessionId,
+        'workspace.yaml',
+      ),
+      [
+        `id: ${externalSessionId}`,
+        `cwd: ${projectRootPath}`,
+        'created_at: 2026-04-07T13:00:05.000Z',
+      ].join('\n'),
+      '2026-04-07T13:01:00.000Z',
+    )
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        projectMemory,
+      },
+    )
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(projectMemory.assembleContext).not.toHaveBeenCalled()
+    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
+    expect(firstSpawnArgs).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      `copilot --model gpt-5.2 --resume ${externalSessionId}`,
+    ])
+  })
+
+  it('does not regenerate Copilot instructions for older resumed sessions without a snapshot', async () => {
+    const projectRootPath = path.join(
+      os.tmpdir(),
+      'agenclis-copilot-restore-no-snapshot',
+    )
+    const externalSessionId = 'b0a85f9c-19eb-4708-8b02-32ae6f8c48d1'
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'changed project memory that would break resume',
+      })),
+    })
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: projectRootPath,
+          createdAt: '2026-04-07T13:00:00.000Z',
+          updatedAt: '2026-04-07T13:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: 'copilot restore',
+          startupCommand: 'copilot --model gpt-5.2',
+          pendingFirstPromptTitle: false,
+          cwd: projectRootPath,
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          projectMemoryMode: 'copilot-instructions',
+          createdAt: '2026-04-07T13:00:00.000Z',
+          updatedAt: '2026-04-07T13:01:00.000Z',
+          externalSession: {
+            provider: 'copilot',
+            sessionId: externalSessionId,
+            detectedAt: '2026-04-07T13:00:10.000Z',
+          },
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.copilot',
+        'session-state',
+        externalSessionId,
+        'workspace.yaml',
+      ),
+      [
+        `id: ${externalSessionId}`,
+        `cwd: ${projectRootPath}`,
+        'created_at: 2026-04-07T13:00:05.000Z',
+      ].join('\n'),
+      '2026-04-07T13:01:00.000Z',
+    )
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        projectMemory,
+      },
+    )
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(projectMemory.assembleContext).not.toHaveBeenCalled()
   })
 
   it('cleans up Copilot instructions file on session close', async () => {
