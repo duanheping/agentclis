@@ -846,6 +846,10 @@ if (!gotSingleInstanceLock) {
     windowsCommandPromptManager.dispose()
     sessionManager.dispose()
     void transientFileStore.dispose()
+    // Force immediate exit after cleanup — node-pty ConPTY handles on Windows
+    // keep the event loop alive indefinitely after the PTY processes are killed,
+    // causing a long delay before the terminal prompt returns.
+    app.exit(0)
   })
 
   app.on('window-all-closed', () => {
