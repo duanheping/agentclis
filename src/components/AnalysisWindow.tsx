@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 
 import '../App.css'
+import { attachInteractiveXtermScrollbar } from '../lib/xtermScrollbar'
 
 const SCROLLBACK_LINES = 50_000
 
@@ -59,6 +60,9 @@ export function AnalysisWindow() {
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(containerRef.current)
+    const detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
+      containerRef.current,
+    )
     terminalRef.current = terminal
 
     const fitTerminal = () => {
@@ -87,6 +91,7 @@ export function AnalysisWindow() {
     terminal.focus()
 
     return () => {
+      detachInteractiveScrollbar()
       removeDataListener()
       removeExitListener()
       inputDisposable.dispose()
