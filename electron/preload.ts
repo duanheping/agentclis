@@ -40,8 +40,9 @@ const api: AgentCliApi = {
   activateSession: (id) => ipcRenderer.invoke(IPC_CHANNELS.activateSession, id),
   restartSession: (id) => ipcRenderer.invoke(IPC_CHANNELS.restartSession, id),
   closeSession: (id) => ipcRenderer.invoke(IPC_CHANNELS.closeSession, id),
-  writeToSession: (id, data) =>
-    ipcRenderer.invoke(IPC_CHANNELS.writeToSession, id, data),
+  writeToSession: (id, data) => {
+    ipcRenderer.send(IPC_CHANNELS.writeToSession, id, data)
+  },
   resizeSession: (id, cols, rows) =>
     ipcRenderer.invoke(IPC_CHANNELS.resizeSession, id, cols, rows),
   getSkillLibrarySettings: () =>
@@ -116,8 +117,9 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openWindowsCommandPrompt, sessionId, cwd),
   closeWindowsCommandPrompt: (sessionId) =>
     ipcRenderer.invoke(IPC_CHANNELS.closeWindowsCommandPrompt, sessionId),
-  writeToWindowsCommandPrompt: (sessionId, data) =>
-    ipcRenderer.invoke(IPC_CHANNELS.writeToWindowsCommandPrompt, sessionId, data),
+  writeToWindowsCommandPrompt: (sessionId, data) => {
+    ipcRenderer.send(IPC_CHANNELS.writeToWindowsCommandPrompt, sessionId, data)
+  },
   resizeWindowsCommandPrompt: (sessionId, cols, rows) =>
     ipcRenderer.invoke(
       IPC_CHANNELS.resizeWindowsCommandPrompt,

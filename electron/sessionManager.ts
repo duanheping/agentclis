@@ -149,6 +149,8 @@ const EXTERNAL_ATTENTION_RESOLUTION_RETRY_DELAYS_MS = [
   12_000,
 ]
 const LIVE_ATTENTION_BUFFER_LIMIT = 4_096
+const TOUCH_RUNTIME_DEBOUNCE_MS = 300
+const INPUT_TRANSCRIPT_FLUSH_MS = 250
 const ANSI_ESCAPE_REGEX = new RegExp(
   `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
   'gu',
@@ -357,6 +359,10 @@ export class SessionManager {
   private readonly copilotInstructionsState = new Map<string, { cwd: string }>()
   private readonly copilotInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly copilotInstructionSnapshots = new Map<string, string>()
+  private readonly pendingQueryBootstrapSessions = new Set<string>()
+  private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly inputTranscriptBuffers = new Map<string, string[]>()
+  private readonly inputTranscriptTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
@@ -685,6 +691,8 @@ export class SessionManager {
     this.stopSession(id, true)
     this.cancelExternalSessionDetection(id)
     this.stopExternalSessionAttentionTracking(id)
+    this.cancelDebouncedTouchRuntime(id)
+    this.flushInputTranscript(id)
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
     this.historicalExternalSessionRecovery.delete(id)
@@ -758,6 +766,14 @@ export class SessionManager {
       this.stopSession(id, true)
     }
 
+    for (const id of Array.from(this.touchRuntimeTimers.keys())) {
+      this.cancelDebouncedTouchRuntime(id)
+    }
+
+    for (const id of Array.from(this.inputTranscriptTimers.keys())) {
+      this.flushInputTranscript(id)
+    }
+
     this.projectMemory.dispose()
 
     for (const sessionId of this.copilotInstructionsState.keys()) {
@@ -769,6 +785,8 @@ export class SessionManager {
     this.stopSession(config.id, true)
     this.cancelExternalSessionDetection(config.id)
     this.stopExternalSessionAttentionTracking(config.id)
+    this.cancelDebouncedTouchRuntime(config.id)
+    this.flushInputTranscript(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
     this.cleanupCopilotInstructions(config.id)
     this.clearLiveAttentionBuffer(config.id)
@@ -2867,23 +2885,102 @@ export class SessionManager {
       this.capturePendingFirstPromptTitle(id, data)
 
       if (Object.keys(runtimePatch).length > 0) {
+        this.cancelDebouncedTouchRuntime(id)
         this.setRuntime(id, runtimePatch)
       } else {
-        this.touchRuntime(id)
+        this.debouncedTouchRuntime(id)
       }
+
+      this.appendInputTranscriptBatched(id, data)
+    } else {
+      this.appendTranscriptEvent({
+        sessionId: id,
+        kind: 'input',
+        source,
+        chunk: data,
+      })
     }
 
-    this.appendTranscriptEvent({
-      sessionId: id,
-      kind: 'input',
-      source,
-      chunk: data,
-    })
     this.writeToTerminal(id, data)
   }
 
   private writeToTerminal(id: string, data: string): void {
     this.terminals.get(id)?.write(data)
+  }
+
+  private debouncedTouchRuntime(id: string): void {
+    const current = this.runtimes.get(id)
+    if (current) {
+      current.lastActiveAt = new Date().toISOString()
+    }
+
+    if (this.touchRuntimeTimers.has(id)) {
+      return
+    }
+
+    this.touchRuntimeTimers.set(
+      id,
+      setTimeout(() => {
+        this.touchRuntimeTimers.delete(id)
+        const runtime = this.runtimes.get(id)
+        if (runtime) {
+          runtime.lastActiveAt = new Date().toISOString()
+          this.events.onRuntime({ sessionId: id, runtime })
+        }
+      }, TOUCH_RUNTIME_DEBOUNCE_MS),
+    )
+  }
+
+  private cancelDebouncedTouchRuntime(id: string): void {
+    const timer = this.touchRuntimeTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      this.touchRuntimeTimers.delete(id)
+    }
+  }
+
+  private appendInputTranscriptBatched(id: string, chunk: string): void {
+    const buffer = this.inputTranscriptBuffers.get(id)
+    if (buffer) {
+      buffer.push(chunk)
+    } else {
+      this.inputTranscriptBuffers.set(id, [chunk])
+    }
+
+    if (/[\r\n]/u.test(chunk)) {
+      this.flushInputTranscript(id)
+      return
+    }
+
+    if (!this.inputTranscriptTimers.has(id)) {
+      this.inputTranscriptTimers.set(
+        id,
+        setTimeout(() => {
+          this.flushInputTranscript(id)
+        }, INPUT_TRANSCRIPT_FLUSH_MS),
+      )
+    }
+  }
+
+  private flushInputTranscript(id: string): void {
+    const timer = this.inputTranscriptTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      this.inputTranscriptTimers.delete(id)
+    }
+
+    const chunks = this.inputTranscriptBuffers.get(id)
+    if (!chunks?.length) {
+      return
+    }
+
+    this.inputTranscriptBuffers.delete(id)
+    this.appendTranscriptEvent({
+      sessionId: id,
+      kind: 'input',
+      source: 'user',
+      chunk: chunks.join(''),
+    })
   }
 
   private appendTranscriptEvent(

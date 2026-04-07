@@ -667,7 +667,7 @@ function registerIpcHandlers(): void {
     updateMainWindowShell()
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.writeToSession, (_event, id, data) =>
+  ipcMain.on(IPC_CHANNELS.writeToSession, (_event, id: string, data: string) =>
     sessionManager.writeToSession(id, data),
   )
   ipcMain.handle(IPC_CHANNELS.resizeSession, (_event, id, cols, rows) =>
@@ -796,7 +796,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.closeWindowsCommandPrompt, (_event, sessionId: string) =>
     windowsCommandPromptManager.close(sessionId),
   )
-  ipcMain.handle(
+  ipcMain.on(
     IPC_CHANNELS.writeToWindowsCommandPrompt,
     (_event, sessionId: string, data: string) =>
       windowsCommandPromptManager.write(sessionId, data),
