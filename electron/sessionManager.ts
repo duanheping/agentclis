@@ -53,8 +53,11 @@ import {
   extractCodexSessionMeta,
   supportsCodexSessionResume,
   withCodexDangerousBypass,
-  withCodexDeveloperInstructions,
 } from './codexCli'
+import {
+  injectCodexInstructions,
+  removeCodexInstructions,
+} from './codexInstructions'
 import {
   injectCopilotInstructions,
   removeCopilotInstructions,
@@ -359,6 +362,8 @@ export class SessionManager {
   private readonly copilotInstructionsState = new Map<string, { cwd: string }>()
   private readonly copilotInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly copilotInstructionSnapshots = new Map<string, string>()
+  private readonly codexInstructionsState = new Map<string, { cwd: string }>()
+  private readonly codexInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly pendingQueryBootstrapSessions = new Set<string>()
   private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly inputTranscriptBuffers = new Map<string, string[]>()
@@ -695,6 +700,7 @@ export class SessionManager {
     this.flushInputTranscript(id)
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
+    this.cleanupCodexInstructions(id)
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
@@ -779,6 +785,10 @@ export class SessionManager {
     for (const sessionId of this.copilotInstructionsState.keys()) {
       this.cleanupCopilotInstructions(sessionId)
     }
+
+    for (const sessionId of this.codexInstructionsState.keys()) {
+      this.cleanupCodexInstructions(sessionId)
+    }
   }
 
   private async startSession(config: SessionConfig): Promise<void> {
@@ -789,6 +799,7 @@ export class SessionManager {
     this.flushInputTranscript(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
     this.cleanupCopilotInstructions(config.id)
+    this.cleanupCodexInstructions(config.id)
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
       attention: null,
@@ -1049,7 +1060,15 @@ export class SessionManager {
       if (!memoryText) return command
 
       if (mode === 'codex-developer-instructions') {
-        return this.injectCodexDeveloperInstructions(command, memoryText)
+        const normalizedCwd = this.normalizePath(config.cwd)
+        const existing = this.codexInstructionsCwdRefs.get(normalizedCwd)
+        const result = injectCodexInstructions(config.cwd, memoryText)
+        this.codexInstructionsState.set(config.id, { cwd: config.cwd })
+        this.codexInstructionsCwdRefs.set(normalizedCwd, {
+          count: (existing?.count ?? 0) + 1,
+          created: existing ? existing.created : result.created,
+        })
+        return command
       }
 
       if (mode === 'copilot-instructions') {
@@ -1072,13 +1091,6 @@ export class SessionManager {
     }
 
     return command
-  }
-
-  private injectCodexDeveloperInstructions(
-    command: string,
-    memoryText: string,
-  ): string {
-    return withCodexDeveloperInstructions(command, memoryText) ?? command
   }
 
   private async resolveProjectMemoryInjectionText(
@@ -1145,6 +1157,29 @@ export class SessionManager {
     } catch (err) {
       console.warn(
         `[project-memory] Failed to clean up Copilot instructions for session ${sessionId}:`,
+        err,
+      )
+    }
+  }
+
+  private cleanupCodexInstructions(sessionId: string): void {
+    const state = this.codexInstructionsState.get(sessionId)
+    if (!state) return
+    this.codexInstructionsState.delete(sessionId)
+
+    const normalizedCwd = this.normalizePath(state.cwd)
+    const ref = this.codexInstructionsCwdRefs.get(normalizedCwd)
+    if (!ref) return
+
+    ref.count -= 1
+    if (ref.count > 0) return
+
+    this.codexInstructionsCwdRefs.delete(normalizedCwd)
+    try {
+      removeCodexInstructions(state.cwd, ref.created)
+    } catch (err) {
+      console.warn(
+        `[project-memory] Failed to clean up Codex instructions for session ${sessionId}:`,
         err,
       )
     }
