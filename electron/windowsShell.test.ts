@@ -26,8 +26,9 @@ describe('windowsShell', () => {
   })
 
   it('builds inline PowerShell launch arguments for startup commands', () => {
+    const encoded = Buffer.from('codex resume 123', 'utf16le').toString('base64')
     expect(buildShellArgs('C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'codex resume 123'))
-      .toEqual(['-NoLogo', '-NoExit', '-Command', 'codex resume 123'])
+      .toEqual(['-NoLogo', '-NoExit', '-EncodedCommand', encoded])
   })
 
   it('builds inline command prompt launch arguments for startup commands', () => {
@@ -74,8 +75,16 @@ describe('windowsShell', () => {
   })
 
   it('buildShellArgs handles powershell.exe with startup command', () => {
+    const encoded = Buffer.from('codex', 'utf16le').toString('base64')
     expect(buildShellArgs('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'codex'))
-      .toEqual(['-NoLogo', '-NoExit', '-Command', 'codex'])
+      .toEqual(['-NoLogo', '-NoExit', '-EncodedCommand', encoded])
+  })
+
+  it('buildShellArgs with EncodedCommand preserves backticks in memory text', () => {
+    const cmd = 'codex -c "developer_instructions=Cast `unknown` to type"'
+    const encoded = Buffer.from(cmd, 'utf16le').toString('base64')
+    expect(buildShellArgs('C:\\Program Files\\PowerShell\\7\\pwsh.exe', cmd))
+      .toEqual(['-NoLogo', '-NoExit', '-EncodedCommand', encoded])
   })
 
   it('buildShellArgs returns -NoLogo for unknown shell with startup command', () => {

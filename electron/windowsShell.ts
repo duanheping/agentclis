@@ -99,7 +99,8 @@ export function buildShellArgs(
   }
 
   if (basename === 'pwsh.exe' || basename === 'powershell.exe') {
-    return ['-NoLogo', '-NoExit', '-Command', startupCommand]
+    const encoded = Buffer.from(startupCommand, 'utf16le').toString('base64')
+    return ['-NoLogo', '-NoExit', '-EncodedCommand', encoded]
   }
 
   if (basename === 'cmd.exe') {
