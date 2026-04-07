@@ -2917,7 +2917,7 @@ describe('SessionManager logical project identity and project context', () => {
     })
   })
 
-  it('injects project context via startup command flags instead of PTY writes', async () => {
+  it('injects project context via AGENTS.md instead of command-line flags', async () => {
     const transcriptStore = {
       append: vi.fn(async () => undefined),
       readEvents: vi.fn(async () => []),
@@ -2963,7 +2963,7 @@ describe('SessionManager logical project identity and project context', () => {
 
     await vi.runOnlyPendingTimersAsync()
 
-    // Memory is NOT written to the PTY — it goes via -c developer_instructions
+    // Memory is NOT written to the PTY — it goes via AGENTS.md file injection
     const writeCalls = (mocks.terminals[0]?.write.mock.calls ?? []) as unknown[][]
     const memoryWritten = writeCalls.some(
       (args) => typeof args[0] === 'string' && args[0].includes('project memory'),
@@ -2973,11 +2973,12 @@ describe('SessionManager logical project identity and project context', () => {
     // assembleContext was called during command resolution
     expect(projectMemory.assembleContext).toHaveBeenCalled()
 
-    // The startup command includes developer_instructions (embedded in spawn args)
+    // The startup command does NOT include developer_instructions on the command line
+    // (memory is injected via AGENTS.md to avoid Windows CreateProcess length limits)
     const spawnCall = mocks.spawn.mock.calls[0] as unknown[]
     const spawnArgs = (spawnCall?.[1] ?? []) as string[]
     const argsStr = spawnArgs.join(' ')
-    expect(argsStr).toContain('developer_instructions')
+    expect(argsStr).not.toContain('developer_instructions')
 
     // Session config tracks the injection mode
     const bootstrappedSession = manager
