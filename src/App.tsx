@@ -1087,6 +1087,9 @@ function App() {
       if (currentlyOpen) {
         pendingWindowsCommandPromptCloseSessionIdsRef.current.add(id)
         hideWindowsCommandPrompt(id)
+        if (id === activeSessionId) {
+          requestTerminalFocus(id)
+        }
 
         void agentCli.closeWindowsCommandPrompt(id)
           .catch((error) => {

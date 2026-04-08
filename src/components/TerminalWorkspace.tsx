@@ -404,9 +404,10 @@ function TerminalSurface({
 
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
-    terminal.open(containerRef.current!)
+    const container = containerRef.current!
+    terminal.open(container)
     const detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
-      containerRef.current!,
+      container,
     )
     const markdownFileLinks = terminal.registerLinkProvider(
       createMarkdownFileLinkProvider(terminal, (target) => {
@@ -456,7 +457,7 @@ function TerminalSurface({
       requestAnimationFrame(fitTerminal)
     })
 
-    resizeObserver.observe(containerRef.current!)
+    resizeObserver.observe(container)
 
     const disposable = terminal.onData((data) => {
       onInputRef.current(data)
@@ -467,7 +468,26 @@ function TerminalSurface({
 
     requestAnimationFrame(fitTerminal)
 
+    const handlePointerDownCapture = (event: PointerEvent) => {
+      if (!activeRef.current || event.button !== 0) {
+        return
+      }
+
+      terminal.focus()
+    }
+
+    container.addEventListener(
+      'pointerdown',
+      handlePointerDownCapture,
+      true,
+    )
+
     return () => {
+      container.removeEventListener(
+        'pointerdown',
+        handlePointerDownCapture,
+        true,
+      )
       detachInteractiveScrollbar()
       markdownFileLinks.dispose()
       detachPasteHandler()
