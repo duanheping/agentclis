@@ -269,6 +269,26 @@ function buildProjectMemoryServiceMock(
   }
 }
 
+function expectSpawnedPowerShellCommand(
+  callIndex: number,
+  expectedCommand: string,
+): void {
+  const spawnArgs = (mocks.spawn.mock.calls[callIndex] as unknown[] | undefined)?.[1] as
+    | string[]
+    | undefined
+
+  expect(spawnArgs?.slice(0, 3)).toEqual([
+    '-NoLogo',
+    '-NoExit',
+    '-EncodedCommand',
+  ])
+  const encodedCommand = spawnArgs?.[3]
+  expect(encodedCommand).toBeTruthy()
+  expect(Buffer.from(encodedCommand!, 'base64').toString('utf16le')).toBe(
+    expectedCommand,
+  )
+}
+
 describe('SessionManager restore policy', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -314,7 +334,7 @@ describe('SessionManager restore policy', () => {
     vi.useRealTimers()
   })
 
-  it('restores all saved sessions at launch and reuses running terminals on demand', async () => {
+  it('restores only the active saved session at launch and lazily starts others on demand', async () => {
     const manager = new SessionManager({
       onData: () => undefined,
       onConfig: () => undefined,
@@ -328,21 +348,8 @@ describe('SessionManager restore policy', () => {
     ).toEqual(['exited', 'exited'])
 
     const restoredSnapshot = await manager.restoreSessions()
-    expect(mocks.spawn).toHaveBeenCalledTimes(2)
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'beta',
-    ])
-    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
-    expect(secondSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'alpha',
-    ])
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    expectSpawnedPowerShellCommand(0, 'beta')
     expect(restoredSnapshot.activeSessionId).toBe('session-b')
     expect(
       Object.fromEntries(
@@ -352,16 +359,16 @@ describe('SessionManager restore policy', () => {
         ]) ?? [],
       ),
     ).toEqual({
-      'session-a': 'running',
+      'session-a': 'exited',
       'session-b': 'running',
     })
 
     vi.runOnlyPendingTimers()
     expect(mocks.terminals[0].write).not.toHaveBeenCalled()
-    expect(mocks.terminals[1].write).not.toHaveBeenCalled()
 
     await manager.activateSession('session-a')
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    expectSpawnedPowerShellCommand(1, 'alpha')
     expect(manager.listSessions().activeSessionId).toBe('session-a')
 
     vi.runOnlyPendingTimers()
@@ -499,7 +506,7 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
-    expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
 
     const closeResult = await manager.closeSession('session-b')
 
@@ -1347,32 +1354,18 @@ describe('SessionManager restore policy', () => {
 
     await manager.restoreSessions()
     await vi.waitFor(() => {
-      expect(mocks.spawn).toHaveBeenCalledTimes(2)
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
     // Session A (active) should resume its own codex session, not session B's.
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex resume 019codex-session-a',
-    ])
+    expectSpawnedPowerShellCommand(0, 'codex resume 019codex-session-a')
 
-    // Session B should also resume its own codex session during restore.
-    const secondSpawnArgs = (mocks.spawn.mock.calls[1] as unknown[] | undefined)?.[1]
-    expect(secondSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex resume 019codex-session-b',
-    ])
-
-    // Activating an already restored session should not spawn another terminal.
+    // Activating an inactive restored session should resume it on demand.
     await manager.activateSession('session-b')
     await vi.waitFor(() => {
       expect(mocks.spawn).toHaveBeenCalledTimes(2)
     })
+    expectSpawnedPowerShellCommand(1, 'codex resume 019codex-session-b')
   })
 
   it('restores a historical Codex session even when newer transcripts push it past the recent-file window', async () => {
