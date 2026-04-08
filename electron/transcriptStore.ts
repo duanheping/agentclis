@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, truncate } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, truncate } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -13,6 +13,7 @@ interface TranscriptIndex {
 }
 
 const DEFAULT_BASE_ROOT = path.join(os.homedir(), 'AppData', 'Roaming', 'agenclis')
+const TAIL_SCAN_CHUNK_BYTES = 64 * 1024
 
 interface ParseResult {
   events: TranscriptEvent[]
@@ -21,63 +22,96 @@ interface ParseResult {
 }
 
 function parseTranscriptEvents(content: string): ParseResult {
-  const lines = content.split(/\r?\n/u)
-  let lastNonEmptyIndex = -1
-  for (let index = 0; index < lines.length; index += 1) {
-    if (lines[index].trim()) {
-      lastNonEmptyIndex = index
-    }
-  }
-
   const events: TranscriptEvent[] = []
-  let hasMalformedTail = false
   let goodByteLength = 0
+  let lineStart = 0
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim()
+  while (lineStart < content.length) {
+    const newlineIndex = content.indexOf('\n', lineStart)
+    const hasLineBreak = newlineIndex !== -1
+    const rawLine = hasLineBreak
+      ? content.slice(lineStart, newlineIndex)
+      : content.slice(lineStart)
+    const line = (
+      rawLine.endsWith('\r')
+        ? rawLine.slice(0, Math.max(0, rawLine.length - 1))
+        : rawLine
+    ).trim()
+    const nextGoodByteLength =
+      goodByteLength + Buffer.byteLength(rawLine, 'utf8') + (hasLineBreak ? 1 : 0)
+
     if (!line) {
-      continue
-    }
-
-    try {
-      events.push(JSON.parse(line) as TranscriptEvent)
-      // Track the byte offset past this successfully parsed line.
-      // Sum original line lengths + newline separators up through this line.
-      goodByteLength = 0
-      for (let j = 0; j <= index; j += 1) {
-        goodByteLength += Buffer.byteLength(lines[j], 'utf8')
-        if (j < lines.length - 1) {
-          goodByteLength += content.includes('\r\n') ? 2 : 1
+      goodByteLength = nextGoodByteLength
+    } else {
+      try {
+        events.push(JSON.parse(line) as TranscriptEvent)
+        goodByteLength = nextGoodByteLength
+      } catch (error) {
+        const hasOnlyBlankRemainder =
+          !hasLineBreak || content.slice(newlineIndex + 1).trim().length === 0
+        if (hasOnlyBlankRemainder) {
+          return {
+            events,
+            hasMalformedTail: true,
+            goodByteLength,
+          }
         }
-      }
-    } catch (error) {
-      if (index === lastNonEmptyIndex) {
-        hasMalformedTail = true
-        break
-      }
 
-      throw error
+        throw error
+      }
     }
+
+    if (!hasLineBreak) {
+      break
+    }
+
+    lineStart = newlineIndex + 1
   }
 
-  return { events, hasMalformedTail, goodByteLength }
+  return { events, hasMalformedTail: false, goodByteLength }
 }
 
-async function repairMalformedTail(transcriptPath: string): Promise<void> {
-  let content: string
+async function repairMalformedTailForAppend(transcriptPath: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null
+
   try {
-    content = await readFile(transcriptPath, 'utf8')
+    handle = await open(transcriptPath, 'r+')
   } catch {
     return
   }
 
-  const result = parseTranscriptEvents(content)
-  if (result.hasMalformedTail && result.goodByteLength < Buffer.byteLength(content, 'utf8')) {
-    try {
-      await truncate(transcriptPath, result.goodByteLength)
-    } catch {
-      // Best-effort; don't block the caller.
+  try {
+    const stats = await handle.stat()
+    if (stats.size === 0) {
+      return
     }
+
+    const lastByte = Buffer.alloc(1)
+    const lastByteRead = await handle.read(lastByte, 0, 1, stats.size - 1)
+    if (lastByteRead.bytesRead !== 1 || lastByte[0] === 0x0a) {
+      return
+    }
+
+    let searchEnd = stats.size
+    while (searchEnd > 0) {
+      const chunkSize = Math.min(TAIL_SCAN_CHUNK_BYTES, searchEnd)
+      const chunkStart = searchEnd - chunkSize
+      const buffer = Buffer.alloc(chunkSize)
+      const { bytesRead } = await handle.read(buffer, 0, chunkSize, chunkStart)
+      const newlineIndex = buffer.subarray(0, bytesRead).lastIndexOf(0x0a)
+      if (newlineIndex !== -1) {
+        await handle.truncate(chunkStart + newlineIndex + 1)
+        return
+      }
+
+      searchEnd = chunkStart
+    }
+
+    await handle.truncate(0)
+  } catch {
+    // Best-effort; don't block the caller.
+  } finally {
+    await handle?.close().catch(() => undefined)
   }
 }
 
@@ -108,7 +142,7 @@ export class TranscriptStore {
       const indexPath = this.getIndexPath(event.sessionId)
       await mkdir(path.dirname(transcriptPath), { recursive: true })
       await mkdir(path.dirname(indexPath), { recursive: true })
-      await repairMalformedTail(transcriptPath)
+      await repairMalformedTailForAppend(transcriptPath)
       await appendFile(transcriptPath, `${JSON.stringify(event)}\n`, 'utf8')
 
       const currentIndex = await this.readIndexFile(event.sessionId)
@@ -138,9 +172,20 @@ export class TranscriptStore {
     await this.pendingWrites.get(sessionId)
     try {
       const transcriptPath = this.getTranscriptPath(sessionId)
-      await repairMalformedTail(transcriptPath)
       const content = await readFile(transcriptPath, 'utf8')
-      return parseTranscriptEvents(content).events
+      const result = parseTranscriptEvents(content)
+      if (
+        result.hasMalformedTail &&
+        result.goodByteLength < Buffer.byteLength(content, 'utf8')
+      ) {
+        try {
+          await truncate(transcriptPath, result.goodByteLength)
+        } catch {
+          // Best-effort; return the parsed transcript even if cleanup fails.
+        }
+      }
+
+      return result.events
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error
