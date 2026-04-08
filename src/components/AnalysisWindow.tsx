@@ -5,6 +5,7 @@ import { Terminal } from '@xterm/xterm'
 
 import '../App.css'
 import { attachInteractiveXtermScrollbar } from '../lib/xtermScrollbar'
+import { stripScrollbackClear } from '../lib/terminalEscapeFilter'
 
 const SCROLLBACK_LINES = 50_000
 
@@ -80,7 +81,7 @@ export function AnalysisWindow() {
     })
 
     const removeDataListener = agentCli.onAnalysisTerminalData(({ chunk }) => {
-      terminal.write(chunk)
+      terminal.write(stripScrollbackClear(chunk))
     })
 
     const removeExitListener = agentCli.onAnalysisTerminalExit(({ message }) => {
