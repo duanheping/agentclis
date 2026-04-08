@@ -95,6 +95,7 @@ export interface ProjectMemoryCandidate {
   status: ProjectMemoryStatus
   createdAt: string
   updatedAt: string
+  lastReinforcedAt: string
   sourceSessionId: string
   sourceEventIds: string[]
 }
