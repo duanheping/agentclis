@@ -1057,6 +1057,17 @@ describe('App skills settings', () => {
     expect(agentCli.closeWindowsCommandPrompt).toHaveBeenCalledWith('session-1')
 
     await waitFor(() => {
+      expect(
+        mockTerminalWorkspace.mock.calls.at(-1)?.[0],
+      ).toEqual(
+        expect.objectContaining({
+          focusTerminalId: 'session-1',
+          focusTerminalSequence: expect.any(Number),
+        }),
+      )
+    })
+
+    await waitFor(() => {
       expect(screen.getByText('Console')).toBeInTheDocument()
       expect(screen.queryByText('Console on')).not.toBeInTheDocument()
     })

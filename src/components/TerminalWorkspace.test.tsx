@@ -355,4 +355,36 @@ describe('TerminalWorkspace', () => {
     expect(scrollbar?.style.background).toBe('rgba(0, 0, 0, 0)')
     expect(scrollbar?.style.transition).toBe('none')
   })
+
+  it('refocuses the active terminal when the surface is clicked', async () => {
+    const { container } = render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    const terminalTextarea = container.querySelector(
+      '.terminal-surface .xterm textarea',
+    ) as HTMLTextAreaElement | null
+    const terminalSurface = container.querySelector(
+      '.terminal-surface',
+    ) as HTMLDivElement | null
+    const outsideButton = document.createElement('button')
+    document.body.appendChild(outsideButton)
+    outsideButton.focus()
+
+    expect(terminalTextarea).not.toBeNull()
+    expect(terminalSurface).not.toBeNull()
+    expect(document.activeElement).toBe(outsideButton)
+
+    fireEvent.pointerDown(terminalSurface!, { button: 0 })
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(terminalTextarea)
+    })
+
+    outsideButton.remove()
+  })
 })
