@@ -3,7 +3,6 @@ import {
   readdir,
   readFile,
   rm,
-  writeFile,
 } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -27,6 +26,8 @@ import type {
 } from '../src/shared/projectMemory'
 import type {
   ArchitectureInteraction,
+  ArchitectureInvariant,
+  ArchitectureGlossaryTerm,
   ArchitectureModuleCard,
   ProjectArchitectureSnapshot,
 } from '../src/shared/projectArchitecture'
@@ -41,6 +42,7 @@ import type {
   HistoricalProjectSessionDescriptor,
   ProjectSessionHistoryAnalyzer,
 } from './projectSessionHistoryAgent'
+import { writeUtf8FileAtomic } from './atomicFile'
 import { truncateUtf8 } from './structuredAgentRunner'
 import type { PreparedStructuredAgent } from './structuredAgentRunner'
 
@@ -174,9 +176,72 @@ const TRANSIENT_TASK_STATE_REGEXES = [
   /\bbuild\s+[a-z0-9_-]+\/\d+\b/iu,
   /\bjenkins[a-z0-9_-]*\/\d+\b/iu,
 ] as const
+const INVISIBLE_MEMORY_UNICODE_REGEX = /[\u200B-\u200F\u202A-\u202E\uFEFF]/u
+const MEMORY_CONTENT_BLOCKLIST = [
+  {
+    code: 'prompt-injection-ignore-previous',
+    pattern:
+      /\bignore\b[\s,:-]*(?:all\s+)?(?:previous|prior|earlier)\s+instructions\b/iu,
+  },
+  {
+    code: 'prompt-injection-disregard-rules',
+    pattern:
+      /\bdisregard\b[\s,:-]*(?:all\s+)?(?:your\s+)?(?:rules|instructions)\b/iu,
+  },
+  {
+    code: 'prompt-injection-role-takeover',
+    pattern: /\byou are now\b/iu,
+  },
+  {
+    code: 'secret-exfiltration-command',
+    pattern: /\b(?:curl|wget)\b[^\n\r]*(?:\$[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%)/u,
+  },
+] as const
+const DEFAULT_PROJECT_MEMORY_MAX_CANDIDATE_BYTES = 8 * 1024
+const DEFAULT_PROJECT_MEMORY_STALE_AFTER_SESSIONS = 6
 
 function createId(): string {
   return crypto.randomUUID()
+}
+
+function buildGenericSessionSummary(eventCount: number): string {
+  return `This session recorded ${eventCount} transcript event${eventCount === 1 ? '' : 's'}.`
+}
+
+function buildGenericHistoricalSessionsSummary(sessionCount: number): string {
+  return `Analyzed ${sessionCount} stored session${sessionCount === 1 ? '' : 's'} for durable project memory.`
+}
+
+function scanMemoryContent(value: string): { code: string } | null {
+  if (!value.trim()) {
+    return null
+  }
+
+  if (INVISIBLE_MEMORY_UNICODE_REGEX.test(value)) {
+    return { code: 'invisible-unicode' }
+  }
+
+  const normalized = normalizeWhitespace(stripAnsi(value))
+  if (!normalized) {
+    return null
+  }
+
+  for (const entry of MEMORY_CONTENT_BLOCKLIST) {
+    if (entry.pattern.test(normalized)) {
+      return { code: entry.code }
+    }
+  }
+
+  return null
+}
+
+function sanitizeSummaryText(value: string, fallback: string): string {
+  const normalized = normalizeWhitespace(stripAnsi(value))
+  if (!normalized) {
+    return fallback
+  }
+
+  return scanMemoryContent(normalized) ? fallback : normalized
 }
 
 export interface ProjectMemoryExtractionResult {
@@ -214,6 +279,11 @@ export interface ProjectMemoryExtractor {
   }): Promise<ProjectMemoryExtractionResult>
 }
 
+export interface ProjectMemoryManagerOptions {
+  maxCandidateBytes?: number
+  staleAfterSessionCount?: number
+}
+
 interface StoredProjectRecord {
   id?: string
   title?: string
@@ -225,6 +295,7 @@ interface StoredProjectRecord {
 interface NormalizedSummarySet {
   latest: SessionSummary | null
   removedCount: number
+  summaries: SessionSummary[]
 }
 
 interface NormalizedCandidateSet {
@@ -559,12 +630,19 @@ function isEphemeralMemoryCandidate(
   )
 }
 
+function getLastReinforcedAt(
+  candidate: Pick<ProjectMemoryCandidate, 'lastReinforcedAt' | 'updatedAt'>,
+): string {
+  return candidate.lastReinforcedAt?.trim() || candidate.updatedAt
+}
+
 function compareCandidatePriority(
   left: ProjectMemoryCandidate,
   right: ProjectMemoryCandidate,
 ): number {
   return (
     right.confidence - left.confidence ||
+    getLastReinforcedAt(right).localeCompare(getLastReinforcedAt(left)) ||
     right.updatedAt.localeCompare(left.updatedAt) ||
     right.createdAt.localeCompare(left.createdAt) ||
     left.content.localeCompare(right.content)
@@ -580,27 +658,209 @@ function compareSummaryPriority(left: SessionSummary, right: SessionSummary): nu
   )
 }
 
+function buildSummaryHistory(
+  summaries: Array<SessionSummary | null | undefined>,
+): SessionSummary[] {
+  const bySessionId = new Map<string, SessionSummary>()
+
+  for (const summary of summaries) {
+    if (!summary) {
+      continue
+    }
+
+    const existing = bySessionId.get(summary.sessionId)
+    if (!existing || compareSummaryPriority(summary, existing) < 0) {
+      bySessionId.set(summary.sessionId, summary)
+    }
+  }
+
+  return Array.from(bySessionId.values()).sort((left, right) =>
+    right.generatedAt.localeCompare(left.generatedAt),
+  )
+}
+
+function normalizeArchitectureText(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = normalizeWhitespace(stripAnsi(value))
+  if (!normalized || scanMemoryContent(value)) {
+    return null
+  }
+
+  return normalized
+}
+
+function normalizeArchitectureTextList(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return []
+  }
+
+  return uniqueStrings(
+    values.flatMap((value) => {
+      const normalized = normalizeArchitectureText(value)
+      return normalized ? [normalized] : []
+    }),
+  )
+}
+
+function normalizeArchitectureModule(
+  value: ArchitectureModuleCard,
+): ArchitectureModuleCard | null {
+  const id = normalizeArchitectureText(value.id)
+  const name = normalizeArchitectureText(value.name)
+  const responsibility = normalizeArchitectureText(value.responsibility)
+  if (!id || !name || !responsibility) {
+    return null
+  }
+
+  return {
+    ...value,
+    id,
+    name,
+    paths: normalizeArchitectureTextList(value.paths),
+    responsibility,
+    owns: normalizeArchitectureTextList(value.owns),
+    dependsOn: normalizeArchitectureTextList(value.dependsOn),
+    usedBy: normalizeArchitectureTextList(value.usedBy),
+    publicInterfaces: normalizeArchitectureTextList(value.publicInterfaces),
+    keyTypes: normalizeArchitectureTextList(value.keyTypes),
+    invariants: normalizeArchitectureTextList(value.invariants),
+    changeGuidance: normalizeArchitectureTextList(value.changeGuidance),
+    testLocations: normalizeArchitectureTextList(value.testLocations),
+    confidence: clampConfidence(value.confidence),
+  }
+}
+
+function normalizeArchitectureInteraction(
+  value: ArchitectureInteraction,
+): ArchitectureInteraction | null {
+  const id = normalizeArchitectureText(value.id)
+  const from = normalizeArchitectureText(value.from)
+  const to = normalizeArchitectureText(value.to)
+  const via = normalizeArchitectureText(value.via)
+  const purpose = normalizeArchitectureText(value.purpose)
+  const trigger = normalizeArchitectureText(value.trigger)
+  if (!id || !from || !to || !via || !purpose || !trigger) {
+    return null
+  }
+
+  return {
+    ...value,
+    id,
+    from,
+    to,
+    via,
+    purpose,
+    trigger,
+    failureModes: normalizeArchitectureTextList(value.failureModes),
+    notes: normalizeArchitectureTextList(value.notes),
+  }
+}
+
+function normalizeArchitectureInvariant(
+  value: ArchitectureInvariant,
+): ArchitectureInvariant | null {
+  const id = normalizeArchitectureText(value.id)
+  const statement = normalizeArchitectureText(value.statement)
+  if (!id || !statement) {
+    return null
+  }
+
+  return {
+    ...value,
+    id,
+    statement,
+    relatedModules: normalizeArchitectureTextList(value.relatedModules),
+  }
+}
+
+function normalizeArchitectureGlossaryTerm(
+  value: ArchitectureGlossaryTerm,
+): ArchitectureGlossaryTerm | null {
+  const term = normalizeArchitectureText(value.term)
+  const meaning = normalizeArchitectureText(value.meaning)
+  if (!term || !meaning) {
+    return null
+  }
+
+  return {
+    term,
+    meaning,
+  }
+}
+
+function normalizeArchitectureSnapshot(
+  value: ProjectArchitectureSnapshot | null,
+): ProjectArchitectureSnapshot | null {
+  if (!value) {
+    return null
+  }
+
+  const title = normalizeArchitectureText(value.title) ?? 'Project'
+  const systemOverview = normalizeArchitectureText(value.systemOverview) ?? ''
+  const modules = Array.isArray(value.modules)
+    ? value.modules.flatMap((module) => {
+        const normalized = normalizeArchitectureModule(module)
+        return normalized ? [normalized] : []
+      })
+    : []
+  const interactions = Array.isArray(value.interactions)
+    ? value.interactions.flatMap((interaction) => {
+        const normalized = normalizeArchitectureInteraction(interaction)
+        return normalized ? [normalized] : []
+      })
+    : []
+  const invariants = Array.isArray(value.invariants)
+    ? value.invariants.flatMap((invariant) => {
+        const normalized = normalizeArchitectureInvariant(invariant)
+        return normalized ? [normalized] : []
+      })
+    : []
+  const glossary = Array.isArray(value.glossary)
+    ? value.glossary.flatMap((entry) => {
+        const normalized = normalizeArchitectureGlossaryTerm(entry)
+        return normalized ? [normalized] : []
+      })
+    : []
+
+  return {
+    ...value,
+    title,
+    systemOverview,
+    modules,
+    interactions,
+    invariants,
+    glossary,
+  }
+}
+
 function normalizePersistedSummary(value: unknown): SessionSummary | null {
   if (!value || typeof value !== 'object') {
     return null
   }
 
   const candidate = value as Partial<SessionSummary>
+  const rawSummary = typeof candidate.summary === 'string' ? candidate.summary : ''
   const sessionId =
     typeof candidate.sessionId === 'string' ? candidate.sessionId.trim() : ''
   const projectId =
     typeof candidate.projectId === 'string' ? candidate.projectId.trim() : ''
-  const summary =
-    typeof candidate.summary === 'string'
-      ? normalizeWhitespace(candidate.summary)
-      : ''
+  const summary = normalizeWhitespace(stripAnsi(rawSummary))
   const sourceEventIds = normalizeSourceEventIds(
     Array.isArray(candidate.sourceEventIds)
       ? candidate.sourceEventIds.map((entry) => String(entry))
       : [],
   )
 
-  if (!sessionId || !projectId || !summary || sourceEventIds.length === 0) {
+  if (
+    !sessionId ||
+    !projectId ||
+    !summary ||
+    sourceEventIds.length === 0 ||
+    scanMemoryContent(rawSummary)
+  ) {
     return null
   }
 
@@ -647,13 +907,16 @@ function normalizePersistedCandidate(
     return null
   }
 
-  const content = normalizeCandidateContent(
-    typeof candidate.content === 'string' ? candidate.content : '',
-  )
-  const key = normalizeCandidateKey(
+  const rawContent = typeof candidate.content === 'string' ? candidate.content : ''
+  const rawKey =
     typeof candidate.key === 'string' && candidate.key.trim()
       ? candidate.key
-      : content,
+      : rawContent
+  const content = normalizeCandidateContent(
+    rawContent,
+  )
+  const key = normalizeCandidateKey(
+    rawKey,
   )
   const confidence = clampConfidence(
     typeof candidate.confidence === 'number' ? candidate.confidence : 0,
@@ -664,7 +927,9 @@ function normalizePersistedCandidate(
     !key ||
     confidence < 0.3 ||
     isLowSignalCandidate(content) ||
-    isEphemeralMemoryCandidate(key, content)
+    isEphemeralMemoryCandidate(key, content) ||
+    scanMemoryContent(rawKey) ||
+    scanMemoryContent(rawContent)
   ) {
     return null
   }
@@ -706,6 +971,15 @@ function normalizePersistedCandidate(
       typeof candidate.updatedAt === 'string' && candidate.updatedAt.trim()
         ? candidate.updatedAt.trim()
         : createdAt,
+    lastReinforcedAt:
+      typeof candidate.lastReinforcedAt === 'string' &&
+      candidate.lastReinforcedAt.trim()
+        ? candidate.lastReinforcedAt.trim()
+        : (
+            typeof candidate.updatedAt === 'string' && candidate.updatedAt.trim()
+              ? candidate.updatedAt.trim()
+              : createdAt
+          ),
     sourceSessionId:
       typeof candidate.sourceSessionId === 'string' &&
       candidate.sourceSessionId.trim()
@@ -757,6 +1031,17 @@ function normalizeCandidateSet(
       ...existing.sourceEventIds,
       ...candidate.sourceEventIds,
     ])
+    if (
+      candidateStatusRetentionPriority(candidate.status) >
+      candidateStatusRetentionPriority(existing.status)
+    ) {
+      existing.status = candidate.status
+    }
+    if (
+      getLastReinforcedAt(candidate).localeCompare(getLastReinforcedAt(existing)) > 0
+    ) {
+      existing.lastReinforcedAt = getLastReinforcedAt(candidate)
+    }
     if (candidate.createdAt.localeCompare(existing.createdAt) < 0) {
       existing.createdAt = candidate.createdAt
     }
@@ -781,10 +1066,29 @@ function normalizeCandidateSet(
   const candidates: ProjectMemoryCandidate[] = []
   for (const group of groupedByKey.values()) {
     group.sort(compareCandidatePriority)
-    group.forEach((candidate, index) => {
-      candidate.status = index === 0 ? 'active' : 'conflicted'
-      candidates.push(candidate)
-    })
+    if (group.length > 1) {
+      // Multi-entry key group: ensure exactly one entry is active.
+      // Respect the persisted active marker from mergeCandidates when present,
+      // so a low-confidence correction (0.4 active) isn't overridden by a
+      // higher-confidence superseded entry (0.95 conflicted) on reload.
+      const activeIndex = group.findIndex((c) => c.status === 'active')
+      if (activeIndex >= 0) {
+        group.forEach((candidate, index) => {
+          candidate.status = index === activeIndex ? 'active' : 'conflicted'
+          candidates.push(candidate)
+        })
+      } else {
+        // No active entry survived persistence — re-elect the top-ranked.
+        group.forEach((candidate, index) => {
+          candidate.status = index === 0 ? 'active' : 'conflicted'
+          candidates.push(candidate)
+        })
+      }
+    } else {
+      // Single-entry group: preserve existing status. An entry intentionally
+      // conflicted by a near-duplicate in a different key group must stay conflicted.
+      candidates.push(group[0])
+    }
   }
 
   candidates.sort(compareCandidatePriority)
@@ -805,7 +1109,11 @@ function buildStableFacts(
 
   const pushFact = (key: string, content: string, confidence: number) => {
     const normalizedContent = normalizeCandidateContent(content)
-    if (isLowSignalCandidate(normalizedContent)) {
+    if (
+      isLowSignalCandidate(normalizedContent) ||
+      scanMemoryContent(key) ||
+      scanMemoryContent(content)
+    ) {
       return
     }
 
@@ -821,6 +1129,7 @@ function buildStableFacts(
       status: 'active',
       createdAt: timestamp,
       updatedAt: timestamp,
+      lastReinforcedAt: timestamp,
       sourceSessionId: session.id,
       sourceEventIds,
     })
@@ -896,10 +1205,9 @@ function normalizeHistoricalSessionsAnalysisRecord(
   }
 
   const candidate = value as Partial<HistoricalSessionsAnalysisRecord>
+  const rawSummary = typeof candidate.summary === 'string' ? candidate.summary : ''
   const summary =
-    typeof candidate.summary === 'string'
-      ? normalizeWhitespace(candidate.summary)
-      : ''
+    normalizeWhitespace(stripAnsi(rawSummary))
   const analyzedSessionIds = Array.isArray(candidate.analyzedSessionIds)
     ? candidate.analyzedSessionIds
         .filter((entry): entry is string => typeof entry === 'string')
@@ -907,7 +1215,7 @@ function normalizeHistoricalSessionsAnalysisRecord(
         .filter(Boolean)
     : []
 
-  if (!summary || analyzedSessionIds.length === 0) {
+  if (!summary || analyzedSessionIds.length === 0 || scanMemoryContent(rawSummary)) {
     return null
   }
 
@@ -1438,6 +1746,61 @@ function recencyFactor(updatedAt: string, now: number): number {
   return Math.pow(0.98, daysSince)
 }
 
+function calculateCandidateRetentionScore(
+  candidate: ProjectMemoryCandidate,
+  now: number,
+): number {
+  const recency = recencyFactor(candidate.updatedAt, now)
+  const reinforcementRecency = recencyFactor(getLastReinforcedAt(candidate), now)
+  return candidate.confidence * (0.6 * recency + 0.4 * reinforcementRecency)
+}
+
+function candidateStatusRetentionPriority(status: ProjectMemoryStatus): number {
+  switch (status) {
+    case 'active':
+      return 2
+    case 'stale':
+      return 1
+    case 'conflicted':
+      return 0
+  }
+}
+
+function compareCandidateRelevance(
+  left: ProjectMemoryCandidate,
+  right: ProjectMemoryCandidate,
+  now: number,
+): number {
+  return (
+    candidateStatusRetentionPriority(right.status) -
+      candidateStatusRetentionPriority(left.status) ||
+    calculateCandidateRetentionScore(right, now) -
+      calculateCandidateRetentionScore(left, now) ||
+    getLastReinforcedAt(right).localeCompare(getLastReinforcedAt(left)) ||
+    compareCandidatePriority(left, right)
+  )
+}
+
+function compareCandidateRemovalPriority(
+  left: ProjectMemoryCandidate,
+  right: ProjectMemoryCandidate,
+  now: number,
+): number {
+  return (
+    candidateStatusRetentionPriority(left.status) -
+      candidateStatusRetentionPriority(right.status) ||
+    calculateCandidateRetentionScore(left, now) -
+      calculateCandidateRetentionScore(right, now) ||
+    getLastReinforcedAt(left).localeCompare(getLastReinforcedAt(right)) ||
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.content.localeCompare(right.content)
+  )
+}
+
+function estimateCandidateBytes(candidate: ProjectMemoryCandidate): number {
+  return Buffer.byteLength(JSON.stringify(candidate), 'utf8')
+}
+
 function selectRelevantEntries(
   items: ProjectMemoryCandidate[],
   locationId: string | null,
@@ -1454,24 +1817,16 @@ function selectRelevantEntries(
   )
   const normalizedQuery = normalizeWhitespace(query ?? '').toLowerCase()
   if (!normalizedQuery) {
-    return activeItems
-      .slice()
-      .sort((left, right) => {
-        const leftScore = left.confidence * recencyFactor(left.updatedAt, now)
-        const rightScore = right.confidence * recencyFactor(right.updatedAt, now)
-        return rightScore - leftScore
-      })
+    return activeItems.slice().sort((left, right) =>
+      compareCandidateRelevance(left, right, now),
+    )
   }
 
   const queryTerms = normalizedQuery.split(/\s+/).filter((term) => term.length >= 3)
   if (queryTerms.length === 0) {
-    return activeItems
-      .slice()
-      .sort((left, right) => {
-        const leftScore = left.confidence * recencyFactor(left.updatedAt, now)
-        const rightScore = right.confidence * recencyFactor(right.updatedAt, now)
-        return rightScore - leftScore
-      })
+    return activeItems.slice().sort((left, right) =>
+      compareCandidateRelevance(left, right, now),
+    )
   }
 
   const scoredItems = activeItems
@@ -1483,15 +1838,17 @@ function selectRelevantEntries(
       }, 0)
       return {
         item,
-        score: termHits * item.confidence * recencyFactor(item.updatedAt, now),
+        score: termHits * calculateCandidateRetentionScore(item, now),
         termHits,
       }
     })
     .filter((entry) => entry.termHits > 0)
-    .sort((left, right) => right.score - left.score)
+    .sort((left, right) => right.score - left.score || compareCandidatePriority(left.item, right.item))
     .map((entry) => entry.item)
 
-  return scoredItems.length > 0 ? scoredItems : activeItems
+  return scoredItems.length > 0
+    ? scoredItems
+    : activeItems.slice().sort((left, right) => compareCandidateRelevance(left, right, now))
 }
 
 async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
@@ -1504,8 +1861,7 @@ async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  await writeUtf8FileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`)
 }
 
 export class ProjectMemoryManager {
@@ -1513,6 +1869,8 @@ export class ProjectMemoryManager {
   private readonly extractor?: ProjectMemoryExtractor
   private readonly architectureExtractor?: ProjectArchitectureExtractor
   private readonly historicalSessionAnalyzer?: ProjectSessionHistoryAnalyzer
+  private readonly maxCandidateBytes: number
+  private readonly staleAfterSessionCount: number
   private diagnosticReporter?: ProjectMemoryDiagnosticReporter
 
   constructor(
@@ -1520,11 +1878,21 @@ export class ProjectMemoryManager {
     extractor?: ProjectMemoryExtractor,
     architectureExtractor?: ProjectArchitectureExtractor,
     historicalSessionAnalyzer?: ProjectSessionHistoryAnalyzer,
+    options: ProjectMemoryManagerOptions = {},
   ) {
     this.getLibraryRoot = getLibraryRoot
     this.extractor = extractor
     this.architectureExtractor = architectureExtractor
     this.historicalSessionAnalyzer = historicalSessionAnalyzer
+    this.maxCandidateBytes =
+      typeof options.maxCandidateBytes === 'number' && options.maxCandidateBytes > 0
+        ? Math.floor(options.maxCandidateBytes)
+        : DEFAULT_PROJECT_MEMORY_MAX_CANDIDATE_BYTES
+    this.staleAfterSessionCount =
+      typeof options.staleAfterSessionCount === 'number' &&
+      options.staleAfterSessionCount > 0
+        ? Math.floor(options.staleAfterSessionCount)
+        : DEFAULT_PROJECT_MEMORY_STALE_AFTER_SESSIONS
   }
 
   setDiagnosticReporter(reporter: ProjectMemoryDiagnosticReporter): void {
@@ -1580,7 +1948,9 @@ export class ProjectMemoryManager {
   ): Promise<ProjectArchitectureSnapshot | null> {
     const filePath = this.getSnapshotFilePath(project, 'architecture.json')
     return filePath
-      ? await readJsonFile<ProjectArchitectureSnapshot | null>(filePath, null)
+      ? normalizeArchitectureSnapshot(
+          await readJsonFile<ProjectArchitectureSnapshot | null>(filePath, null),
+        )
       : null
   }
 
@@ -1619,6 +1989,36 @@ export class ProjectMemoryManager {
     return snapshot
   }
 
+  private async readSummaryHistoryFromDirectory(
+    projectDirectory: string,
+  ): Promise<SessionSummary[]> {
+    const summariesDirectory = path.join(projectDirectory, 'summaries')
+    let summaryFiles: string[] = []
+
+    try {
+      const entries = await readdir(summariesDirectory, { withFileTypes: true })
+      summaryFiles = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+        .map((entry) => entry.name)
+        .sort((left, right) => left.localeCompare(right))
+    } catch {
+      return []
+    }
+
+    const summaries = await Promise.all(
+      summaryFiles.map(async (fileName) =>
+        normalizePersistedSummary(
+          await readJsonFile<SessionSummary | null>(
+            path.join(summariesDirectory, fileName),
+            null,
+          ),
+        ),
+      ),
+    )
+
+    return buildSummaryHistory(summaries)
+  }
+
   private async listProjectDirectories(): Promise<string[]> {
     const projectsDirectory = this.getProjectsDirectory()
     if (!projectsDirectory) {
@@ -1648,11 +2048,13 @@ export class ProjectMemoryManager {
     sessionsAnalysis?: HistoricalSessionsAnalysisRecord | null
   }): Promise<void> {
     const architectureSnapshot =
-      input.architectureSnapshot ??
-      (await readJsonFile<ProjectArchitectureSnapshot | null>(
-        path.join(input.projectDirectory, 'architecture.json'),
-        null,
-      ))
+      normalizeArchitectureSnapshot(
+        input.architectureSnapshot ??
+          (await readJsonFile<ProjectArchitectureSnapshot | null>(
+            path.join(input.projectDirectory, 'architecture.json'),
+            null,
+          )),
+      )
     const sessionsAnalysis =
       typeof input.sessionsAnalysis === 'undefined'
         ? await this.readHistoricalSessionsAnalysisFromDirectory(
@@ -1681,10 +2083,9 @@ export class ProjectMemoryManager {
         path.join(input.projectDirectory, 'summaries', 'latest.json'),
         input.snapshot.summary,
       )
-      await writeFile(
+      await writeUtf8FileAtomic(
         path.join(input.projectDirectory, 'summaries', 'latest.md'),
         `${input.snapshot.summary.summary}\n`,
-        'utf8',
       )
     } else {
       await rm(path.join(input.projectDirectory, 'summaries', 'latest.json'), {
@@ -1700,10 +2101,9 @@ export class ProjectMemoryManager {
         path.join(input.projectDirectory, 'architecture.json'),
         architectureSnapshot,
       )
-      await writeFile(
+      await writeUtf8FileAtomic(
         path.join(input.projectDirectory, 'architecture.md'),
         buildArchitectureMarkdown(architectureSnapshot),
-        'utf8',
       )
     }
 
@@ -1712,13 +2112,12 @@ export class ProjectMemoryManager {
         path.join(input.projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_JSON),
         sessionsAnalysis,
       )
-      await writeFile(
+      await writeUtf8FileAtomic(
         path.join(input.projectDirectory, HISTORICAL_SESSIONS_ANALYSIS_MD),
         buildHistoricalSessionsAnalysisMarkdown({
           projectTitle: input.projectTitle,
           analysis: sessionsAnalysis,
         }),
-        'utf8',
       )
     } else {
       await rm(
@@ -1732,7 +2131,7 @@ export class ProjectMemoryManager {
     }
 
     for (const bucket of PROJECT_MEMORY_BUCKETS.filter((item) => item.docFileName)) {
-      await writeFile(
+      await writeUtf8FileAtomic(
         path.join(input.projectDirectory, bucket.docFileName as string),
         buildFocusedMemoryMarkdown({
           projectTitle: input.projectTitle,
@@ -1742,11 +2141,10 @@ export class ProjectMemoryManager {
             `${bucket.sectionTitle} captured for this logical project.`,
           items: input.snapshot[bucket.snapshotKey],
         }),
-        'utf8',
       )
     }
 
-    await writeFile(
+    await writeUtf8FileAtomic(
       path.join(input.projectDirectory, 'memory.md'),
       buildMemoryMarkdown(
         input.projectTitle,
@@ -1754,7 +2152,6 @@ export class ProjectMemoryManager {
         architectureSnapshot ?? undefined,
         sessionsAnalysis,
       ),
-      'utf8',
     )
   }
 
@@ -1775,6 +2172,7 @@ export class ProjectMemoryManager {
       return {
         latest: null,
         removedCount: 0,
+        summaries: [],
       }
     }
 
@@ -1808,12 +2206,87 @@ export class ProjectMemoryManager {
       }
     }
 
-    normalizedSummaries.sort(compareSummaryPriority)
+    const summaries = buildSummaryHistory([
+      ...normalizedSummaries,
+      normalizedLatestSummary,
+    ])
 
     return {
-      latest: normalizedSummaries[0] ?? normalizedLatestSummary,
+      latest: summaries[0] ?? null,
       removedCount,
+      summaries,
     }
+  }
+
+  private applyRetentionPolicies(
+    snapshot: ProjectMemorySnapshot,
+    summaryHistory: SessionSummary[],
+  ): ProjectMemorySnapshot {
+    const withStaleness = createEmptySnapshot(snapshot.summary)
+
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
+      withStaleness[bucket.snapshotKey] = snapshot[bucket.snapshotKey].map((candidate) => {
+        const lastReinforcedAt = getLastReinforcedAt(candidate)
+        const laterSummaryCount = summaryHistory.reduce((count, summary) => {
+          return summary.generatedAt > lastReinforcedAt ? count + 1 : count
+        }, 0)
+
+        return {
+          ...candidate,
+          lastReinforcedAt,
+          status:
+            candidate.status === 'active' &&
+            laterSummaryCount >= this.staleAfterSessionCount
+              ? 'stale'
+              : candidate.status,
+        }
+      })
+    }
+
+    const totalCandidateBytes = PROJECT_MEMORY_BUCKETS.reduce((total, bucket) => {
+      return (
+        total +
+        withStaleness[bucket.snapshotKey].reduce(
+          (bucketTotal, candidate) => bucketTotal + estimateCandidateBytes(candidate),
+          0,
+        )
+      )
+    }, 0)
+
+    if (totalCandidateBytes <= this.maxCandidateBytes) {
+      return withStaleness
+    }
+
+    const now = Date.now()
+    const removalOrder = PROJECT_MEMORY_BUCKETS.flatMap((bucket) =>
+      withStaleness[bucket.snapshotKey].map((candidate) => ({
+        bucketKey: bucket.snapshotKey,
+        candidate,
+        bytes: estimateCandidateBytes(candidate),
+      })),
+    ).sort((left, right) =>
+      compareCandidateRemovalPriority(left.candidate, right.candidate, now),
+    )
+
+    const prunedIds = new Set<string>()
+    let remainingBytes = totalCandidateBytes
+    for (const entry of removalOrder) {
+      if (remainingBytes <= this.maxCandidateBytes) {
+        break
+      }
+
+      prunedIds.add(entry.candidate.id)
+      remainingBytes -= entry.bytes
+    }
+
+    const prunedSnapshot = createEmptySnapshot(withStaleness.summary)
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
+      prunedSnapshot[bucket.snapshotKey] = withStaleness[bucket.snapshotKey].filter(
+        (candidate) => !prunedIds.has(candidate.id),
+      )
+    }
+
+    return prunedSnapshot
   }
 
   private async indexArchitectureForProject(
@@ -1843,7 +2316,7 @@ export class ProjectMemoryManager {
     }
 
     if (!this.architectureExtractor) {
-      return heuristicSnapshot
+      return normalizeArchitectureSnapshot(heuristicSnapshot)
     }
 
     try {
@@ -1852,7 +2325,7 @@ export class ProjectMemoryManager {
         location,
         heuristicSnapshot,
       })
-      return synthesizedSnapshot ?? heuristicSnapshot
+      return normalizeArchitectureSnapshot(synthesizedSnapshot ?? heuristicSnapshot)
     } catch (error) {
       this.reportDiagnostic({
         level: 'warning',
@@ -1864,7 +2337,7 @@ export class ProjectMemoryManager {
         projectId: project.id,
         sessionId,
       })
-      return heuristicSnapshot
+      return normalizeArchitectureSnapshot(heuristicSnapshot)
     }
   }
 
@@ -1874,7 +2347,22 @@ export class ProjectMemoryManager {
       return createEmptySnapshot()
     }
 
-    return await this.readSnapshotFromDirectory(projectDirectory)
+    const [rawSnapshot, summaryHistory] = await Promise.all([
+      this.readSnapshotFromDirectory(projectDirectory),
+      this.readSummaryHistoryFromDirectory(projectDirectory),
+    ])
+    const timestamp = new Date().toISOString()
+    const normalizedSnapshot = createEmptySnapshot(rawSnapshot.summary)
+
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
+      normalizedSnapshot[bucket.snapshotKey] = normalizeCandidateSet(
+        rawSnapshot[bucket.snapshotKey],
+        project.id,
+        timestamp,
+      ).candidates
+    }
+
+    return this.applyRetentionPolicies(normalizedSnapshot, summaryHistory)
   }
 
   async hasSessionSummary(
@@ -1902,8 +2390,13 @@ export class ProjectMemoryManager {
     const validated: ProjectMemoryCandidate[] = []
 
     for (const candidate of candidates) {
-      const content = normalizeCandidateContent(candidate.content)
-      const key = normalizeCandidateKey(candidate.key || content)
+      const rawContent = typeof candidate.content === 'string' ? candidate.content : ''
+      const rawKey =
+        typeof candidate.key === 'string' && candidate.key.trim()
+          ? candidate.key
+          : rawContent
+      const content = normalizeCandidateContent(rawContent)
+      const key = normalizeCandidateKey(rawKey || content)
       const confidence = clampConfidence(candidate.confidence)
       const sourceEventIds = uniqueStrings(candidate.sourceEventIds)
       if (
@@ -1911,7 +2404,9 @@ export class ProjectMemoryManager {
         !key ||
         confidence < 0.3 ||
         isLowSignalCandidate(content) ||
-        isEphemeralMemoryCandidate(key, content)
+        isEphemeralMemoryCandidate(key, content) ||
+        scanMemoryContent(rawKey) ||
+        scanMemoryContent(rawContent)
       ) {
         continue
       }
@@ -1928,6 +2423,7 @@ export class ProjectMemoryManager {
         status: 'active',
         createdAt: timestamp,
         updatedAt: timestamp,
+        lastReinforcedAt: timestamp,
         sourceSessionId: session.id,
         sourceEventIds,
       })
@@ -1956,6 +2452,7 @@ export class ProjectMemoryManager {
 
       if (identicalEntry) {
         identicalEntry.updatedAt = candidate.updatedAt
+        identicalEntry.lastReinforcedAt = candidate.lastReinforcedAt
         identicalEntry.confidence = Math.max(identicalEntry.confidence, candidate.confidence)
         identicalEntry.sourceEventIds = uniqueStrings([
           ...identicalEntry.sourceEventIds,
@@ -2036,19 +2533,25 @@ export class ProjectMemoryManager {
     const sourceEventIds = normalizeSourceEventIds(
       input.transcript.map((event) => event.id),
     )
+    const genericSummary = buildGenericSessionSummary(input.transcript.length)
     const summary: SessionSummary = {
       sessionId: input.session.id,
       projectId: input.project.id,
       locationId: input.location?.id ?? null,
       generatedAt: timestamp,
       extractionVersion: PROJECT_MEMORY_EXTRACTION_VERSION,
-      summary:
+      summary: sanitizeSummaryText(
         trimExcerpt(extractorResult?.summary ?? null, 600) ??
-        buildDeterministicSummary(input.session, input.transcript),
+          buildDeterministicSummary(input.session, input.transcript),
+        genericSummary,
+      ),
       sourceEventIds,
     }
 
-    const snapshot = await this.readSnapshot(input.project)
+    const [snapshot, summaryHistory] = await Promise.all([
+      this.readSnapshot(input.project),
+      this.readSummaryHistoryFromDirectory(projectDirectory),
+    ])
     const stableFacts = buildStableFacts(
       input.project,
       input.session,
@@ -2076,8 +2579,15 @@ export class ProjectMemoryManager {
         mergedIncoming,
       )
     }
+    const retainedSnapshot = this.applyRetentionPolicies(
+      nextSnapshot,
+      buildSummaryHistory([...summaryHistory, summary]),
+    )
 
-    await writeJsonFile(path.join(projectDirectory, 'summaries', `${input.session.id}.json`), summary)
+    await writeJsonFile(
+      path.join(projectDirectory, 'summaries', `${input.session.id}.json`),
+      summary,
+    )
     await this.writeCanonicalArtifacts({
       projectDirectory,
       projectId: memoryProjectId,
@@ -2085,7 +2595,7 @@ export class ProjectMemoryManager {
       createdAt: input.project.createdAt,
       updatedAt: timestamp,
       identity: buildPortableProjectIdentity(input.project),
-      snapshot: nextSnapshot,
+      snapshot: retainedSnapshot,
       architectureSnapshot: architectureSnapshot ?? undefined,
     })
   }
@@ -2172,6 +2682,16 @@ export class ProjectMemoryManager {
         }
       }
 
+      const normalizedSnapshot = PROJECT_MEMORY_BUCKETS.reduce((snapshot, bucket) => {
+        snapshot[bucket.snapshotKey] =
+          normalizedBuckets.get(bucket.snapshotKey)?.candidates ?? []
+        return snapshot
+      }, createEmptySnapshot(normalizedSummaries.latest))
+      const retainedSnapshot = this.applyRetentionPolicies(
+        normalizedSnapshot,
+        normalizedSummaries.summaries,
+      )
+
       await this.writeCanonicalArtifacts({
         projectDirectory,
         projectId,
@@ -2181,11 +2701,7 @@ export class ProjectMemoryManager {
         identity: matchedProject
           ? buildPortableProjectIdentity(matchedProject)
           : normalizeStoredProjectIdentity(storedProject?.identity),
-        snapshot: PROJECT_MEMORY_BUCKETS.reduce((snapshot, bucket) => {
-          snapshot[bucket.snapshotKey] =
-            normalizedBuckets.get(bucket.snapshotKey)?.candidates ?? []
-          return snapshot
-        }, createEmptySnapshot(normalizedSummaries.latest)),
+        snapshot: retainedSnapshot,
         architectureSnapshot,
       })
 
@@ -2302,7 +2818,7 @@ export class ProjectMemoryManager {
         continue
       }
 
-      const [snapshot, existingProjectRecord, analysis] = await Promise.all([
+      const [snapshot, existingProjectRecord, analysis, summaryHistory] = await Promise.all([
         this.readSnapshot(groupedInput.project),
         readJsonFile<StoredProjectRecord | null>(
           path.join(projectDirectory, 'project.json'),
@@ -2314,6 +2830,7 @@ export class ProjectMemoryManager {
           transcriptBaseRoot: groupedInput.transcriptBaseRoot,
           sessions: currentSessions,
         }),
+        this.readSummaryHistoryFromDirectory(projectDirectory),
       ])
 
       const timestamp = new Date().toISOString()
@@ -2346,6 +2863,7 @@ export class ProjectMemoryManager {
           incoming,
         )
       }
+      const retainedSnapshot = this.applyRetentionPolicies(nextSnapshot, summaryHistory)
 
       await this.writeCanonicalArtifacts({
         projectDirectory,
@@ -2355,14 +2873,16 @@ export class ProjectMemoryManager {
           existingProjectRecord?.createdAt?.trim() || groupedInput.project.createdAt,
         updatedAt: timestamp,
         identity: buildPortableProjectIdentity(groupedInput.project),
-        snapshot: nextSnapshot,
+        snapshot: retainedSnapshot,
         sessionsAnalysis: {
           generatedAt: timestamp,
           analyzedSessionCount: currentSessions.length,
           analyzedSessionIds: currentSessions.map((entry) => entry.session.id),
-          summary:
+          summary: sanitizeSummaryText(
             trimExcerpt(analysis.summary, 1_200) ??
-            `Analyzed ${currentSessions.length} stored session${currentSessions.length === 1 ? '' : 's'} for durable project memory.`,
+              buildGenericHistoricalSessionsSummary(currentSessions.length),
+            buildGenericHistoricalSessionsSummary(currentSessions.length),
+          ),
         },
       })
 
@@ -2552,12 +3072,13 @@ export class ProjectMemoryManager {
       analysis.candidates,
     )
 
-    const [snapshot, existingProjectRecord] = await Promise.all([
+    const [snapshot, existingProjectRecord, summaryHistory] = await Promise.all([
       this.readSnapshot(project),
       readJsonFile<StoredProjectRecord | null>(
         path.join(projectDirectory, 'project.json'),
         null,
       ),
+      this.readSummaryHistoryFromDirectory(projectDirectory),
     ])
 
     const nextSnapshot = createEmptySnapshot(snapshot.summary)
@@ -2570,6 +3091,7 @@ export class ProjectMemoryManager {
         incoming,
       )
     }
+    const retainedSnapshot = this.applyRetentionPolicies(nextSnapshot, summaryHistory)
 
     await this.writeCanonicalArtifacts({
       projectDirectory,
@@ -2579,14 +3101,16 @@ export class ProjectMemoryManager {
         existingProjectRecord?.createdAt?.trim() || project.createdAt,
       updatedAt: timestamp,
       identity: buildPortableProjectIdentity(project),
-      snapshot: nextSnapshot,
+      snapshot: retainedSnapshot,
       sessionsAnalysis: {
         generatedAt: timestamp,
         analyzedSessionCount: sessions.length,
         analyzedSessionIds: sessions.map((entry) => entry.session.id),
-        summary:
+        summary: sanitizeSummaryText(
           trimExcerpt(analysis.summary, 1_200) ??
-          `Analyzed ${sessions.length} stored session${sessions.length === 1 ? '' : 's'} for durable project memory.`,
+            buildGenericHistoricalSessionsSummary(sessions.length),
+          buildGenericHistoricalSessionsSummary(sessions.length),
+        ),
       },
     })
 

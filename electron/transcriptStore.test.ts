@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { appendFile, mkdtemp, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -146,5 +146,76 @@ describe('TranscriptStore', () => {
 
     const index = await store.readIndex('session-1')
     expect(index.eventCount).toBe(10)
+  })
+
+  it('ignores a malformed trailing transcript line and truncates the file', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent())
+    await appendFile(store.getTranscriptPath('session-1'), '{"broken"', 'utf8')
+
+    await expect(store.readEvents('session-1')).resolves.toEqual([buildEvent()])
+  })
+
+  it('preserves the first event appended after a malformed tail', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent())
+    await appendFile(store.getTranscriptPath('session-1'), '{"broken"', 'utf8')
+
+    // First read truncates the malformed tail
+    const eventsBeforeAppend = await store.readEvents('session-1')
+    expect(eventsBeforeAppend).toEqual([buildEvent()])
+
+    // Subsequent append should be preserved
+    const secondEvent = buildEvent({
+      id: 'event-2',
+      timestamp: '2026-03-22T12:01:00.000Z',
+      chunk: 'world',
+    })
+    await store.append(secondEvent)
+
+    const eventsAfterAppend = await store.readEvents('session-1')
+    expect(eventsAfterAppend).toHaveLength(2)
+    expect(eventsAfterAppend[0]).toEqual(buildEvent())
+    expect(eventsAfterAppend[1]).toEqual(secondEvent)
+  })
+
+  it('preserves an event appended before any read after a malformed tail', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent())
+    await appendFile(store.getTranscriptPath('session-1'), '{"broken"', 'utf8')
+
+    // Append WITHOUT reading first — the real crash-recovery path.
+    const secondEvent = buildEvent({
+      id: 'event-2',
+      timestamp: '2026-03-22T12:01:00.000Z',
+      chunk: 'world',
+    })
+    await store.append(secondEvent)
+
+    const events = await store.readEvents('session-1')
+    expect(events).toHaveLength(2)
+    expect(events[0]).toEqual(buildEvent())
+    expect(events[1]).toEqual(secondEvent)
+  })
+
+  it('writes the transcript index without leaving temp files behind', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent())
+
+    const indexFiles = await readdir(path.join(tempRoot, 'transcript-index'))
+    expect(indexFiles).toContain('session-1.json')
+    expect(indexFiles.some((fileName) => fileName.endsWith('.tmp'))).toBe(false)
   })
 })
