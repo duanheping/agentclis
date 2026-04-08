@@ -18,6 +18,7 @@ import { getTerminalShortcutInput } from '../lib/terminalKeybindings'
 import { createMarkdownFileLinkProvider } from '../lib/terminalMarkdownLinks'
 import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
 import { attachInteractiveXtermScrollbar } from '../lib/xtermScrollbar'
+import { stripScrollbackClear } from '../lib/terminalEscapeFilter'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
@@ -445,7 +446,7 @@ function TerminalSurface({
     }
 
     terminalRegistry.register(terminalId, {
-      write: (chunk) => terminal.write(chunk),
+      write: (chunk) => terminal.write(stripScrollbackClear(chunk)),
       clear: () => terminal.clear(),
       fit: fitTerminal,
       focus: () => terminal.focus(),
