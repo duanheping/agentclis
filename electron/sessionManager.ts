@@ -487,8 +487,8 @@ export class SessionManager {
       this.restored = true
       this.scheduleBackgroundProjectMaintenance()
 
-      for (const config of this.getOrderedConfigs()) {
-        await this.ensureSessionStarted(config.id)
+      if (this.activeSessionId) {
+        await this.ensureSessionStarted(this.activeSessionId)
       }
     }
 
