@@ -159,6 +159,35 @@ describe('TranscriptStore', () => {
     await expect(store.readEvents('session-1')).resolves.toEqual([buildEvent()])
   })
 
+  it('ignores a malformed trailing line that already ends with a newline', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent())
+    await appendFile(store.getTranscriptPath('session-1'), '{"broken"\n', 'utf8')
+
+    await expect(store.readEvents('session-1')).resolves.toEqual([buildEvent()])
+  })
+
+  it('throws when a malformed transcript line is followed by another event', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent())
+    await appendFile(
+      store.getTranscriptPath('session-1'),
+      `${'{"broken"\n'}${JSON.stringify(buildEvent({
+        id: 'event-2',
+        timestamp: '2026-03-22T12:01:00.000Z',
+      }))}\n`,
+      'utf8',
+    )
+
+    await expect(store.readEvents('session-1')).rejects.toThrow()
+  })
+
   it('preserves the first event appended after a malformed tail', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
     tempRoots.push(tempRoot)
