@@ -110,6 +110,8 @@ export function TerminalWorkspace({
   const activeSessionShowsWindowsCommandPrompt =
     activeSessionId !== null &&
     windowsCommandPromptSessionIds.includes(activeSessionId)
+  const activeSession =
+    sessions.find((session) => session.config.id === activeSessionId) ?? null
 
   const beginSplitResize = (
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -237,13 +239,13 @@ export function TerminalWorkspace({
 
   return (
     <div ref={workspaceRef} className="terminal-workspace">
-      {sessions.map((session) => (
+      {activeSession ? (
         <SessionTerminalStack
-          key={session.config.id}
-          sessionId={session.config.id}
-          active={session.config.id === activeSessionId}
+          key={activeSession.config.id}
+          sessionId={activeSession.config.id}
+          active
           showWindowsCommandPrompt={windowsCommandPromptSessionIds.includes(
-            session.config.id,
+            activeSession.config.id,
           )}
           splitRatio={splitRatio}
           focusTerminalId={focusTerminalId}
@@ -252,7 +254,7 @@ export function TerminalWorkspace({
           onSplitResizerPointerDown={handleSplitResizerPointerDown}
           onSplitResizerKeyDown={handleSplitResizerKeyDown}
         />
-      ))}
+      ) : null}
     </div>
   )
 }

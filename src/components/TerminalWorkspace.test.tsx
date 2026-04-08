@@ -100,6 +100,23 @@ function buildSession(): SessionSnapshot {
   }
 }
 
+function buildSessionWithId(id: string): SessionSnapshot {
+  const session = buildSession()
+
+  return {
+    ...session,
+    config: {
+      ...session.config,
+      id,
+      title: `Session ${id}`,
+    },
+    runtime: {
+      ...session.runtime,
+      sessionId: id,
+    },
+  }
+}
+
 function mockElementRect(
   element: Element,
   rect: {
@@ -259,6 +276,22 @@ describe('TerminalWorkspace', () => {
         },
       }),
     )
+  })
+
+  it('only mounts xterm surfaces for the active session', () => {
+    render(
+      <TerminalWorkspace
+        sessions={[
+          buildSessionWithId('session-1'),
+          buildSessionWithId('session-2'),
+          buildSessionWithId('session-3'),
+        ]}
+        activeSessionId="session-2"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
   })
 
   it('routes OSC hyperlinks through the Electron external-link bridge', () => {
