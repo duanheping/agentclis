@@ -24,6 +24,7 @@ import { getSessionAttentionBadgeLabel } from '../shared/sessionAttention'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
+  projectBranches: Record<string, string | null>
   activeSessionId: string | null
   showProjectPaths: boolean
   onCreateSession: () => void
@@ -351,6 +352,7 @@ function SkillAgentSelect<T extends string>({
 
 export function SessionSidebar({
   projects,
+  projectBranches,
   activeSessionId,
   showProjectPaths,
   onCreateSession,
@@ -585,6 +587,7 @@ export function SessionSidebar({
             const projectActive = project.config.id === activeProjectId
             const projectCollapsed = !isProjectExpanded(project.config.id)
             const projectSessionsId = `project-sessions-${project.config.id}`
+            const projectBranch = projectBranches[project.config.id] ?? null
 
             return (
               <section
@@ -600,7 +603,12 @@ export function SessionSidebar({
                   onContextMenu={(event) => openProjectContextMenu(event, project)}
                 >
                   <div className="project-group__content">
-                    <div className="project-group__title">{project.config.title}</div>
+                    <div className="project-group__title-row">
+                      <div className="project-group__title">{project.config.title}</div>
+                      {projectBranch ? (
+                        <div className="project-group__branch">{projectBranch}</div>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="project-group__summary">
                     <span
