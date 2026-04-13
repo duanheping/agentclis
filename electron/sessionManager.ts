@@ -364,7 +364,6 @@ export class SessionManager {
   private readonly copilotInstructionSnapshots = new Map<string, string>()
   private readonly codexInstructionsState = new Map<string, { cwd: string }>()
   private readonly codexInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
-  private readonly pendingQueryBootstrapSessions = new Set<string>()
   private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly inputTranscriptBuffers = new Map<string, string[]>()
   private readonly inputTranscriptTimers = new Map<string, ReturnType<typeof setTimeout>>()
