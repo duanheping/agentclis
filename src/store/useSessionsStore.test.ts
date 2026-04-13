@@ -194,6 +194,29 @@ describe('useSessionsStore', () => {
     expect(sessions[1].runtime.status).toBe('exited')
   })
 
+  it('updateRuntime ignores lastActiveAt-only changes', () => {
+    const config = makeConfig()
+    const runtime = makeRuntime()
+    const workspace = makeWorkspace([{ config, runtime }], 'sess-1')
+    useSessionsStore.getState().setInitialData(workspace)
+
+    const previousProjects = useSessionsStore.getState().projects
+    const previousSession = previousProjects[0].sessions[0]
+
+    useSessionsStore.getState().updateRuntime(
+      makeRuntime({
+        lastActiveAt: '2026-01-01T00:00:30Z',
+      }),
+    )
+
+    const nextProjects = useSessionsStore.getState().projects
+    expect(nextProjects).toBe(previousProjects)
+    expect(nextProjects[0].sessions[0]).toBe(previousSession)
+    expect(nextProjects[0].sessions[0].runtime.lastActiveAt).toBe(
+      '2026-01-01T00:00:00Z',
+    )
+  })
+
   it('updateConfig is a no-op when session id does not exist', () => {
     const config = makeConfig()
     const runtime = makeRuntime()
@@ -254,6 +277,53 @@ describe('useSessionsStore', () => {
 
     expect(useSessionsStore.getState().projects[0].sessions[0].config.title).toBe('Session 1')
     expect(useSessionsStore.getState().projects[1].sessions[0].config.title).toBe('Updated')
+  })
+
+  it('updateRuntime only replaces the project that owns the changed session', () => {
+    const workspace: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'proj-1',
+            title: 'P1',
+            rootPath: 'C:\\p1',
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+          },
+          sessions: [
+            { config: makeConfig({ id: 's1', projectId: 'proj-1' }), runtime: makeRuntime({ sessionId: 's1' }) },
+          ],
+        },
+        {
+          config: {
+            id: 'proj-2',
+            title: 'P2',
+            rootPath: 'C:\\p2',
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+          },
+          sessions: [
+            { config: makeConfig({ id: 's2', projectId: 'proj-2' }), runtime: makeRuntime({ sessionId: 's2' }) },
+          ],
+        },
+      ],
+      activeSessionId: 's1',
+    }
+    useSessionsStore.getState().setInitialData(workspace)
+
+    const previousProjects = useSessionsStore.getState().projects
+
+    useSessionsStore.getState().updateRuntime(
+      makeRuntime({
+        sessionId: 's2',
+        status: 'exited',
+      }),
+    )
+
+    const nextProjects = useSessionsStore.getState().projects
+    expect(nextProjects[0]).toBe(previousProjects[0])
+    expect(nextProjects[1]).not.toBe(previousProjects[1])
+    expect(nextProjects[1].sessions[0].runtime.status).toBe('exited')
   })
 
   it('starts with default permission level', () => {
