@@ -135,6 +135,7 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
   return render(
     <SessionSidebar
       projects={[buildProject()]}
+      projectBranches={{}}
       activeSessionId="session-1"
       showProjectPaths
       onCreateSession={() => {}}
@@ -196,6 +197,19 @@ describe('SessionSidebar', () => {
 
     expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText("why you don't show session title")).not.toBeInTheDocument()
+  })
+
+  it('shows the current branch after the project name when available', () => {
+    renderSidebar({
+      projectBranches: {
+        'project-1': 'feature/sidebar-branch',
+      },
+    })
+
+    const projectHeader = screen.getByRole('button', { name: /AGENCLIS/i })
+
+    expect(projectHeader).toHaveTextContent('AGENCLIS')
+    expect(projectHeader).toHaveTextContent('feature/sidebar-branch')
   })
 
   it('shows skill conflicts and forwards a chosen conflict source', async () => {

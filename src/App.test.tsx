@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -917,6 +917,55 @@ describe('App skills settings', () => {
       expect(screen.getByRole('button', { name: 'Switch branch' })).toHaveTextContent(
         'main',
       )
+    })
+  })
+
+  it('shows the current branch beside the project name in the sidebar', async () => {
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    const projectHeader = await screen.findByRole('button', { name: /agenclis/i })
+
+    await waitFor(() => {
+      expect(within(projectHeader).getByText('feature/topbar-actions')).toBeInTheDocument()
     })
   })
 

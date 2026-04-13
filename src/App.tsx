@@ -239,6 +239,9 @@ function App() {
   )
   const [projectGitOverview, setProjectGitOverview] =
     useState<ProjectGitOverview | null>(null)
+  const [projectSidebarBranches, setProjectSidebarBranches] = useState<
+    Record<string, string | null>
+  >({})
   const [projectGitLoading, setProjectGitLoading] = useState(false)
   const [projectGitErrorMessage, setProjectGitErrorMessage] =
     useState<string | null>(null)
@@ -545,6 +548,86 @@ function App() {
       setSkillsBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (!agentCli || projects.length === 0) {
+      setProjectSidebarBranches({})
+      return
+    }
+
+    let cancelled = false
+    const activeProjectId = activeProject?.config.id ?? null
+
+    void (async () => {
+      const branchEntries = await Promise.all(
+        projects
+          .filter((project) => project.config.id !== activeProjectId)
+          .map(async (project) => {
+            try {
+              const overview = await agentCli.getProjectGitOverview(
+                project.config.rootPath,
+              )
+
+              return [
+                project.config.id,
+                overview.isGitRepository ? overview.branch : null,
+              ] as const
+            } catch {
+              return [project.config.id, null] as const
+            }
+          }),
+      )
+
+      if (cancelled) {
+        return
+      }
+
+      const fetchedBranches = new Map(branchEntries)
+      setProjectSidebarBranches((current) => {
+        const next: Record<string, string | null> = {}
+
+        for (const project of projects) {
+          if (project.config.id === activeProjectId) {
+            if (Object.prototype.hasOwnProperty.call(current, project.config.id)) {
+              next[project.config.id] = current[project.config.id] ?? null
+            }
+            continue
+          }
+
+          next[project.config.id] = fetchedBranches.get(project.config.id) ?? null
+        }
+
+        return next
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject?.config.id, agentCli, projects])
+
+  useEffect(() => {
+    if (!activeProject || !activeWorkspacePath || !projectGitOverview) {
+      return
+    }
+
+    if (projectGitOverview.projectPath !== activeWorkspacePath) {
+      return
+    }
+
+    const branch = projectGitOverview.isGitRepository
+      ? projectGitOverview.branch
+      : null
+
+    setProjectSidebarBranches((current) =>
+      current[activeProject.config.id] === branch
+        ? current
+        : {
+            ...current,
+            [activeProject.config.id]: branch,
+          },
+    )
+  }, [activeProject, activeWorkspacePath, projectGitOverview])
 
   useEffect(() => {
     if (!agentCli) {
@@ -1697,6 +1780,7 @@ function App() {
       {sidebarOpen ? (
         <SessionSidebar
           projects={projects}
+          projectBranches={projectSidebarBranches}
           activeSessionId={activeSessionId}
           showProjectPaths={showProjectPaths}
           onCreateSession={() => openCreateSessionDialog()}
