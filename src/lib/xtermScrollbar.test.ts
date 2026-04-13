@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { attachInteractiveXtermScrollbar } from './xtermScrollbar'
 
@@ -7,7 +7,9 @@ function buildTerminalRoot(): HTMLDivElement {
   root.innerHTML = `
     <div class="xterm">
       <div class="xterm-scrollable-element">
-        <div class="scrollbar invisible fade"></div>
+        <div class="scrollbar invisible fade">
+          <div class="slider"></div>
+        </div>
       </div>
     </div>
   `
@@ -31,6 +33,24 @@ describe('attachInteractiveXtermScrollbar', () => {
     dispose()
   })
 
+  it('prevents scrollbar drags from bubbling into terminal mouse tracking', () => {
+    const root = buildTerminalRoot()
+    const terminalMouseDown = vi.fn()
+    const dispose = attachInteractiveXtermScrollbar(root)
+    const xterm = root.querySelector('.xterm') as HTMLDivElement | null
+    const slider = root.querySelector('.slider') as HTMLDivElement | null
+
+    expect(xterm).not.toBeNull()
+    expect(slider).not.toBeNull()
+
+    xterm?.addEventListener('mousedown', terminalMouseDown)
+    slider?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+
+    expect(terminalMouseDown).not.toHaveBeenCalled()
+
+    dispose()
+  })
+
   it('styles scrollbars added after terminal initialization', async () => {
     const root = document.createElement('div')
     const dispose = attachInteractiveXtermScrollbar(root)
@@ -38,7 +58,10 @@ describe('attachInteractiveXtermScrollbar', () => {
     scrollable.className = 'xterm-scrollable-element'
     const scrollbar = document.createElement('div')
     scrollbar.className = 'scrollbar invisible fade'
+    const slider = document.createElement('div')
+    slider.className = 'slider'
 
+    scrollbar.appendChild(slider)
     scrollable.appendChild(scrollbar)
     root.appendChild(scrollable)
 
