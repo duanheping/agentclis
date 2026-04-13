@@ -12,8 +12,27 @@ function applyInteractiveScrollbarStyles(root: ParentNode): void {
   }
 }
 
+function isXtermScrollbarTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false
+  }
+
+  const scrollbar = target.closest('.scrollbar')
+  return scrollbar?.parentElement?.matches('.xterm-scrollable-element') ?? false
+}
+
 export function attachInteractiveXtermScrollbar(root: HTMLElement): () => void {
   applyInteractiveScrollbarStyles(root)
+
+  const preventMouseProtocolHijack = (event: MouseEvent) => {
+    // Mouse-tracking TUIs can consume terminal-level mousedown events and break
+    // xterm's overlay scrollbar drag gesture unless the event is stopped here.
+    if (isXtermScrollbarTarget(event.target)) {
+      event.stopPropagation()
+    }
+  }
+
+  root.addEventListener('mousedown', preventMouseProtocolHijack, true)
 
   const observer = new MutationObserver(() => {
     applyInteractiveScrollbarStyles(root)
@@ -27,6 +46,7 @@ export function attachInteractiveXtermScrollbar(root: HTMLElement): () => void {
   })
 
   return () => {
+    root.removeEventListener('mousedown', preventMouseProtocolHijack, true)
     observer.disconnect()
   }
 }
