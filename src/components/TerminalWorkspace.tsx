@@ -18,7 +18,11 @@ import { getTerminalShortcutInput } from '../lib/terminalKeybindings'
 import { createMarkdownFileLinkProvider } from '../lib/terminalMarkdownLinks'
 import { attachPlainTextPasteHandler } from '../lib/terminalPaste'
 import { attachInteractiveXtermScrollbar } from '../lib/xtermScrollbar'
-import { stripScrollbackClear } from '../lib/terminalEscapeFilter'
+import {
+  hasVisibleTerminalContent,
+  isPureTerminalClearChunk,
+  stripScrollbackClear,
+} from '../lib/terminalEscapeFilter'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
@@ -448,8 +452,39 @@ function TerminalSurface({
     }
     fitTerminalRef.current = fitTerminal
 
+    let suppressRestoreClear = false
+
+    const writeReplayChunk = (chunk: string) => {
+      const filteredChunk = stripScrollbackClear(chunk)
+      if (!filteredChunk) {
+        return
+      }
+
+      terminal.write(filteredChunk)
+    }
+
+    const writeLiveChunk = (chunk: string) => {
+      const filteredChunk = stripScrollbackClear(chunk)
+      if (!filteredChunk) {
+        return
+      }
+
+      if (suppressRestoreClear) {
+        if (isPureTerminalClearChunk(filteredChunk)) {
+          return
+        }
+
+        if (hasVisibleTerminalContent(filteredChunk)) {
+          suppressRestoreClear = false
+        }
+      }
+
+      terminal.write(filteredChunk)
+    }
+
     const terminalHandle = {
-      write: (chunk: string) => terminal.write(stripScrollbackClear(chunk)),
+      write: writeLiveChunk,
+      writeReplay: writeReplayChunk,
       clear: () => terminal.clear(),
       fit: fitTerminal,
       focus: () => terminal.focus(),
@@ -487,6 +522,7 @@ function TerminalSurface({
         return
       }
 
+      suppressRestoreClear = replayChunks.length > 0
       terminalRegistry.register(terminalId, terminalHandle, replayChunks)
     })()
 
