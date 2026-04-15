@@ -357,6 +357,46 @@ describe('TerminalWorkspace', () => {
     expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(2, 'live-1')
   })
 
+  it('suppresses clear-only live redraw chunks until visible content arrives after replay', async () => {
+    window.agentCli.getSessionTerminalReplay = vi.fn().mockResolvedValue({
+      chunks: ['history'],
+    })
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith('history')
+    })
+
+    terminalRegistry.write(
+      'session-1',
+      '\x1b[?2004h\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;pwsh\x07\x1b[?25h',
+    )
+    terminalRegistry.write(
+      'session-1',
+      '\x1b[2J\x1b[H\x1b[2m╭────────────────────╮\x1b[22m\r\n│ OpenAI Codex │',
+    )
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(2)
+    })
+
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(1, 'history')
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(
+      2,
+      '\x1b[2J\x1b[H\x1b[2m╭────────────────────╮\x1b[22m\r\n│ OpenAI Codex │',
+    )
+  })
+
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
     render(
       <TerminalWorkspace

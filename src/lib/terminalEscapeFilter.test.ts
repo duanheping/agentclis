@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { stripScrollbackClear } from './terminalEscapeFilter'
+import {
+  hasVisibleTerminalContent,
+  isPureTerminalClearChunk,
+  stripScrollbackClear,
+} from './terminalEscapeFilter'
 
 describe('stripScrollbackClear', () => {
   it('returns chunk unchanged when no ESC[3J is present', () => {
@@ -33,5 +37,29 @@ describe('stripScrollbackClear', () => {
 
   it('handles empty string', () => {
     expect(stripScrollbackClear('')).toBe('')
+  })
+
+  it('detects visible terminal content after stripping control sequences', () => {
+    expect(
+      hasVisibleTerminalContent(
+        '\x1b[2m╭────────────────────╮\x1b[22m\r\n│ OpenAI Codex │',
+      ),
+    ).toBe(true)
+  })
+
+  it('treats shell clear chunks without visible text as pure clear operations', () => {
+    expect(
+      isPureTerminalClearChunk(
+        '\x1b[?2004h\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;pwsh\x07\x1b[?25h',
+      ),
+    ).toBe(true)
+  })
+
+  it('does not treat redraw chunks with visible text as pure clear operations', () => {
+    expect(
+      isPureTerminalClearChunk(
+        '\x1b[2J\x1b[H\x1b[2m╭────────────────────╮\x1b[22m\r\n│ OpenAI Codex │',
+      ),
+    ).toBe(false)
   })
 })

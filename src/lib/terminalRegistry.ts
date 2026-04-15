@@ -1,5 +1,6 @@
 interface TerminalHandle {
   write: (chunk: string) => void
+  writeReplay?: (chunk: string) => void
   clear: () => void
   fit: () => void
   focus: () => void
@@ -20,9 +21,10 @@ class TerminalRegistry {
     const overlapLength = findReplayOverlap(replayChunks, pendingChunks)
     const replayText = replayChunks.join('')
     const pendingText = pendingChunks.slice(overlapLength).join('')
+    const replayWriter = handle.writeReplay ?? handle.write
 
     if (replayText) {
-      handle.write(replayText)
+      replayWriter(replayText)
     }
 
     if (pendingText) {

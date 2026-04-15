@@ -60,6 +60,21 @@ describe('TerminalRegistry', () => {
     terminalRegistry.forget('test-replay')
   })
 
+  it('uses writeReplay for replay text while keeping live output on write', () => {
+    const write = vi.fn()
+    const writeReplay = vi.fn()
+    const handle = { write, writeReplay, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }
+
+    terminalRegistry.write('test-replay-writer', '\x1b[2J')
+    terminalRegistry.register('test-replay-writer', handle, ['history'])
+
+    expect(writeReplay).toHaveBeenCalledOnce()
+    expect(writeReplay).toHaveBeenCalledWith('history')
+    expect(write).toHaveBeenCalledOnce()
+    expect(write).toHaveBeenCalledWith('\x1b[2J')
+    terminalRegistry.forget('test-replay-writer')
+  })
+
   it('caps the buffer at 240 items using FIFO eviction', () => {
     const write = vi.fn()
     const handle = { write, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }
