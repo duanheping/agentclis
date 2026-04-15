@@ -236,6 +236,61 @@ describe('ProjectMemoryService', () => {
     service.dispose()
   })
 
+  it('indexes transcripts through MemPalace even when legacy project memory is disabled', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => false),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const memoryBackend = {
+      indexSessionTranscript: vi.fn(async () => ({
+        status: 'indexed' as const,
+        sessionId: 'session-1',
+        indexedCount: 1,
+        skippedCount: 0,
+        warning: null,
+      })),
+    }
+    const transcriptStore = buildTranscriptStore({
+      readEvents: vi.fn(async (): Promise<TranscriptEvent[]> => [
+        {
+          id: 'event-1',
+          sessionId: 'session-1',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          timestamp: '2026-03-22T12:00:00.000Z',
+          kind: 'input',
+          source: 'user',
+          chunk: 'Index this transcript',
+        },
+      ]),
+    })
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        memoryBackend,
+      },
+    )
+
+    await service.captureSession({
+      project: buildProject(),
+      location: buildLocation(),
+      session: buildSession(),
+    })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(memoryBackend.indexSessionTranscript).toHaveBeenCalledTimes(1)
+    expect(manager.captureSession).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
   it('truncates oversized diagnostic messages before persisting and logging them', () => {
     const manager = {
       isEnabled: vi.fn(() => true),

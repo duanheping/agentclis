@@ -108,6 +108,10 @@ const projectMemoryManager = new ProjectMemoryManager(
 const projectMemoryService = new ProjectMemoryService(
   projectMemoryManager,
   transcriptStore,
+  undefined,
+  {
+    memoryBackend: mempalaceService,
+  },
 )
 const sessionManager = new SessionManager({
   onData: (event) => {
@@ -706,11 +710,28 @@ function registerIpcHandlers(): void {
     mempalaceService.getStatus(),
   )
   ipcMain.handle(IPC_CHANNELS.installMemoryRuntime, () =>
-    mempalaceService.installRuntime(),
+    mempalaceService.installRuntime().then((result) => {
+      if (result.success) {
+        projectMemoryService.resume()
+        sessionManager.scheduleProjectMemoryBackfill()
+      }
+      return result
+    }),
   )
   ipcMain.handle(IPC_CHANNELS.searchMemory, (_event, input) =>
     mempalaceService.search(input),
   )
+  ipcMain.handle(IPC_CHANNELS.reindexMemoryProject, async (_event, input) => {
+    const projectId =
+      typeof input?.projectId === 'string' && input.projectId.trim()
+        ? input.projectId
+        : null
+    const backfillInputs = sessionManager
+      .getBackfillInputs()
+      .filter((entry) => !projectId || entry.project.id === projectId)
+
+    return await projectMemoryService.reindexTranscriptMemory(backfillInputs)
+  })
   ipcMain.handle(IPC_CHANNELS.analyzeProjectArchitecture, async () =>
     sessionManager.analyzeHistoricalProjectArchitecture(),
   )

@@ -15,6 +15,7 @@ import App from './App'
 import type { AgentCliApi } from './shared/ipc'
 import type {
   MemoryBackendInstallResult,
+  MemoryReindexResult,
   MemoryBackendStatus,
   MemorySearchResult,
 } from './shared/memorySearch'
@@ -80,6 +81,63 @@ function buildWorkspacePayload(): ListSessionsResponse {
   return {
     projects: [],
     activeSessionId: null,
+  }
+}
+
+function buildWorkspaceWithProject(): ListSessionsResponse {
+  return {
+    projects: [
+      {
+        config: {
+          id: 'project-1',
+          title: 'agenclis',
+          rootPath: 'C:\\repo\\agenclis',
+          createdAt: '2026-03-12T18:00:00.000Z',
+          updatedAt: '2026-03-12T18:00:00.000Z',
+        },
+        sessions: [
+          {
+            config: {
+              id: 'session-1',
+              projectId: 'project-1',
+              title: 'Debug prior issue',
+              startupCommand: 'codex',
+              pendingFirstPromptTitle: false,
+              cwd: 'C:\\repo\\agenclis',
+              shell: 'pwsh.exe',
+              createdAt: '2026-03-12T18:00:00.000Z',
+              updatedAt: '2026-03-12T18:00:00.000Z',
+            },
+            runtime: {
+              sessionId: 'session-1',
+              status: 'exited',
+              attention: null,
+              lastActiveAt: '2026-03-12T18:00:00.000Z',
+            },
+          },
+          {
+            config: {
+              id: 'session-2',
+              projectId: 'project-1',
+              title: 'Current session',
+              startupCommand: 'codex',
+              pendingFirstPromptTitle: false,
+              cwd: 'C:\\repo\\agenclis',
+              shell: 'pwsh.exe',
+              createdAt: '2026-03-12T18:05:00.000Z',
+              updatedAt: '2026-03-12T18:05:00.000Z',
+            },
+            runtime: {
+              sessionId: 'session-2',
+              status: 'running',
+              attention: null,
+              lastActiveAt: '2026-03-12T18:05:00.000Z',
+            },
+          },
+        ],
+      },
+    ],
+    activeSessionId: 'session-2',
   }
 }
 
@@ -265,6 +323,17 @@ function createAgentCliMock(
     warning: null,
   }
 
+  const memoryReindexResult: MemoryReindexResult = {
+    backend: 'mempalace',
+    projectId: 'project-1',
+    sessionsScanned: 2,
+    sessionsIndexed: 2,
+    sessionsDeferred: 0,
+    sessionsSkipped: 0,
+    errorCount: 0,
+    warning: null,
+  }
+
   const agentCli = {
     restoreSessions: vi.fn().mockResolvedValue(workspacePayload),
     listSessions: vi.fn().mockResolvedValue(workspacePayload),
@@ -356,6 +425,9 @@ function createAgentCliMock(
     searchMemory: vi
       .fn()
       .mockResolvedValue(structuredClone(memorySearchResult)),
+    reindexMemoryProject: vi
+      .fn()
+      .mockResolvedValue(structuredClone(memoryReindexResult)),
     getSkillSyncStatus: vi
       .fn()
       .mockImplementation(async () => structuredClone(currentSkillStatus)),
@@ -764,6 +836,80 @@ describe('App skills settings', () => {
         'Sessions analysis window opened.',
       ),
     ).toBeInTheDocument()
+  })
+
+  it('searches MemPalace memory within the active project and opens the linked session', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock(buildWorkspaceWithProject())
+    const searchResult: MemorySearchResult = {
+      backend: 'mempalace',
+      query: 'prior issue',
+      hitCount: 1,
+      hits: [
+        {
+          id: 'hit-1',
+          backend: 'mempalace',
+          textPreview: 'Prior issue transcript memory pointed at the earlier debug session.',
+          similarity: 0.91,
+          distance: null,
+          projectId: 'project-1',
+          locationId: null,
+          sessionId: 'session-1',
+          wing: 'project-1',
+          room: 'transcript-raw',
+          timestampStart: '2026-03-12T18:00:00.000Z',
+          timestampEnd: '2026-03-12T18:01:00.000Z',
+          sourceLabel: 'C:\\transcripts\\session-1.jsonl',
+        },
+      ],
+      warning: null,
+    }
+
+    agentCli.getMemoryBackendStatus.mockResolvedValue({
+      backend: 'mempalace',
+      repo: 'https://github.com/duanheping/mempalace.git',
+      commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+      installState: 'installed',
+      runtimeState: 'running',
+      installRoot:
+        'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+      palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
+      pythonPath:
+        'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c\\venv\\Scripts\\python.exe',
+      module: 'mempalace.mcp_server',
+      message: 'MemPalace runtime is running.',
+      lastError: null,
+    })
+    agentCli.searchMemory.mockResolvedValue(searchResult)
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Current session')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.type(
+      screen.getByLabelText(/search transcript memory/i),
+      'prior issue',
+    )
+    await user.click(screen.getByRole('button', { name: /search memory/i }))
+
+    await waitFor(() => {
+      expect(agentCli.searchMemory).toHaveBeenCalledWith({
+        query: 'prior issue',
+        projectId: 'project-1',
+      })
+    })
+
+    expect(screen.getAllByText('Debug prior issue')).toHaveLength(2)
+
+    await user.click(screen.getByRole('button', { name: /open session/i }))
+
+    await waitFor(() => {
+      expect(agentCli.activateSession).toHaveBeenCalledWith('session-1')
+    })
   })
 
   it('generates an AI merge preview and applies it from the settings panel', async () => {

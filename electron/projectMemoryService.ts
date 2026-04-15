@@ -3,6 +3,7 @@ import Store from 'electron-store'
 import type {
   AssembledProjectContext,
   ProjectLocation,
+  TranscriptEvent,
 } from '../src/shared/projectMemory'
 import type {
   ProjectConfig,
@@ -20,6 +21,8 @@ import type {
 import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
 import type { PreparedStructuredAgent } from './structuredAgentRunner'
 import type { TranscriptStore } from './transcriptStore'
+import type { MempalaceSessionIndexResult } from '../src/shared/memoryIndex'
+import type { MemoryReindexResult } from '../src/shared/memorySearch'
 
 type ProjectMemoryJobType = 'capture-session' | 'backfill-session'
 type ProjectMemoryJobPriority = 'high' | 'low'
@@ -51,6 +54,15 @@ interface ProjectMemoryServiceOptions {
   lowPriorityDelayMs?: number
   retryDelayMs?: number
   maxAttempts?: number
+}
+
+interface ProjectMemoryServiceDependencies {
+  memoryBackend?: {
+    indexSessionTranscript(input: ProjectMemoryJobPayload & {
+      transcript: TranscriptEvent[]
+      transcriptPath: string
+    }): Promise<MempalaceSessionIndexResult>
+  }
 }
 
 const MAX_DIAGNOSTICS = 80
@@ -181,6 +193,7 @@ export class ProjectMemoryService {
   private readonly lowPriorityDelayMs: number
   private readonly retryDelayMs: number
   private readonly maxAttempts: number
+  private readonly memoryBackend?: ProjectMemoryServiceDependencies['memoryBackend']
 
   private state: PersistedProjectMemoryState
   private drainTimer: NodeJS.Timeout | null = null
@@ -195,12 +208,14 @@ export class ProjectMemoryService {
       'getBaseRoot' | 'getIndexPath' | 'getTranscriptPath' | 'readEvents' | 'readIndex'
     >,
     options: ProjectMemoryServiceOptions = {},
+    dependencies: ProjectMemoryServiceDependencies = {},
   ) {
     this.manager = manager
     this.transcriptStore = transcriptStore
     this.lowPriorityDelayMs = options.lowPriorityDelayMs ?? 3_000
     this.retryDelayMs = options.retryDelayMs ?? 4_000
     this.maxAttempts = options.maxAttempts ?? 3
+    this.memoryBackend = dependencies.memoryBackend
     this.state = normalizePersistedState(this.store.store)
     this.store.set(structuredClone(this.state))
 
@@ -468,7 +483,7 @@ export class ProjectMemoryService {
       return
     }
 
-    if (!this.manager.isEnabled()) {
+    if (!this.manager.isEnabled() && !this.memoryBackend) {
       if (!this.blockedByMissingLibraryRoot) {
         this.blockedByMissingLibraryRoot = true
         this.recordDiagnostic({
@@ -501,14 +516,16 @@ export class ProjectMemoryService {
       this.processing = false
     }
 
-    if (!this.disposed && this.state.jobs.length > 0 && this.manager.isEnabled()) {
+    if (!this.disposed && this.state.jobs.length > 0) {
       this.scheduleDrain(this.retryDelayMs)
     }
   }
 
   private async processJob(job: ProjectMemoryJob): Promise<boolean> {
     try {
-      if (job.type === 'backfill-session') {
+      const managerEnabled = this.manager.isEnabled()
+
+      if (job.type === 'backfill-session' && managerEnabled) {
         const hasSessionSummary = await this.manager.hasSessionSummary(
           job.payload.project,
           job.payload.session.id,
@@ -526,10 +543,26 @@ export class ProjectMemoryService {
       }
 
       const transcript = await this.transcriptStore.readEvents(job.payload.session.id)
-      await this.manager.captureSession({
-        ...job.payload,
-        transcript,
-      })
+      const transcriptPath = this.transcriptStore.getTranscriptPath(job.payload.session.id)
+
+      let memoryBackendResult: MempalaceSessionIndexResult | null = null
+      if (this.memoryBackend) {
+        memoryBackendResult = await this.memoryBackend.indexSessionTranscript({
+          ...job.payload,
+          transcript,
+          transcriptPath,
+        })
+      }
+
+      if (managerEnabled) {
+        await this.manager.captureSession({
+          ...job.payload,
+          transcript,
+        })
+      } else if (memoryBackendResult?.status === 'deferred') {
+        return false
+      }
+
       this.removeJob(job.id)
       return true
     } catch (error) {
@@ -589,5 +622,65 @@ export class ProjectMemoryService {
 
   private persist(): void {
     this.store.set(structuredClone(this.state))
+  }
+
+  async reindexTranscriptMemory(
+    inputs: ProjectMemoryJobPayload[],
+  ): Promise<MemoryReindexResult> {
+    if (!this.memoryBackend) {
+      return {
+        backend: 'mempalace',
+        projectId: inputs.length === 1 ? inputs[0]?.project.id ?? null : null,
+        sessionsScanned: inputs.length,
+        sessionsIndexed: 0,
+        sessionsDeferred: 0,
+        sessionsSkipped: inputs.length,
+        errorCount: 0,
+        warning: 'MemPalace transcript indexing is not configured.',
+      }
+    }
+
+    const projectId = inputs.length === 1 ? inputs[0]?.project.id ?? null : null
+    const result: MemoryReindexResult = {
+      backend: 'mempalace',
+      projectId,
+      sessionsScanned: inputs.length,
+      sessionsIndexed: 0,
+      sessionsDeferred: 0,
+      sessionsSkipped: 0,
+      errorCount: 0,
+      warning: null,
+    }
+
+    for (const input of inputs) {
+      try {
+        const transcriptIndex = await this.transcriptStore.readIndex(input.session.id)
+        if (transcriptIndex.eventCount === 0) {
+          result.sessionsSkipped += 1
+          continue
+        }
+
+        const transcript = await this.transcriptStore.readEvents(input.session.id)
+        const indexResult = await this.memoryBackend.indexSessionTranscript({
+          ...input,
+          transcript,
+          transcriptPath: this.transcriptStore.getTranscriptPath(input.session.id),
+        })
+
+        if (indexResult.status === 'indexed') {
+          result.sessionsIndexed += 1
+        } else if (indexResult.status === 'deferred') {
+          result.sessionsDeferred += 1
+          result.warning = indexResult.warning
+        } else {
+          result.sessionsSkipped += 1
+        }
+      } catch (error) {
+        result.errorCount += 1
+        result.warning = error instanceof Error ? error.message : String(error)
+      }
+    }
+
+    return result
   }
 }

@@ -1,12 +1,17 @@
 import type { MemoryBackendStatus } from '../shared/memorySearch'
 
+import type { MemoryReindexResult } from '../shared/memorySearch'
+
 interface MemoryBackendSettingsProps {
   status: MemoryBackendStatus | null
   loading: boolean
   installing: boolean
+  reindexing: boolean
   errorMessage: string | null
+  reindexResult: MemoryReindexResult | null
   onInstall: () => void
   onRefresh: () => void
+  onReindex: () => void
   onOpenInstallRoot: () => void
   onOpenPalacePath: () => void
 }
@@ -45,9 +50,12 @@ export function MemoryBackendSettings({
   status,
   loading,
   installing,
+  reindexing,
   errorMessage,
+  reindexResult,
   onInstall,
   onRefresh,
+  onReindex,
   onOpenInstallRoot,
   onOpenPalacePath,
 }: MemoryBackendSettingsProps) {
@@ -105,7 +113,20 @@ export function MemoryBackendSettings({
               >
                 Refresh
               </button>
+              <button
+                type="button"
+                className="ghost-button sidebar-settings__action"
+                disabled={loading || reindexing}
+                onClick={onReindex}
+              >
+                {reindexing ? 'Reindexing…' : 'Reindex transcripts'}
+              </button>
             </div>
+            {reindexResult ? (
+              <p className="sidebar-settings__caption">
+                {`${reindexResult.sessionsIndexed} indexed, ${reindexResult.sessionsSkipped} skipped, ${reindexResult.sessionsDeferred} deferred, ${reindexResult.errorCount} errors`}
+              </p>
+            ) : null}
           </div>
 
           <div className="sidebar-settings__group">

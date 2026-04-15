@@ -2411,6 +2411,73 @@
   gap: 8px;
 }
 
+.sidebar-settings__search-form {
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-settings__search-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-settings__search-input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(142, 171, 211, 0.18);
+  border-radius: 16px;
+  padding: 0.8rem 0.92rem;
+  background: rgba(10, 18, 31, 0.9);
+  color: #eff6ff;
+  font: inherit;
+}
+
+.sidebar-settings__search-input::placeholder {
+  color: rgba(215, 226, 241, 0.56);
+}
+
+.sidebar-settings__search-input:focus-visible {
+  outline: none;
+  border-color: rgba(122, 224, 214, 0.52);
+  box-shadow: 0 0 0 3px rgba(122, 224, 214, 0.12);
+}
+
+.sidebar-settings__search-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sidebar-settings__search-results {
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-settings__search-hit {
+  display: grid;
+  gap: 8px;
+  padding: 0.82rem 0.9rem;
+  border: 1px solid rgba(142, 171, 211, 0.14);
+  border-radius: 16px;
+  background: rgba(8, 19, 30, 0.64);
+}
+
+.sidebar-settings__search-preview {
+  margin: 0;
+  color: #dbe7f6;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sidebar-settings__search-source {
+  margin: 0;
+  color: #9fb5d0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .sidebar-settings__action,
 .sidebar-settings__sync-button {
   min-height: 40px;
@@ -3064,7 +3131,8 @@
 }
 
 .sidebar-settings__path-card,
-.sidebar-settings__select {
+.sidebar-settings__select,
+.sidebar-settings__search-input {
   border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-strong);
@@ -3100,6 +3168,11 @@
   border-color: rgba(227, 211, 182, 0.34);
   box-shadow: 0 0 0 3px rgba(227, 211, 182, 0.12);
   outline: none;
+}
+
+.sidebar-settings__search-input:focus-visible {
+  border-color: rgba(227, 211, 182, 0.34);
+  box-shadow: 0 0 0 3px rgba(227, 211, 182, 0.12);
 }
 
 .sidebar-settings__select-trigger:disabled {
@@ -3197,6 +3270,19 @@
   border-color: rgba(227, 211, 182, 0.16);
   background: rgba(84, 66, 42, 0.2);
   color: #f1dfbe;
+}
+
+.sidebar-settings__search-hit {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sidebar-settings__search-preview {
+  color: var(--text-base);
+}
+
+.sidebar-settings__search-source {
+  color: var(--text-muted);
 }
 
 .sidebar-settings__merge-preview {

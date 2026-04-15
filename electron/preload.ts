@@ -8,6 +8,7 @@ import {
 import { IPC_CHANNELS, type AgentCliApi } from '../src/shared/ipc'
 import type {
   MemoryBackendInstallResult,
+  MemoryReindexResult,
   MemoryBackendStatus,
   MemorySearchResult,
 } from '../src/shared/memorySearch'
@@ -72,6 +73,11 @@ const api: AgentCliApi = {
       IPC_CHANNELS.searchMemory,
       input,
     ) as Promise<MemorySearchResult>,
+  reindexMemoryProject: (input) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.reindexMemoryProject,
+      input,
+    ) as Promise<MemoryReindexResult>,
   analyzeProjectArchitecture: () =>
     ipcRenderer.invoke(IPC_CHANNELS.analyzeProjectArchitecture),
   analyzeProjectSessions: () =>

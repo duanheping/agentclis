@@ -28,6 +28,8 @@ import type {
 } from './skills'
 import type {
   MemoryBackendInstallResult,
+  MemoryReindexRequest,
+  MemoryReindexResult,
   MemoryBackendStatus,
   MemorySearchRequest,
   MemorySearchResult,
@@ -91,6 +93,7 @@ export const IPC_CHANNELS = {
   getMemoryBackendStatus: 'memory:get-status',
   installMemoryRuntime: 'memory:install-runtime',
   searchMemory: 'memory:search',
+  reindexMemoryProject: 'memory:reindex-project',
   analyzeProjectArchitecture: 'project-memory:analyze-architecture',
   analyzeProjectSessions: 'project-memory:analyze-sessions',
   openArchitectureAnalysisWindow: 'project-memory:open-architecture-analysis',
@@ -152,6 +155,7 @@ export interface AgentCliApi {
   getMemoryBackendStatus(): Promise<MemoryBackendStatus>
   installMemoryRuntime(): Promise<MemoryBackendInstallResult>
   searchMemory(input: MemorySearchRequest): Promise<MemorySearchResult>
+  reindexMemoryProject(input: MemoryReindexRequest): Promise<MemoryReindexResult>
   analyzeProjectArchitecture(): Promise<ProjectArchitectureAnalysisResult>
   analyzeProjectSessions(): Promise<ProjectSessionsAnalysisResult>
   openArchitectureAnalysisWindow(): Promise<void>

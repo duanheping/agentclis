@@ -37,6 +37,21 @@ export interface MemoryBackendInstallResult {
   status: MemoryBackendStatus
 }
 
+export interface MemoryReindexRequest {
+  projectId?: string | null
+}
+
+export interface MemoryReindexResult {
+  backend: 'mempalace'
+  projectId: string | null
+  sessionsScanned: number
+  sessionsIndexed: number
+  sessionsDeferred: number
+  sessionsSkipped: number
+  errorCount: number
+  warning?: string | null
+}
+
 export interface MemorySearchRequest {
   query: string
   projectId?: string | null
