@@ -348,12 +348,13 @@ describe('SessionManager restore policy', () => {
     ).toEqual(['exited', 'exited'])
 
     const restoredSnapshot = await manager.restoreSessions()
+    await vi.runOnlyPendingTimersAsync()
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
     expectSpawnedPowerShellCommand(0, 'beta')
     expect(restoredSnapshot.activeSessionId).toBe('session-b')
     expect(
       Object.fromEntries(
-        restoredSnapshot.projects[0]?.sessions.map((session) => [
+        manager.listSessions().projects[0]?.sessions.map((session) => [
           session.config.id,
           session.runtime.status,
         ]) ?? [],
@@ -367,6 +368,7 @@ describe('SessionManager restore policy', () => {
     expect(mocks.terminals[0].write).not.toHaveBeenCalled()
 
     await manager.activateSession('session-a')
+    await vi.runOnlyPendingTimersAsync()
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
     expectSpawnedPowerShellCommand(1, 'alpha')
     expect(manager.listSessions().activeSessionId).toBe('session-a')
@@ -506,9 +508,11 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
+    await vi.runOnlyPendingTimersAsync()
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
 
     const closeResult = await manager.closeSession('session-b')
+    await vi.runOnlyPendingTimersAsync()
 
     expect(closeResult).toEqual({
       closedSessionId: 'session-b',
@@ -882,6 +886,7 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
+    await vi.runOnlyPendingTimersAsync()
     expect(mocks.spawn).not.toHaveBeenCalled()
 
     expect(
@@ -955,6 +960,7 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
+    await vi.runOnlyPendingTimersAsync()
     expect(mocks.spawn).not.toHaveBeenCalled()
 
     expect(
