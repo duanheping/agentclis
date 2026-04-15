@@ -102,6 +102,8 @@ export function attachInteractiveXtermScrollbar(
       return
     }
 
+    // Mouse-tracking TUIs can consume terminal-level pointer events and break
+    // xterm's overlay scrollbar drag gesture unless the event is stopped here.
     event.stopImmediatePropagation()
   }
 

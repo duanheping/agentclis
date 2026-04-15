@@ -7,7 +7,9 @@ function buildTerminalRoot(): HTMLDivElement {
   root.innerHTML = `
     <div class="xterm">
       <div class="xterm-scrollable-element">
-        <div class="scrollbar invisible fade"></div>
+        <div class="scrollbar invisible fade">
+          <div class="slider"></div>
+        </div>
       </div>
       <div class="xterm-viewport"></div>
       <div class="xterm-screen"></div>
@@ -33,25 +35,25 @@ describe('attachInteractiveXtermScrollbar', () => {
     dispose()
   })
 
-  it('keeps scrollbar-originated pointer gestures away from xterm mouse handlers', () => {
+  it('prevents scrollbar drags from bubbling into terminal mouse tracking', () => {
     const root = buildTerminalRoot()
-    const xtermRoot = root.querySelector('.xterm') as HTMLDivElement
-    const scrollbar = root.querySelector('.scrollbar') as HTMLDivElement
-    const slider = document.createElement('div')
-    const xtermMouseHandler = vi.fn()
-    scrollbar.appendChild(slider)
-    xtermRoot.addEventListener('mousedown', xtermMouseHandler)
-
+    const terminalMouseDown = vi.fn()
     const dispose = attachInteractiveXtermScrollbar(root)
+    const xterm = root.querySelector('.xterm') as HTMLDivElement | null
+    const slider = root.querySelector('.slider') as HTMLDivElement | null
 
-    slider.dispatchEvent(
+    expect(xterm).not.toBeNull()
+    expect(slider).not.toBeNull()
+
+    xterm?.addEventListener('mousedown', terminalMouseDown)
+    slider?.dispatchEvent(
       new MouseEvent('mousedown', {
         bubbles: true,
         cancelable: true,
       }),
     )
 
-    expect(xtermMouseHandler).not.toHaveBeenCalled()
+    expect(terminalMouseDown).not.toHaveBeenCalled()
 
     dispose()
   })
@@ -100,7 +102,10 @@ describe('attachInteractiveXtermScrollbar', () => {
     scrollable.className = 'xterm-scrollable-element'
     const scrollbar = document.createElement('div')
     scrollbar.className = 'scrollbar invisible fade'
+    const slider = document.createElement('div')
+    slider.className = 'slider'
 
+    scrollbar.appendChild(slider)
     scrollable.appendChild(scrollbar)
     root.appendChild(scrollable)
 
