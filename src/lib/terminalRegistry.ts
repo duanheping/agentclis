@@ -18,15 +18,15 @@ class TerminalRegistry {
 
     const pendingChunks = this.bufferedOutput.get(id) ?? []
     const overlapLength = findReplayOverlap(replayChunks, pendingChunks)
+    const replayText = replayChunks.join('')
+    const pendingText = pendingChunks.slice(overlapLength).join('')
 
-    for (const chunk of replayChunks) {
-      handle.write(chunk)
+    if (replayText) {
+      handle.write(replayText)
     }
 
-    if (pendingChunks.length > 0) {
-      for (const chunk of pendingChunks.slice(overlapLength)) {
-        handle.write(chunk)
-      }
+    if (pendingText) {
+      handle.write(pendingText)
     }
 
     this.bufferedOutput.delete(id)
