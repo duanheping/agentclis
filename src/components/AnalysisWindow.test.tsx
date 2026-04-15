@@ -13,7 +13,14 @@ const MockTerminalClass = vi.hoisted(() => {
   return class MockTerminal {
     cols = 120
     rows = 36
+    buffer = {
+      active: {
+        type: 'normal',
+        baseY: 0,
+      },
+    }
     write = vi.fn()
+    scrollLines = vi.fn()
     focus = vi.fn()
     dispose = vi.fn()
     loadAddon = vi.fn()

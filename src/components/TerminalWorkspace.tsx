@@ -411,6 +411,7 @@ function TerminalSurface({
     terminal.open(container)
     const detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
       container,
+      terminal,
     )
     const markdownFileLinks = terminal.registerLinkProvider(
       createMarkdownFileLinkProvider(terminal, (target) => {

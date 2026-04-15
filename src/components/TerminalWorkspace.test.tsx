@@ -18,6 +18,8 @@ vi.mock('@xterm/xterm', () => ({
     textarea = document.createElement('textarea')
     buffer = {
       active: {
+        type: 'normal',
+        baseY: 0,
         length: 0,
         getLine: () => null,
       },
@@ -50,6 +52,7 @@ vi.mock('@xterm/xterm', () => ({
       dispose: vi.fn(),
     }))
     write = vi.fn()
+    scrollLines = vi.fn()
     clear = vi.fn()
     focus = vi.fn(() => {
       this.textarea.focus()

@@ -63,6 +63,7 @@ export function AnalysisWindow() {
     terminal.open(containerRef.current)
     const detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
       containerRef.current,
+      terminal,
     )
     terminalRef.current = terminal
 
