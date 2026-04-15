@@ -14,6 +14,7 @@ interface TranscriptIndex {
 
 const DEFAULT_BASE_ROOT = path.join(os.homedir(), 'AppData', 'Roaming', 'agenclis')
 const TAIL_SCAN_CHUNK_BYTES = 64 * 1024
+const TAIL_REPLAY_READ_CHUNK_BYTES = 256 * 1024
 
 interface ParseResult {
   events: TranscriptEvent[]
@@ -26,6 +27,16 @@ interface ReadTailEventsOptions {
   maxBytes?: number
   maxEvents?: number
   requireChunk?: boolean
+}
+
+interface TailSelectionState {
+  allowedKinds: Set<TranscriptEvent['kind']>
+  maxBytes: number
+  maxEvents: number
+  requireChunk: boolean
+  byteCount: number
+  allowMalformedTail: boolean
+  tailReversed: TranscriptEvent[]
 }
 
 function parseTranscriptEvents(content: string): ParseResult {
@@ -122,6 +133,63 @@ async function repairMalformedTailForAppend(transcriptPath: string): Promise<voi
   }
 }
 
+function trimTranscriptLine(lineBuffer: Buffer): string {
+  let end = lineBuffer.length
+  if (end > 0 && lineBuffer[end - 1] === 0x0d) {
+    end -= 1
+  }
+
+  return lineBuffer.toString('utf8', 0, end).trim()
+}
+
+function collectTailEventFromLine(
+  lineBuffer: Buffer,
+  state: TailSelectionState,
+): boolean {
+  const line = trimTranscriptLine(lineBuffer)
+  if (!line) {
+    return false
+  }
+
+  let event: TranscriptEvent
+  try {
+    event = JSON.parse(line) as TranscriptEvent
+  } catch (error) {
+    if (state.allowMalformedTail) {
+      state.allowMalformedTail = false
+      return false
+    }
+
+    throw error
+  }
+
+  state.allowMalformedTail = false
+
+  if (state.allowedKinds.size > 0 && !state.allowedKinds.has(event.kind)) {
+    return false
+  }
+
+  if (state.requireChunk && !event.chunk) {
+    return false
+  }
+
+  const chunkSize = Buffer.byteLength(event.chunk ?? '', 'utf8')
+  const exceedsEventLimit =
+    state.maxEvents > 0 && state.tailReversed.length >= state.maxEvents
+  const exceedsByteLimit =
+    state.maxBytes > 0 && state.byteCount + chunkSize > state.maxBytes
+  if (
+    state.tailReversed.length > 0 &&
+    (exceedsEventLimit || exceedsByteLimit)
+  ) {
+    return true
+  }
+
+  state.tailReversed.push(event)
+  state.byteCount += chunkSize
+  return false
+}
+
 export class TranscriptStore {
   private readonly pendingWrites = new Map<string, Promise<void>>()
   private readonly baseRoot: string
@@ -206,38 +274,80 @@ export class TranscriptStore {
     sessionId: string,
     options: ReadTailEventsOptions = {},
   ): Promise<TranscriptEvent[]> {
-    const events = await this.readEvents(sessionId)
-    const allowedKinds = new Set(options.kinds)
-    const maxBytes = Math.max(0, options.maxBytes ?? 0)
-    const maxEvents = Math.max(0, options.maxEvents ?? 0)
-    const requireChunk = options.requireChunk ?? false
-    const tail: TranscriptEvent[] = []
-    let byteCount = 0
+    await this.pendingWrites.get(sessionId)
 
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index]
-      if (allowedKinds.size > 0 && !allowedKinds.has(event.kind)) {
-        continue
-      }
-
-      if (requireChunk && !event.chunk) {
-        continue
-      }
-
-      const chunkSize = Buffer.byteLength(event.chunk ?? '', 'utf8')
-      const exceedsEventLimit =
-        maxEvents > 0 && tail.length >= maxEvents
-      const exceedsByteLimit =
-        maxBytes > 0 && byteCount + chunkSize > maxBytes
-      if (tail.length > 0 && (exceedsEventLimit || exceedsByteLimit)) {
-        break
-      }
-
-      tail.unshift(event)
-      byteCount += chunkSize
+    const state: TailSelectionState = {
+      allowedKinds: new Set(options.kinds),
+      maxBytes: Math.max(0, options.maxBytes ?? 0),
+      maxEvents: Math.max(0, options.maxEvents ?? 0),
+      requireChunk: options.requireChunk ?? false,
+      byteCount: 0,
+      allowMalformedTail: true,
+      tailReversed: [],
     }
 
-    return tail
+    let handle: Awaited<ReturnType<typeof open>> | null = null
+
+    try {
+      const transcriptPath = this.getTranscriptPath(sessionId)
+      handle = await open(transcriptPath, 'r')
+      const stats = await handle.stat()
+      if (stats.size === 0) {
+        return []
+      }
+
+      let carry = Buffer.alloc(0)
+      let position = stats.size
+      let reachedLimit = false
+
+      while (position > 0 && !reachedLimit) {
+        const bytesToRead = Math.min(TAIL_REPLAY_READ_CHUNK_BYTES, position)
+        const chunkStart = position - bytesToRead
+        const buffer = Buffer.alloc(bytesToRead)
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, chunkStart)
+        const chunk = buffer.subarray(0, bytesRead)
+        const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk
+
+        const firstNewlineIndex = combined.indexOf(0x0a)
+        if (firstNewlineIndex === -1) {
+          carry = Buffer.from(combined)
+          position = chunkStart
+          continue
+        }
+
+        let lineEnd = combined.length
+        for (
+          let newlineIndex = combined.lastIndexOf(0x0a);
+          newlineIndex >= firstNewlineIndex;
+          newlineIndex = combined.lastIndexOf(0x0a, newlineIndex - 1)
+        ) {
+          const lineBuffer = combined.subarray(newlineIndex + 1, lineEnd)
+          if (collectTailEventFromLine(lineBuffer, state)) {
+            reachedLimit = true
+            break
+          }
+
+          lineEnd = newlineIndex
+        }
+
+        carry = Buffer.from(combined.subarray(0, lineEnd))
+        position = chunkStart
+      }
+
+      if (!reachedLimit && carry.length > 0) {
+        void collectTailEventFromLine(carry, state)
+      }
+
+      return state.tailReversed.reverse()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+
+      return []
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
   }
 
   async readIndex(sessionId: string): Promise<TranscriptIndex> {
