@@ -21,6 +21,8 @@ import {
   type SessionSnapshot,
 } from '../shared/session'
 import { getSessionAttentionBadgeLabel } from '../shared/sessionAttention'
+import type { MemoryBackendStatus } from '../shared/memorySearch'
+import { MemoryBackendSettings } from './MemoryBackendSettings'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
@@ -48,8 +50,16 @@ interface SessionSidebarProps {
   projectSessionsAnalyzing: boolean
   projectArchitectureAnalysisStatus: string | null
   projectSessionsAnalysisStatus: string | null
+  memoryBackendStatus: MemoryBackendStatus | null
+  memoryBackendLoading: boolean
+  memoryBackendInstalling: boolean
+  memoryBackendErrorMessage: string | null
   skillAiMergeProposal: SkillAiMergeProposal | null
   skillsErrorMessage: string | null
+  onInstallMemoryBackend: () => Promise<void>
+  onRefreshMemoryBackendStatus: () => Promise<void>
+  onOpenMemoryBackendInstallRoot: () => Promise<void>
+  onOpenMemoryBackendPalacePath: () => Promise<void>
   onPickSkillLibraryRoot: () => Promise<void>
   onClearSkillLibraryRoot: () => Promise<void>
   onOpenSkillLibraryRoot: () => Promise<void>
@@ -376,8 +386,16 @@ export function SessionSidebar({
   projectSessionsAnalyzing,
   projectArchitectureAnalysisStatus,
   projectSessionsAnalysisStatus,
+  memoryBackendStatus,
+  memoryBackendLoading,
+  memoryBackendInstalling,
+  memoryBackendErrorMessage,
   skillAiMergeProposal,
   skillsErrorMessage,
+  onInstallMemoryBackend,
+  onRefreshMemoryBackendStatus,
+  onOpenMemoryBackendInstallRoot,
+  onOpenMemoryBackendPalacePath,
   onPickSkillLibraryRoot,
   onClearSkillLibraryRoot,
   onOpenSkillLibraryRoot,
@@ -761,6 +779,25 @@ export function SessionSidebar({
                     <span>Show project paths in the sidebar</span>
                   </label>
                 </div>
+
+                <MemoryBackendSettings
+                  status={memoryBackendStatus}
+                  loading={memoryBackendLoading}
+                  installing={memoryBackendInstalling}
+                  errorMessage={memoryBackendErrorMessage}
+                  onInstall={() => {
+                    void onInstallMemoryBackend()
+                  }}
+                  onRefresh={() => {
+                    void onRefreshMemoryBackendStatus()
+                  }}
+                  onOpenInstallRoot={() => {
+                    void onOpenMemoryBackendInstallRoot()
+                  }}
+                  onOpenPalacePath={() => {
+                    void onOpenMemoryBackendPalacePath()
+                  }}
+                />
 
                 <div className="sidebar-settings__section">
                   <div className="sidebar-settings__section-header">

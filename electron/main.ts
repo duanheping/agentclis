@@ -45,6 +45,9 @@ import type { HistoricalProjectSessionDescriptor } from './projectSessionHistory
 import { ProjectIdentityResolver } from './projectIdentity'
 import { ProjectMemoryService } from './projectMemoryService'
 import { SkillLibraryManager } from './skillLibraryManager'
+import { MempalaceRuntime } from './mempalaceRuntime'
+import { MempalaceBridge } from './mempalaceBridge'
+import { MempalaceService } from './mempalaceService'
 import { SessionManager } from './sessionManager'
 import { TerminalSnapshotStore } from './terminalSnapshotStore'
 import { TransientFileStore } from './transientFileStore'
@@ -84,6 +87,12 @@ const transientFileStore = new TransientFileStore()
 const projectIdentityResolver = new ProjectIdentityResolver()
 const transcriptStore = new TranscriptStore()
 const terminalSnapshotStore = new TerminalSnapshotStore()
+const mempalaceRuntime = new MempalaceRuntime()
+const mempalaceBridge = new MempalaceBridge(mempalaceRuntime)
+const mempalaceService = new MempalaceService(
+  mempalaceRuntime,
+  mempalaceBridge,
+)
 const projectMemoryManager = new ProjectMemoryManager(
   () => skillLibraryManager.getSettings().libraryRoot,
   new ProjectMemoryAgentExtractor(
@@ -692,6 +701,15 @@ function registerIpcHandlers(): void {
       sessionManager.scheduleProjectMemoryBackfill()
       return nextSettings
     },
+  )
+  ipcMain.handle(IPC_CHANNELS.getMemoryBackendStatus, () =>
+    mempalaceService.getStatus(),
+  )
+  ipcMain.handle(IPC_CHANNELS.installMemoryRuntime, () =>
+    mempalaceService.installRuntime(),
+  )
+  ipcMain.handle(IPC_CHANNELS.searchMemory, (_event, input) =>
+    mempalaceService.search(input),
   )
   ipcMain.handle(IPC_CHANNELS.analyzeProjectArchitecture, async () =>
     sessionManager.analyzeHistoricalProjectArchitecture(),

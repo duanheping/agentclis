@@ -26,6 +26,12 @@ import type {
   SkillSyncRoot,
   SkillSyncStatus,
 } from './skills'
+import type {
+  MemoryBackendInstallResult,
+  MemoryBackendStatus,
+  MemorySearchRequest,
+  MemorySearchResult,
+} from './memorySearch'
 
 export interface PersistTransientFileInput {
   name?: string
@@ -82,6 +88,9 @@ export const IPC_CHANNELS = {
   resizeSession: 'session:resize',
   getSkillLibrarySettings: 'skills:get-settings',
   updateSkillLibrarySettings: 'skills:update-settings',
+  getMemoryBackendStatus: 'memory:get-status',
+  installMemoryRuntime: 'memory:install-runtime',
+  searchMemory: 'memory:search',
   analyzeProjectArchitecture: 'project-memory:analyze-architecture',
   analyzeProjectSessions: 'project-memory:analyze-sessions',
   openArchitectureAnalysisWindow: 'project-memory:open-architecture-analysis',
@@ -140,6 +149,9 @@ export interface AgentCliApi {
   updateSkillLibrarySettings(
     settings: SkillLibrarySettings,
   ): Promise<SkillLibrarySettings>
+  getMemoryBackendStatus(): Promise<MemoryBackendStatus>
+  installMemoryRuntime(): Promise<MemoryBackendInstallResult>
+  searchMemory(input: MemorySearchRequest): Promise<MemorySearchResult>
   analyzeProjectArchitecture(): Promise<ProjectArchitectureAnalysisResult>
   analyzeProjectSessions(): Promise<ProjectSessionsAnalysisResult>
   openArchitectureAnalysisWindow(): Promise<void>

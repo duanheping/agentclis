@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SessionSidebar } from './SessionSidebar'
+import type { MemoryBackendStatus } from '../shared/memorySearch'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -131,6 +132,24 @@ function buildSkillAiMergeProposal(): SkillAiMergeProposal {
   }
 }
 
+function buildMemoryBackendStatus(): MemoryBackendStatus {
+  return {
+    backend: 'mempalace',
+    repo: 'https://github.com/duanheping/mempalace.git',
+    commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+    installState: 'installed',
+    runtimeState: 'running',
+    installRoot:
+      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+    palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
+    pythonPath:
+      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c\\venv\\Scripts\\python.exe',
+    module: 'mempalace.mcp_server',
+    message: 'MemPalace runtime is running.',
+    lastError: null,
+  }
+}
+
 function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>>) {
   return render(
     <SessionSidebar
@@ -159,8 +178,16 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       projectSessionsAnalyzing={false}
       projectArchitectureAnalysisStatus={null}
       projectSessionsAnalysisStatus={null}
+      memoryBackendStatus={buildMemoryBackendStatus()}
+      memoryBackendLoading={false}
+      memoryBackendInstalling={false}
+      memoryBackendErrorMessage={null}
       skillAiMergeProposal={null}
       skillsErrorMessage={null}
+      onInstallMemoryBackend={vi.fn().mockResolvedValue(undefined)}
+      onRefreshMemoryBackendStatus={vi.fn().mockResolvedValue(undefined)}
+      onOpenMemoryBackendInstallRoot={vi.fn().mockResolvedValue(undefined)}
+      onOpenMemoryBackendPalacePath={vi.fn().mockResolvedValue(undefined)}
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onClearSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onOpenSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
@@ -234,6 +261,27 @@ describe('SessionSidebar', () => {
       'document-topic-search',
       'discovered',
     )
+  })
+
+  it('shows memory backend status and install controls in settings', async () => {
+    const user = userEvent.setup()
+    const onOpenMemoryBackendPalacePath = vi.fn().mockResolvedValue(undefined)
+
+    renderSidebar({
+      onOpenMemoryBackendPalacePath,
+    })
+
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    expect(screen.getByText('Memory backend')).toBeInTheDocument()
+    expect(screen.getByText(/Pinned commit 74e5bf6090cb/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /open palace/i }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /open palace/i }))
+
+    expect(onOpenMemoryBackendPalacePath).toHaveBeenCalledTimes(1)
   })
 
   it('forwards the dedicated project architecture analysis action', async () => {

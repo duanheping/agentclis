@@ -13,6 +13,11 @@ vi.mock('./components/TerminalWorkspace', () => ({
 
 import App from './App'
 import type { AgentCliApi } from './shared/ipc'
+import type {
+  MemoryBackendInstallResult,
+  MemoryBackendStatus,
+  MemorySearchResult,
+} from './shared/memorySearch'
 import type { ProjectGitOverview } from './shared/projectTools'
 import type {
   CreateSessionInput,
@@ -233,6 +238,33 @@ function createAgentCliMock(
     },
   }
 
+  const memoryBackendStatus: MemoryBackendStatus = {
+    backend: 'mempalace',
+    repo: 'https://github.com/duanheping/mempalace.git',
+    commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+    installState: 'not-installed',
+    runtimeState: 'stopped',
+    installRoot: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+    palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
+    pythonPath: null,
+    module: 'mempalace.mcp_server',
+    message: null,
+    lastError: null,
+  }
+
+  const memoryInstallResult: MemoryBackendInstallResult = {
+    success: true,
+    status: memoryBackendStatus,
+  }
+
+  const memorySearchResult: MemorySearchResult = {
+    backend: 'mempalace',
+    query: '',
+    hitCount: 0,
+    hits: [],
+    warning: null,
+  }
+
   const agentCli = {
     restoreSessions: vi.fn().mockResolvedValue(workspacePayload),
     listSessions: vi.fn().mockResolvedValue(workspacePayload),
@@ -315,6 +347,15 @@ function createAgentCliMock(
 
       return structuredClone(currentSkillSettings)
     }),
+    getMemoryBackendStatus: vi
+      .fn()
+      .mockResolvedValue(structuredClone(memoryBackendStatus)),
+    installMemoryRuntime: vi
+      .fn()
+      .mockResolvedValue(structuredClone(memoryInstallResult)),
+    searchMemory: vi
+      .fn()
+      .mockResolvedValue(structuredClone(memorySearchResult)),
     getSkillSyncStatus: vi
       .fn()
       .mockImplementation(async () => structuredClone(currentSkillStatus)),
