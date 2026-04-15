@@ -13,16 +13,20 @@ class TerminalRegistry {
   private readonly handles = new Map<string, TerminalHandle>()
   private readonly bufferedOutput = new Map<string, string[]>()
 
-  register(id: string, handle: TerminalHandle): void {
+  register(id: string, handle: TerminalHandle, replayChunks: string[] = []): void {
     this.handles.set(id, handle)
 
-    const pendingChunks = this.bufferedOutput.get(id)
-    if (!pendingChunks?.length) {
-      return
+    const pendingChunks = this.bufferedOutput.get(id) ?? []
+    const overlapLength = findReplayOverlap(replayChunks, pendingChunks)
+
+    for (const chunk of replayChunks) {
+      handle.write(chunk)
     }
 
-    for (const chunk of pendingChunks) {
-      handle.write(chunk)
+    if (pendingChunks.length > 0) {
+      for (const chunk of pendingChunks.slice(overlapLength)) {
+        handle.write(chunk)
+      }
     }
 
     this.bufferedOutput.delete(id)
@@ -69,3 +73,30 @@ class TerminalRegistry {
 }
 
 export const terminalRegistry = new TerminalRegistry()
+
+function findReplayOverlap(
+  replayChunks: string[],
+  pendingChunks: string[],
+): number {
+  const maxOverlap = Math.min(replayChunks.length, pendingChunks.length)
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true
+
+    for (let index = 0; index < overlap; index += 1) {
+      if (
+        replayChunks[replayChunks.length - overlap + index] !==
+        pendingChunks[index]
+      ) {
+        matches = false
+        break
+      }
+    }
+
+    if (matches) {
+      return overlap
+    }
+  }
+
+  return 0
+}

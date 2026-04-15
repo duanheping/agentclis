@@ -41,6 +41,29 @@ describe('TerminalRegistry', () => {
     terminalRegistry.forget('test-buffer')
   })
 
+  it('replays transcript history before buffered live output and removes overlap', () => {
+    const write = vi.fn()
+    const handle = { write, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }
+
+    terminalRegistry.write('test-replay', 'chunk-2')
+    terminalRegistry.write('test-replay', 'chunk-3')
+    terminalRegistry.write('test-replay', 'chunk-4')
+    terminalRegistry.register('test-replay', handle, [
+      'chunk-0',
+      'chunk-1',
+      'chunk-2',
+      'chunk-3',
+    ])
+
+    expect(write).toHaveBeenCalledTimes(5)
+    expect(write).toHaveBeenNthCalledWith(1, 'chunk-0')
+    expect(write).toHaveBeenNthCalledWith(2, 'chunk-1')
+    expect(write).toHaveBeenNthCalledWith(3, 'chunk-2')
+    expect(write).toHaveBeenNthCalledWith(4, 'chunk-3')
+    expect(write).toHaveBeenNthCalledWith(5, 'chunk-4')
+    terminalRegistry.forget('test-replay')
+  })
+
   it('caps the buffer at 240 items using FIFO eviction', () => {
     const write = vi.fn()
     const handle = { write, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }

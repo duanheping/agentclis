@@ -21,6 +21,13 @@ interface ParseResult {
   goodByteLength: number
 }
 
+interface ReadTailEventsOptions {
+  kinds?: TranscriptEvent['kind'][]
+  maxBytes?: number
+  maxEvents?: number
+  requireChunk?: boolean
+}
+
 function parseTranscriptEvents(content: string): ParseResult {
   const events: TranscriptEvent[] = []
   let goodByteLength = 0
@@ -193,6 +200,44 @@ export class TranscriptStore {
 
       return []
     }
+  }
+
+  async readTailEvents(
+    sessionId: string,
+    options: ReadTailEventsOptions = {},
+  ): Promise<TranscriptEvent[]> {
+    const events = await this.readEvents(sessionId)
+    const allowedKinds = new Set(options.kinds)
+    const maxBytes = Math.max(0, options.maxBytes ?? 0)
+    const maxEvents = Math.max(0, options.maxEvents ?? 0)
+    const requireChunk = options.requireChunk ?? false
+    const tail: TranscriptEvent[] = []
+    let byteCount = 0
+
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]
+      if (allowedKinds.size > 0 && !allowedKinds.has(event.kind)) {
+        continue
+      }
+
+      if (requireChunk && !event.chunk) {
+        continue
+      }
+
+      const chunkSize = Buffer.byteLength(event.chunk ?? '', 'utf8')
+      const exceedsEventLimit =
+        maxEvents > 0 && tail.length >= maxEvents
+      const exceedsByteLimit =
+        maxBytes > 0 && byteCount + chunkSize > maxBytes
+      if (tail.length > 0 && (exceedsEventLimit || exceedsByteLimit)) {
+        break
+      }
+
+      tail.unshift(event)
+      byteCount += chunkSize
+    }
+
+    return tail
   }
 
   async readIndex(sessionId: string): Promise<TranscriptIndex> {
