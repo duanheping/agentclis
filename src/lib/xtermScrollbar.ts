@@ -12,8 +12,14 @@ interface ScrollableTerminal {
   }
 }
 
-function applyInteractiveScrollbarStyles(root: ParentNode): void {
-  const scrollbars = root.querySelectorAll<HTMLElement>(XTERM_SCROLLBAR_SELECTOR)
+function getInteractiveScrollbars(root: ParentNode): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(XTERM_SCROLLBAR_SELECTOR),
+  )
+}
+
+function applyInteractiveScrollbarStyles(root: ParentNode): HTMLElement[] {
+  const scrollbars = getInteractiveScrollbars(root)
 
   for (const scrollbar of scrollbars) {
     scrollbar.style.opacity = '1'
@@ -22,14 +28,8 @@ function applyInteractiveScrollbarStyles(root: ParentNode): void {
     scrollbar.style.background = 'rgba(0, 0, 0, 0)'
     scrollbar.style.transition = 'none'
   }
-}
 
-function isScrollbarTarget(root: HTMLElement, target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    root.contains(target) &&
-    target.closest(XTERM_SCROLLBAR_SELECTOR) !== null
-  )
+  return scrollbars
 }
 
 function isScrollableHistoryBuffer(
@@ -83,11 +83,41 @@ export function attachInteractiveXtermScrollbar(
   root: HTMLElement,
   terminal?: ScrollableTerminal,
 ): () => void {
-  applyInteractiveScrollbarStyles(root)
+  const guardedScrollbars = new WeakSet<HTMLElement>()
+  const detachScrollbarGuards: Array<() => void> = []
   const wheelPartialScroll = { current: 0 }
 
+  const handleScrollbarPointerDown = (event: Event) => {
+    // Let xterm's own scrollbar listeners run on the target, then stop the
+    // gesture before terminal-level mouse tracking handlers can hijack it.
+    event.stopPropagation()
+  }
+
+  const ensureInteractiveScrollbars = () => {
+    const scrollbars = applyInteractiveScrollbarStyles(root)
+
+    for (const scrollbar of scrollbars) {
+      if (guardedScrollbars.has(scrollbar)) {
+        continue
+      }
+
+      scrollbar.addEventListener('pointerdown', handleScrollbarPointerDown)
+      scrollbar.addEventListener('mousedown', handleScrollbarPointerDown)
+      guardedScrollbars.add(scrollbar)
+      detachScrollbarGuards.push(() => {
+        scrollbar.removeEventListener(
+          'pointerdown',
+          handleScrollbarPointerDown,
+        )
+        scrollbar.removeEventListener('mousedown', handleScrollbarPointerDown)
+      })
+    }
+  }
+
+  ensureInteractiveScrollbars()
+
   const observer = new MutationObserver(() => {
-    applyInteractiveScrollbarStyles(root)
+    ensureInteractiveScrollbars()
   })
 
   observer.observe(root, {
@@ -96,16 +126,6 @@ export function attachInteractiveXtermScrollbar(
     attributes: true,
     attributeFilter: ['class'],
   })
-
-  const handleScrollbarPointerDownCapture = (event: Event) => {
-    if (!isScrollbarTarget(root, event.target)) {
-      return
-    }
-
-    // Mouse-tracking TUIs can consume terminal-level pointer events and break
-    // xterm's overlay scrollbar drag gesture unless the event is stopped here.
-    event.stopImmediatePropagation()
-  }
 
   const handleWheelCapture = (event: WheelEvent) => {
     if (
@@ -131,16 +151,6 @@ export function attachInteractiveXtermScrollbar(
     terminal.scrollLines(scrollLines)
   }
 
-  root.addEventListener(
-    'pointerdown',
-    handleScrollbarPointerDownCapture,
-    true,
-  )
-  root.addEventListener(
-    'mousedown',
-    handleScrollbarPointerDownCapture,
-    true,
-  )
   root.addEventListener('wheel', handleWheelCapture, {
     capture: true,
     passive: false,
@@ -148,16 +158,9 @@ export function attachInteractiveXtermScrollbar(
 
   return () => {
     observer.disconnect()
-    root.removeEventListener(
-      'pointerdown',
-      handleScrollbarPointerDownCapture,
-      true,
-    )
-    root.removeEventListener(
-      'mousedown',
-      handleScrollbarPointerDownCapture,
-      true,
-    )
+    for (const detachScrollbarGuard of detachScrollbarGuards) {
+      detachScrollbarGuard()
+    }
     root.removeEventListener('wheel', handleWheelCapture, true)
   }
 }

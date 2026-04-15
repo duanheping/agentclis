@@ -35,16 +35,20 @@ describe('attachInteractiveXtermScrollbar', () => {
     dispose()
   })
 
-  it('prevents scrollbar drags from bubbling into terminal mouse tracking', () => {
+  it('preserves scrollbar drag-start handlers while blocking terminal ancestors', () => {
     const root = buildTerminalRoot()
     const terminalMouseDown = vi.fn()
-    const dispose = attachInteractiveXtermScrollbar(root)
+    const scrollbarMouseDown = vi.fn()
     const xterm = root.querySelector('.xterm') as HTMLDivElement | null
+    const scrollbar = root.querySelector('.scrollbar') as HTMLDivElement | null
     const slider = root.querySelector('.slider') as HTMLDivElement | null
 
     expect(xterm).not.toBeNull()
+    expect(scrollbar).not.toBeNull()
     expect(slider).not.toBeNull()
 
+    scrollbar?.addEventListener('mousedown', scrollbarMouseDown)
+    const dispose = attachInteractiveXtermScrollbar(root)
     xterm?.addEventListener('mousedown', terminalMouseDown)
     slider?.dispatchEvent(
       new MouseEvent('mousedown', {
@@ -53,6 +57,7 @@ describe('attachInteractiveXtermScrollbar', () => {
       }),
     )
 
+    expect(scrollbarMouseDown).toHaveBeenCalledTimes(1)
     expect(terminalMouseDown).not.toHaveBeenCalled()
 
     dispose()
