@@ -347,12 +347,14 @@ describe('TerminalWorkspace', () => {
       expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
         'session-1',
       )
-      expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(3)
+      expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(2)
     })
 
-    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(1, 'history-1')
-    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(2, 'shared')
-    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(3, 'live-1')
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(
+      1,
+      'history-1shared',
+    )
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(2, 'live-1')
   })
 
   it('focuses the windows cmd terminal when a focus request targets it', async () => {

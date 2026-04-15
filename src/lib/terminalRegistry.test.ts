@@ -35,9 +35,8 @@ describe('TerminalRegistry', () => {
     terminalRegistry.write('test-buffer', 'chunk2')
     terminalRegistry.register('test-buffer', handle)
 
-    expect(write).toHaveBeenCalledTimes(2)
-    expect(write).toHaveBeenNthCalledWith(1, 'chunk1')
-    expect(write).toHaveBeenNthCalledWith(2, 'chunk2')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('chunk1chunk2')
     terminalRegistry.forget('test-buffer')
   })
 
@@ -55,12 +54,9 @@ describe('TerminalRegistry', () => {
       'chunk-3',
     ])
 
-    expect(write).toHaveBeenCalledTimes(5)
-    expect(write).toHaveBeenNthCalledWith(1, 'chunk-0')
-    expect(write).toHaveBeenNthCalledWith(2, 'chunk-1')
-    expect(write).toHaveBeenNthCalledWith(3, 'chunk-2')
-    expect(write).toHaveBeenNthCalledWith(4, 'chunk-3')
-    expect(write).toHaveBeenNthCalledWith(5, 'chunk-4')
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(write).toHaveBeenNthCalledWith(1, 'chunk-0chunk-1chunk-2chunk-3')
+    expect(write).toHaveBeenNthCalledWith(2, 'chunk-4')
     terminalRegistry.forget('test-replay')
   })
 
@@ -74,9 +70,10 @@ describe('TerminalRegistry', () => {
 
     terminalRegistry.register('test-fifo', handle)
 
-    expect(write).toHaveBeenCalledTimes(240)
-    expect(write).toHaveBeenNthCalledWith(1, 'chunk-10')
-    expect(write).toHaveBeenNthCalledWith(240, 'chunk-249')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith(
+      Array.from({ length: 240 }, (_, index) => `chunk-${index + 10}`).join(''),
+    )
     terminalRegistry.forget('test-fifo')
   })
 
