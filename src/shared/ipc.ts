@@ -46,9 +46,14 @@ export interface ProjectSessionsAnalysisResult {
   prunedCandidateCount: number
 }
 
+export interface SessionTerminalReplay {
+  chunks: string[]
+}
+
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
   listSessions: 'session:list',
+  getSessionTerminalReplay: 'session:terminal-replay',
   createProject: 'project:create',
   createSession: 'session:create',
   renameSession: 'session:rename',
@@ -103,6 +108,7 @@ export const IPC_CHANNELS = {
 export interface AgentCliApi {
   restoreSessions(): Promise<ListSessionsResponse>
   listSessions(): Promise<ListSessionsResponse>
+  getSessionTerminalReplay(sessionId: string): Promise<SessionTerminalReplay>
   createProject(input: CreateProjectInput): Promise<ProjectSnapshot>
   createSession(input: CreateSessionInput): Promise<SessionSnapshot>
   renameSession(id: string, title: string): Promise<SessionSnapshot>

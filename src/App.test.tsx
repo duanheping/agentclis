@@ -236,6 +236,7 @@ function createAgentCliMock(
   const agentCli = {
     restoreSessions: vi.fn().mockResolvedValue(workspacePayload),
     listSessions: vi.fn().mockResolvedValue(workspacePayload),
+    getSessionTerminalReplay: vi.fn().mockResolvedValue({ chunks: [] }),
     createProject: vi.fn().mockResolvedValue(undefined),
     createSession: vi.fn().mockResolvedValue(undefined),
     renameSession: vi.fn().mockResolvedValue(undefined),

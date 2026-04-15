@@ -2,14 +2,19 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SessionSnapshot } from '../shared/session'
+import { terminalRegistry } from '../lib/terminalRegistry'
 
 const mockFit = vi.hoisted(() => vi.fn())
 const mockTerminalConstructor = vi.hoisted(() => vi.fn())
+const terminalInstances = vi.hoisted(() => [] as Array<{
+  write: ReturnType<typeof vi.fn>
+}>)
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class MockTerminal {
     constructor(options?: unknown) {
       mockTerminalConstructor(options)
+      terminalInstances.push(this)
     }
 
     cols = 80
@@ -153,6 +158,7 @@ describe('TerminalWorkspace', () => {
     window.localStorage.clear()
     mockFit.mockClear()
     mockTerminalConstructor.mockClear()
+    terminalInstances.length = 0
 
     vi.stubGlobal(
       'requestAnimationFrame',
@@ -176,6 +182,7 @@ describe('TerminalWorkspace', () => {
       value: {
         writeToSession: vi.fn().mockResolvedValue(undefined),
         resizeSession: vi.fn().mockResolvedValue(undefined),
+        getSessionTerminalReplay: vi.fn().mockResolvedValue({ chunks: [] }),
         writeToWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
         resizeWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
         openFileReference: vi.fn().mockResolvedValue(undefined),
@@ -188,6 +195,8 @@ describe('TerminalWorkspace', () => {
 
   afterEach(() => {
     cleanup()
+    terminalRegistry.forget('session-1')
+    terminalRegistry.forget('session-1:windows-cmd')
     vi.unstubAllGlobals()
   })
 
@@ -317,6 +326,33 @@ describe('TerminalWorkspace', () => {
     expect(window.agentCli.openExternalLink).toHaveBeenCalledWith(
       'https://example.com',
     )
+  })
+
+  it('replays transcript history before showing new buffered live output', async () => {
+    window.agentCli.getSessionTerminalReplay = vi.fn().mockResolvedValue({
+      chunks: ['history-1', 'shared'],
+    })
+    terminalRegistry.write('session-1', 'shared')
+    terminalRegistry.write('session-1', 'live-1')
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+      expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(3)
+    })
+
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(1, 'history-1')
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(2, 'shared')
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(3, 'live-1')
   })
 
   it('focuses the windows cmd terminal when a focus request targets it', async () => {

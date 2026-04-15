@@ -350,6 +350,7 @@ function TerminalSurface({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const fitTerminalRef = useRef<(() => void) | null>(null)
   const activeRef = useRef(active)
   const onInputRef = useRef(onInput)
   const onResizeRef = useRef(onResize)
@@ -445,13 +446,14 @@ function TerminalSurface({
       fitAddon.fit()
       void onResizeRef.current(terminal.cols, terminal.rows)
     }
+    fitTerminalRef.current = fitTerminal
 
-    terminalRegistry.register(terminalId, {
-      write: (chunk) => terminal.write(stripScrollbackClear(chunk)),
+    const terminalHandle = {
+      write: (chunk: string) => terminal.write(stripScrollbackClear(chunk)),
       clear: () => terminal.clear(),
       fit: fitTerminal,
       focus: () => terminal.focus(),
-    })
+    }
 
     const resizeObserver = new ResizeObserver(() => {
       if (!activeRef.current) {
@@ -469,6 +471,24 @@ function TerminalSurface({
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
+    let disposed = false
+
+    void (async () => {
+      let replayChunks: string[] = []
+
+      try {
+        const replay = await window.agentCli.getSessionTerminalReplay(terminalId)
+        replayChunks = replay.chunks
+      } catch {
+        replayChunks = []
+      }
+
+      if (disposed) {
+        return
+      }
+
+      terminalRegistry.register(terminalId, terminalHandle, replayChunks)
+    })()
 
     requestAnimationFrame(fitTerminal)
 
@@ -487,6 +507,7 @@ function TerminalSurface({
     )
 
     return () => {
+      disposed = true
       container.removeEventListener(
         'pointerdown',
         handlePointerDownCapture,
@@ -501,6 +522,7 @@ function TerminalSurface({
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
+      fitTerminalRef.current = null
     }
   }, [terminalId])
 
@@ -510,10 +532,10 @@ function TerminalSurface({
     }
 
     requestAnimationFrame(() => {
-      terminalRegistry.fit(terminalId)
+      fitTerminalRef.current?.()
 
       if (autoFocus) {
-        terminalRegistry.focus(terminalId)
+        terminalRef.current?.focus()
       }
     })
   }, [active, autoFocus, terminalId])
@@ -523,7 +545,7 @@ function TerminalSurface({
       return
     }
 
-    terminalRegistry.focus(terminalId)
+    terminalRef.current?.focus()
     onFocusRequestHandled?.(focusRequestSequence)
   }, [active, focusRequestSequence, onFocusRequestHandled, terminalId])
 

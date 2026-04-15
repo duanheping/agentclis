@@ -9,6 +9,7 @@ import Store from 'electron-store'
 import type {
   ProjectArchitectureAnalysisResult,
   ProjectSessionsAnalysisResult,
+  SessionTerminalReplay,
 } from '../src/shared/ipc'
 import {
   buildRuntime,
@@ -154,6 +155,8 @@ const EXTERNAL_ATTENTION_RESOLUTION_RETRY_DELAYS_MS = [
 const LIVE_ATTENTION_BUFFER_LIMIT = 4_096
 const TOUCH_RUNTIME_DEBOUNCE_MS = 300
 const INPUT_TRANSCRIPT_FLUSH_MS = 250
+const SESSION_TERMINAL_REPLAY_MAX_BYTES = 2 * 1024 * 1024
+const SESSION_TERMINAL_REPLAY_MAX_EVENTS = 5_000
 const ANSI_ESCAPE_REGEX = new RegExp(
   `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
   'gu',
@@ -266,7 +269,8 @@ interface SessionManagerServices {
   identityResolver?: {
     inspect: (rootPath: string) => Promise<ProjectLocationIdentity>
   }
-  transcriptStore?: Pick<TranscriptStore, 'append'>
+  transcriptStore?: Pick<TranscriptStore, 'append'> &
+    Partial<Pick<TranscriptStore, 'readTailEvents'>>
   projectMemory?: Pick<
     ProjectMemoryService,
     | 'analyzeHistoricalArchitecture'
@@ -295,6 +299,7 @@ const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResol
 
 const noopTranscriptStore: NonNullable<SessionManagerServices['transcriptStore']> = {
   append: async () => undefined,
+  readTailEvents: async () => [],
 }
 
 const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = {
@@ -492,6 +497,22 @@ export class SessionManager {
     }
 
     return this.listSessions()
+  }
+
+  async getSessionTerminalReplay(id: string): Promise<SessionTerminalReplay> {
+    this.requireConfig(id)
+
+    const events =
+      (await this.transcriptStore.readTailEvents?.(id, {
+        kinds: ['output'],
+        maxBytes: SESSION_TERMINAL_REPLAY_MAX_BYTES,
+        maxEvents: SESSION_TERMINAL_REPLAY_MAX_EVENTS,
+        requireChunk: true,
+      })) ?? []
+
+    return {
+      chunks: events.flatMap((event) => (event.chunk ? [event.chunk] : [])),
+    }
   }
 
   getProjectConfigs(): ProjectConfig[] {

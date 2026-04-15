@@ -587,13 +587,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
-    ])
+    expectSpawnedPowerShellCommand(0, 'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a')
 
     expect(onConfig).toHaveBeenCalledWith({
       sessionId: 'session-a',
@@ -701,13 +695,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      `codex resume ${externalSessionId}`,
-    ])
+    expectSpawnedPowerShellCommand(0, `codex resume ${externalSessionId}`)
   })
 
   it('backfills Codex attention from a recovered transcript before polling new lines', async () => {
@@ -838,13 +826,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
-    ])
+    expectSpawnedPowerShellCommand(0, 'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a')
   })
 
   it('keeps a restore session failed when only an ineligible Codex Desktop transcript is available', async () => {
@@ -1070,13 +1052,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      `copilot --resume ${recoveredExternalSessionId}`,
-    ])
+    expectSpawnedPowerShellCommand(0, `copilot --resume ${recoveredExternalSessionId}`)
 
     expect(onConfig).toHaveBeenCalledWith({
       sessionId: 'session-a',
@@ -1182,13 +1158,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      `copilot --resume ${externalSessionId}`,
-    ])
+    expectSpawnedPowerShellCommand(0, `copilot --resume ${externalSessionId}`)
   })
 
   it('recovers a saved Codex session from timestamps when the restored title no longer matches the transcript', async () => {
@@ -1256,13 +1226,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      `codex resume ${recoveredExternalSessionId}`,
-    ])
+    expectSpawnedPowerShellCommand(0, `codex resume ${recoveredExternalSessionId}`)
   })
 
   it('does not cross-match external sessions between sibling sessions in the same project', async () => {
@@ -1450,13 +1414,7 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex resume 019historical-codex-session',
-    ])
+    expectSpawnedPowerShellCommand(0, 'codex resume 019historical-codex-session')
 
     expect(
       (
@@ -1563,13 +1521,7 @@ describe('SessionManager project lifecycle', () => {
     })
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex --dangerously-bypass-approvals-and-sandbox',
-    ])
+    expectSpawnedPowerShellCommand(0, 'codex --dangerously-bypass-approvals-and-sandbox')
   })
 
   it('launches Copilot with full-access flags when full-access is selected', async () => {
@@ -1588,13 +1540,7 @@ describe('SessionManager project lifecycle', () => {
     })
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'copilot --allow-all --no-ask-user',
-    ])
+    expectSpawnedPowerShellCommand(0, 'copilot --allow-all --no-ask-user')
   })
 
   it('adds Copilot full-access flags even when related allow flags are already present', async () => {
@@ -1613,13 +1559,10 @@ describe('SessionManager project lifecycle', () => {
     })
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
+    expectSpawnedPowerShellCommand(
+      0,
       'copilot --allow-all-paths --no-color --allow-all --no-ask-user',
-    ])
+    )
   })
 
   it('does not mistake Copilot option values for existing full-access flags', async () => {
@@ -1638,13 +1581,10 @@ describe('SessionManager project lifecycle', () => {
     })
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
+    expectSpawnedPowerShellCommand(
+      0,
       'copilot --config-dir C:\\tmp\\--allow-all --no-ask-user --allow-all',
-    ])
+    )
   })
 
   it('does not duplicate existing Copilot full-access flags', async () => {
@@ -1663,13 +1603,7 @@ describe('SessionManager project lifecycle', () => {
     })
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'copilot --allow-all --no-ask-user',
-    ])
+    expectSpawnedPowerShellCommand(0, 'copilot --allow-all --no-ask-user')
   })
 
   it('preserves --resume when restoring a Copilot session with full-access', async () => {
@@ -1736,13 +1670,10 @@ describe('SessionManager project lifecycle', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
+    expectSpawnedPowerShellCommand(
+      0,
       `copilot --allow-all --no-ask-user --resume ${externalSessionId}`,
-    ])
+    )
   })
 
   it('starts a fresh Codex session instead of reviving project history', async () => {
@@ -1782,13 +1713,7 @@ describe('SessionManager project lifecycle', () => {
     await vi.runAllTimersAsync()
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(spawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      'codex',
-    ])
+    expectSpawnedPowerShellCommand(0, 'codex')
     expect(session.config.externalSession).toBeUndefined()
     expect(
       manager.listSessions().projects[0]?.sessions.find(
@@ -2414,13 +2339,7 @@ describe('SessionManager project lifecycle', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      `copilot --resume ${externalSessionId}`,
-    ])
+    expectSpawnedPowerShellCommand(0, `copilot --resume ${externalSessionId}`)
 
     expect(
       (
@@ -2510,13 +2429,7 @@ describe('SessionManager project lifecycle', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
-      `copilot --resume ${externalSessionId}`,
-    ])
+    expectSpawnedPowerShellCommand(0, `copilot --resume ${externalSessionId}`)
   })
 })
 
@@ -3213,13 +3126,10 @@ describe('SessionManager logical project identity and project context', () => {
     })
 
     expect(projectMemory.assembleContext).not.toHaveBeenCalled()
-    const firstSpawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1]
-    expect(firstSpawnArgs).toEqual([
-      '-NoLogo',
-      '-NoExit',
-      '-Command',
+    expectSpawnedPowerShellCommand(
+      0,
       `copilot --model gpt-5.2 --resume ${externalSessionId}`,
-    ])
+    )
   })
 
   it('does not regenerate Copilot instructions for older resumed sessions without a snapshot', async () => {
@@ -3475,6 +3385,83 @@ describe('SessionManager logical project identity and project context', () => {
 
     // Close — cleanup should still work (refcount should be 1, not 2)
     await manager.closeSession(session.config.id)
+  })
+
+  it('builds terminal replay chunks from transcript output tail', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const replayEvents: TranscriptEvent[] = [
+      {
+        id: 'event-1',
+        sessionId: 'session-a',
+        projectId: 'project-1',
+        locationId: null,
+        timestamp: '2026-03-22T12:00:00.000Z',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'history-1',
+      },
+      {
+        id: 'event-2',
+        sessionId: 'session-a',
+        projectId: 'project-1',
+        locationId: null,
+        timestamp: '2026-03-22T12:00:01.000Z',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'history-2',
+      },
+    ]
+
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readTailEvents: vi.fn(async () => replayEvents),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        transcriptStore,
+      },
+    )
+
+    await expect(manager.getSessionTerminalReplay('session-a')).resolves.toEqual({
+      chunks: ['history-1', 'history-2'],
+    })
+    expect(transcriptStore.readTailEvents).toHaveBeenCalledWith('session-a', {
+      kinds: ['output'],
+      maxBytes: 2 * 1024 * 1024,
+      maxEvents: 5_000,
+      requireChunk: true,
+    })
   })
 
   it('queues project memory capture when a session is closed', async () => {

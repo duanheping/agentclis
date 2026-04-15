@@ -641,6 +641,9 @@ function registerIpcHandlers(): void {
     return result
   })
   ipcMain.handle(IPC_CHANNELS.listSessions, () => sessionManager.listSessions())
+  ipcMain.handle(IPC_CHANNELS.getSessionTerminalReplay, (_event, sessionId) =>
+    sessionManager.getSessionTerminalReplay(sessionId),
+  )
   ipcMain.handle(IPC_CHANNELS.createProject, (_event, input) =>
     sessionManager.createProject(input),
   )
