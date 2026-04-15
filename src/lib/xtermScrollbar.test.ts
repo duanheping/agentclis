@@ -11,6 +11,8 @@ function buildTerminalRoot(): HTMLDivElement {
           <div class="slider"></div>
         </div>
       </div>
+      <div class="xterm-viewport"></div>
+      <div class="xterm-screen"></div>
     </div>
   `
 
@@ -44,9 +46,51 @@ describe('attachInteractiveXtermScrollbar', () => {
     expect(slider).not.toBeNull()
 
     xterm?.addEventListener('mousedown', terminalMouseDown)
-    slider?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    slider?.dispatchEvent(
+      new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
 
     expect(terminalMouseDown).not.toHaveBeenCalled()
+
+    dispose()
+  })
+
+  it('scrolls normal-buffer history even when xterm would otherwise consume the wheel event', () => {
+    const root = buildTerminalRoot()
+    const viewport = root.querySelector('.xterm-viewport') as HTMLDivElement
+    const screen = root.querySelector('.xterm-screen') as HTMLDivElement
+    const scrollLines = vi.fn()
+    const terminal = {
+      rows: 24,
+      scrollLines,
+      buffer: {
+        active: {
+          type: 'normal',
+          baseY: 10,
+        },
+      },
+    } as Parameters<typeof attachInteractiveXtermScrollbar>[1]
+
+    Object.defineProperty(viewport, 'clientHeight', {
+      configurable: true,
+      value: 360,
+    })
+
+    const dispose = attachInteractiveXtermScrollbar(root, terminal)
+
+    screen.dispatchEvent(
+      new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        deltaMode: WheelEvent.DOM_DELTA_LINE,
+        deltaY: -3,
+      }),
+    )
+
+    expect(scrollLines).toHaveBeenCalledWith(-3)
 
     dispose()
   })
