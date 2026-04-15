@@ -372,6 +372,10 @@ export class SessionManager {
   private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly inputTranscriptBuffers = new Map<string, string[]>()
   private readonly inputTranscriptTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly pendingSessionStartTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
@@ -492,7 +496,7 @@ export class SessionManager {
       this.scheduleBackgroundProjectMaintenance()
 
       if (this.activeSessionId) {
-        await this.ensureSessionStarted(this.activeSessionId)
+        this.scheduleSessionStart(this.activeSessionId)
       }
     }
 
@@ -688,7 +692,7 @@ export class SessionManager {
       this.touchRuntime(id)
     }
     this.persist()
-    await this.ensureSessionStarted(id)
+    this.scheduleSessionStart(id)
   }
 
   async restartSession(id: string): Promise<SessionSnapshot> {
@@ -721,6 +725,7 @@ export class SessionManager {
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
     this.cleanupCodexInstructions(id)
+    this.cancelScheduledSessionStart(id)
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
@@ -738,7 +743,7 @@ export class SessionManager {
     this.persist()
 
     if (nextActiveSessionId) {
-      await this.ensureSessionStarted(nextActiveSessionId)
+      this.scheduleSessionStart(nextActiveSessionId)
     }
 
     return {
@@ -802,6 +807,11 @@ export class SessionManager {
 
     this.projectMemory.dispose()
 
+    for (const timer of this.pendingSessionStartTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.pendingSessionStartTimers.clear()
+
     for (const sessionId of this.copilotInstructionsState.keys()) {
       this.cleanupCopilotInstructions(sessionId)
     }
@@ -812,6 +822,7 @@ export class SessionManager {
   }
 
   private async startSession(config: SessionConfig): Promise<void> {
+    this.cancelScheduledSessionStart(config.id)
     this.stopSession(config.id, true)
     this.cancelExternalSessionDetection(config.id)
     this.stopExternalSessionAttentionTracking(config.id)
@@ -978,6 +989,8 @@ export class SessionManager {
   }
 
   private async ensureSessionStarted(id: string): Promise<void> {
+    this.cancelScheduledSessionStart(id)
+
     if (this.terminals.has(id)) {
       return
     }
@@ -987,6 +1000,29 @@ export class SessionManager {
     }
 
     await this.startSession(this.requireConfig(id))
+  }
+
+  private scheduleSessionStart(id: string, delayMs = 0): void {
+    if (this.pendingSessionStartTimers.has(id)) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      this.pendingSessionStartTimers.delete(id)
+      void this.ensureSessionStarted(id).catch(() => undefined)
+    }, Math.max(0, delayMs))
+
+    this.pendingSessionStartTimers.set(id, timer)
+  }
+
+  private cancelScheduledSessionStart(id: string): void {
+    const timer = this.pendingSessionStartTimers.get(id)
+    if (!timer) {
+      return
+    }
+
+    clearTimeout(timer)
+    this.pendingSessionStartTimers.delete(id)
   }
 
   private stopSession(id: string, suppressExit: boolean): void {
