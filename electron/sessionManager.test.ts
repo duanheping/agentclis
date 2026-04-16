@@ -3461,6 +3461,7 @@ describe('SessionManager logical project identity and project context', () => {
 
     await expect(manager.getSessionTerminalReplay('session-a')).resolves.toEqual({
       chunks: ['history-1', 'history-2'],
+      source: 'transcript',
     })
     expect(transcriptStore.readTailEvents).toHaveBeenCalledWith('session-a', {
       kinds: ['output'],
@@ -3541,6 +3542,7 @@ describe('SessionManager logical project identity and project context', () => {
 
     await expect(manager.getSessionTerminalReplay('session-a')).resolves.toEqual({
       chunks: ['snapshot-line-1\r\nsnapshot-line-2'],
+      source: 'snapshot',
     })
     expect(terminalSnapshots.read).toHaveBeenCalledWith('session-a')
     expect(transcriptStore.readTailEvents).not.toHaveBeenCalled()

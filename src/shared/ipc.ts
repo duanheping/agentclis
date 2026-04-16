@@ -48,6 +48,7 @@ export interface ProjectSessionsAnalysisResult {
 
 export interface SessionTerminalReplay {
   chunks: string[]
+  source?: 'transcript' | 'snapshot'
 }
 
 export interface UpdateSessionTerminalSnapshotInput {

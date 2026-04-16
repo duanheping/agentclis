@@ -75,6 +75,26 @@ describe('TerminalRegistry', () => {
     terminalRegistry.forget('test-replay-writer')
   })
 
+  it('does not append buffered live chunks after a snapshot replay', () => {
+    const write = vi.fn()
+    const writeReplay = vi.fn()
+    const handle = { write, writeReplay, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }
+
+    terminalRegistry.write('test-snapshot-replay', '\x1b[2J')
+    terminalRegistry.write('test-snapshot-replay', 'resume-banner')
+    terminalRegistry.register(
+      'test-snapshot-replay',
+      handle,
+      ['restored snapshot'],
+      { source: 'snapshot' },
+    )
+
+    expect(writeReplay).toHaveBeenCalledOnce()
+    expect(writeReplay).toHaveBeenCalledWith('restored snapshot')
+    expect(write).not.toHaveBeenCalled()
+    terminalRegistry.forget('test-snapshot-replay')
+  })
+
   it('caps the buffer at 240 items using FIFO eviction', () => {
     const write = vi.fn()
     const handle = { write, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }

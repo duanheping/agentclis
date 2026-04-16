@@ -556,12 +556,15 @@ function TerminalSurface({
 
     void (async () => {
       let replayChunks: string[] = []
+      let replaySource: 'transcript' | 'snapshot' = 'transcript'
 
       try {
         const replay = await window.agentCli.getSessionTerminalReplay(terminalId)
         replayChunks = replay.chunks
+        replaySource = replay.source ?? 'transcript'
       } catch {
         replayChunks = []
+        replaySource = 'transcript'
       }
 
       if (disposed) {
@@ -569,7 +572,9 @@ function TerminalSurface({
       }
 
       suppressRestoreClear = replayChunks.length > 0
-      terminalRegistry.register(terminalId, terminalHandle, replayChunks)
+      terminalRegistry.register(terminalId, terminalHandle, replayChunks, {
+        source: replaySource,
+      })
       queueSnapshotCapture(0)
     })()
 
