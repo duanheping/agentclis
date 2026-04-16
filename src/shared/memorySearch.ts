@@ -76,6 +76,7 @@ export interface MemorySearchHit {
   timestampStart?: string | null
   timestampEnd?: string | null
   sourceLabel?: string | null
+  sourcePath?: string | null
 }
 
 export interface MemorySearchResult {

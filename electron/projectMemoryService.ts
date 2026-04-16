@@ -191,6 +191,34 @@ function dedupeKeyForSession(sessionId: string): string {
   return `session:${sessionId}`
 }
 
+function hasBootstrapContext(context: AssembledProjectContext): boolean {
+  return Boolean(
+    context.bootstrapMessage?.trim() ||
+    context.fileReferences.length > 0 ||
+    context.summaryExcerpt?.trim() ||
+    context.architectureExcerpt?.trim(),
+  )
+}
+
+function buildUnavailableContext(input: {
+  project: ProjectConfig
+  location: ProjectLocation | null
+  reason?: string
+}): AssembledProjectContext {
+  const reason = input.reason?.trim()
+  return {
+    projectId: input.project.id,
+    locationId: input.location?.id ?? null,
+    generatedAt: new Date().toISOString(),
+    bootstrapMessage:
+      reason
+        ? `[agenclis] Project memory is unavailable: ${reason}`
+        : '[agenclis] Project memory is unavailable.',
+    fileReferences: [],
+    summaryExcerpt: null,
+  }
+}
+
 export class ProjectMemoryService {
   private readonly store = new Store<PersistedProjectMemoryState>({
     name: 'agenclis-project-memory',
@@ -251,23 +279,63 @@ export class ProjectMemoryService {
     location: ProjectLocation | null
     query?: string
   }): Promise<AssembledProjectContext> {
+    const managerEnabled = this.manager.isEnabled()
+
     if (this.bootstrapComposer) {
-      return await this.bootstrapComposer.composeContext(input)
+      try {
+        const context = await this.bootstrapComposer.composeContext(input)
+        if (hasBootstrapContext(context)) {
+          return context
+        }
+        const emptyComposerMessage =
+          'MemPalace returned no startup context.'
+        this.recordDiagnostic({
+          timestamp: new Date().toISOString(),
+          level: 'warning',
+          code: 'bootstrap-composer-empty',
+          message: managerEnabled
+            ? `${emptyComposerMessage} Falling back to the legacy project memory backend.`
+            : `${emptyComposerMessage} The legacy project memory backend is not configured.`,
+          projectId: input.project.id,
+        })
+        if (!managerEnabled) {
+          return buildUnavailableContext({
+            ...input,
+            reason:
+              'MemPalace returned no startup context and the legacy project memory backend is not configured.',
+          })
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message.trim()
+            ? `MemPalace bootstrap composition failed: ${error.message.trim()}`
+            : 'MemPalace bootstrap composition failed.'
+        this.recordDiagnostic({
+          timestamp: new Date().toISOString(),
+          level: 'warning',
+          code: 'bootstrap-composer-failed',
+          message: managerEnabled
+            ? `${message} Falling back to the legacy project memory backend.`
+            : `${message} The legacy project memory backend is not configured.`,
+          projectId: input.project.id,
+        })
+        if (!managerEnabled) {
+          return buildUnavailableContext({
+            ...input,
+            reason: 'MemPalace bootstrap composition failed and the legacy project memory backend is not configured.',
+          })
+        }
+      }
     }
 
-    if (this.manager.isEnabled()) {
+    if (managerEnabled) {
       return await this.manager.assembleContext(input)
     }
 
-    return {
-      projectId: input.project.id,
-      locationId: input.location?.id ?? null,
-      generatedAt: new Date().toISOString(),
-      bootstrapMessage:
-        '[agenclis] Project memory is unavailable until the Skill Library root is configured.',
-      fileReferences: [],
-      summaryExcerpt: null,
-    }
+    return buildUnavailableContext({
+      ...input,
+      reason: 'No project memory backend is currently available.',
+    })
   }
 
   async captureSession(input: ProjectMemoryJobPayload): Promise<void> {

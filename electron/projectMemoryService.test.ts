@@ -186,14 +186,14 @@ describe('ProjectMemoryService', () => {
     service.dispose()
   })
 
-  it('keeps MemPalace as the authoritative bootstrap source when the composer returns no message', async () => {
+  it('falls back to legacy bootstrap assembly when the MemPalace composer is empty', async () => {
     const manager = {
       isEnabled: vi.fn(() => true),
       assembleContext: vi.fn(async () => ({
         projectId: 'project-1',
         locationId: 'location-1',
         generatedAt: '2026-03-22T12:00:00.000Z',
-        bootstrapMessage: 'Legacy bootstrap should not be used.',
+        bootstrapMessage: 'Legacy bootstrap fallback.',
         fileReferences: ['C:\\memory\\memory.md'],
         summaryExcerpt: 'Legacy summary',
       })),
@@ -230,9 +230,55 @@ describe('ProjectMemoryService', () => {
       location: buildLocation(),
     })
 
-    expect(context.bootstrapMessage).toBeNull()
+    expect(context.bootstrapMessage).toBe('Legacy bootstrap fallback.')
     expect(bootstrapComposer.composeContext).toHaveBeenCalledTimes(1)
+    expect(manager.assembleContext).toHaveBeenCalledTimes(1)
+    service.dispose()
+  })
+
+  it('records bootstrap composer failures instead of silently blaming the Skill Library root', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => false),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const bootstrapComposer = {
+      composeContext: vi.fn(async () => {
+        throw new Error('MemPalace runtime unavailable')
+      }),
+    }
+    const transcriptStore = buildTranscriptStore()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        bootstrapComposer,
+      },
+    )
+
+    const context = await service.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+
+    const persistedState = storeState.get() as {
+      diagnostics: Array<{ code: string; message: string }>
+    }
+    expect(context.bootstrapMessage).toContain('MemPalace bootstrap composition failed')
+    expect(context.bootstrapMessage).not.toContain('Skill Library root')
     expect(manager.assembleContext).not.toHaveBeenCalled()
+    expect(persistedState.diagnostics).toHaveLength(1)
+    expect(persistedState.diagnostics[0]?.code).toBe('bootstrap-composer-failed')
+    expect(persistedState.diagnostics[0]?.message).toContain('MemPalace runtime unavailable')
+
+    warnSpy.mockRestore()
     service.dispose()
   })
 
