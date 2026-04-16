@@ -219,6 +219,12 @@ function buildUnavailableContext(input: {
   }
 }
 
+function mempalaceBackendIsUnavailable(
+  status: MemoryBackendStatus | null,
+): boolean {
+  return Boolean(status && status.installState !== 'installed')
+}
+
 export class ProjectMemoryService {
   private readonly store = new Store<PersistedProjectMemoryState>({
     name: 'agenclis-project-memory',
@@ -280,6 +286,7 @@ export class ProjectMemoryService {
     query?: string
   }): Promise<AssembledProjectContext> {
     const managerEnabled = this.manager.isEnabled()
+    const backendStatus = await this.getMemoryBackendStatus()
 
     if (this.bootstrapComposer) {
       try {
@@ -287,23 +294,34 @@ export class ProjectMemoryService {
         if (hasBootstrapContext(context)) {
           return context
         }
-        const emptyComposerMessage =
-          'MemPalace returned no startup context.'
-        this.recordDiagnostic({
-          timestamp: new Date().toISOString(),
-          level: 'warning',
-          code: 'bootstrap-composer-empty',
-          message: managerEnabled
-            ? `${emptyComposerMessage} Falling back to the legacy project memory backend.`
-            : `${emptyComposerMessage} The legacy project memory backend is not configured.`,
-          projectId: input.project.id,
-        })
-        if (!managerEnabled) {
-          return buildUnavailableContext({
-            ...input,
-            reason:
-              'MemPalace returned no startup context and the legacy project memory backend is not configured.',
+        if (mempalaceBackendIsUnavailable(backendStatus)) {
+          if (!managerEnabled) {
+            return buildUnavailableContext({
+              ...input,
+              reason:
+                backendStatus?.message?.trim() ||
+                'MemPalace is not currently available.',
+            })
+          }
+        } else {
+          const emptyComposerMessage =
+            'MemPalace returned no startup context.'
+          this.recordDiagnostic({
+            timestamp: new Date().toISOString(),
+            level: 'warning',
+            code: 'bootstrap-composer-empty',
+            message: managerEnabled
+              ? `${emptyComposerMessage} Falling back to the legacy project memory backend.`
+              : `${emptyComposerMessage} The legacy project memory backend is not configured.`,
+            projectId: input.project.id,
           })
+          if (!managerEnabled) {
+            return buildUnavailableContext({
+              ...input,
+              reason:
+                'MemPalace returned no startup context and the legacy project memory backend is not configured.',
+            })
+          }
         }
       } catch (error) {
         const message =

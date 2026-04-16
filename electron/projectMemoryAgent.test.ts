@@ -135,6 +135,8 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('[older events omitted:')
     expect(prompt).not.toContain('event-0 output/pty')
     expect(prompt).toContain('Do not record ticket-specific progress state such as numbered PRs')
+    expect(prompt).toContain('Never reply with prose, commentary, confirmations, or markdown fences.')
+    expect(prompt).toContain('If you cannot justify any durable memory items, return {"summary":"","candidates":[]}.')
   })
 
   it('preserves decisive early-session corrections in the prompt evidence digest', () => {

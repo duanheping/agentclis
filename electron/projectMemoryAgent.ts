@@ -194,6 +194,8 @@ export function buildPrompt(
     [
       'You are extracting durable project memory from an Agent CLIs session.',
       'Return only structured JSON matching the provided schema.',
+      'Never reply with prose, commentary, confirmations, or markdown fences.',
+      'If you cannot justify any durable memory items, return {"summary":"","candidates":[]}.',
       'The goal is to reduce analysis time in future sessions.',
       'Use the transcript as the primary source, and inspect the repository when that helps sharpen the memory.',
       'Do not modify the repository.',

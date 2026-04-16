@@ -261,6 +261,32 @@ async function listAccessibleDirectories(
   return accessible
 }
 
+function tryExtractStructuredJson(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  try {
+    const candidate = extractJsonObject(trimmed)
+    JSON.parse(candidate)
+    return candidate
+  } catch {
+    return null
+  }
+}
+
+function pickBestStructuredOutput(...candidates: string[]): string {
+  for (const candidate of candidates) {
+    const structured = tryExtractStructuredJson(candidate)
+    if (structured) {
+      return structured
+    }
+  }
+
+  return candidates.find((candidate) => candidate.trim()) ?? ''
+}
+
 async function runCodexStructured(input: {
   tempRoot: string
   schemaPath: string
@@ -281,9 +307,10 @@ async function runCodexStructured(input: {
     input.outputPath,
     '-',
   ]
-  await runCommand('codex', input.tempRoot, args, input.prompt)
+  const stdout = await runCommand('codex', input.tempRoot, args, input.prompt)
+  const fileOutput = await readFile(input.outputPath, 'utf8').catch(() => '')
 
-  return await readFile(input.outputPath, 'utf8')
+  return pickBestStructuredOutput(fileOutput, stdout)
 }
 
 async function runClaudeStructured(input: {
@@ -419,12 +446,19 @@ async function runCopilotStructured(input: {
 
   const assistantMessage = extractCopilotAssistantMessage(stdout)
   if (assistantMessage.finalAnswer) {
-    return assistantMessage.finalAnswer
+    return pickBestStructuredOutput(
+      assistantMessage.finalAnswer,
+      assistantMessage.lastAssistantMessage ?? '',
+      stdout,
+    )
   }
 
   const fileOutput = await readFile(outputPath, 'utf8').catch(() => '')
-  const trimmedFileOutput = fileOutput.trim()
-  return trimmedFileOutput || assistantMessage.lastAssistantMessage || stdout
+  return pickBestStructuredOutput(
+    fileOutput,
+    assistantMessage.lastAssistantMessage ?? '',
+    stdout,
+  )
 }
 
 export async function runStructuredAgent(input: {

@@ -87,6 +87,27 @@ async function resolveCopilotPromptPath(
   return match[1]
 }
 
+async function resolveCodexOutputPath(
+  spawnCall: [string, string[], { cwd?: string }],
+): Promise<string> {
+  if (process.platform === 'win32') {
+    const scriptPath = spawnCall[1][3]
+    const script = await readFile(scriptPath, 'utf8')
+    const match = script.match(/--output-last-message\s+("?)(.+?response\.json)\1(?:\s|$)/u)
+    if (!match) {
+      throw new Error('Could not resolve Codex output path from the generated script.')
+    }
+    return match[2]
+  }
+
+  const outputIndex = spawnCall[1].indexOf('--output-last-message')
+  const outputPath = outputIndex >= 0 ? spawnCall[1][outputIndex + 1] : null
+  if (!outputPath) {
+    throw new Error('Could not resolve Codex output path from the spawn arguments.')
+  }
+  return outputPath
+}
+
 describe('structuredAgentRunner shutdown handling', () => {
   afterEach(() => {
     mocks.reset()
@@ -216,6 +237,32 @@ describe('structuredAgentRunner shutdown handling', () => {
     mocks.children[0]?.emit('close', 0)
 
     await expect(promise).resolves.toBe('{"status":"ok"}')
+  })
+
+  it('prefers structured Codex stdout when the saved last message is plain-text chatter', async () => {
+    const promise = runStructuredAgent({
+      agent: 'codex',
+      schema: '{"type":"object","properties":{"status":{"type":"string"}}}',
+      prompt: 'Summarize the repository.',
+      contextDirectories: [],
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const spawnCall = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { cwd?: string },
+    ]
+    const outputPath = await resolveCodexOutputPath(spawnCall)
+    await writeFile(outputPath, 'Done - I wrote the JSON.\n', 'utf8')
+
+    mocks.children[0]?.stdout.emit('data', Buffer.from('{"status":"from-stdout"}'))
+    mocks.children[0]?.emit('close', 0)
+
+    await expect(promise).resolves.toBe('{"status":"from-stdout"}')
   })
 
   it('falls back to the prompt-directed response file when no final copilot message is emitted', async () => {
