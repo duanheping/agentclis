@@ -12,9 +12,16 @@ import type {
   MemorySearchResult,
 } from '../src/shared/memorySearch'
 import type {
+  MempalaceMemoryRecord,
+  MempalaceStructuredIndexResult,
+  MempalaceStructuredMemoryInput,
   MempalaceSessionIndexResult,
   MempalaceTranscriptChunkInput,
   MempalaceTranscriptProvenanceRecord,
+} from '../src/shared/memoryIndex'
+import {
+  deriveMempalaceWing,
+  deriveMempalaceRoomForCandidateKind,
 } from '../src/shared/memoryIndex'
 import {
   MempalaceBridge,
@@ -35,7 +42,8 @@ const DEFAULT_INDEX_STATE_PATH = path.join(
 )
 
 interface MempalaceIndexState {
-  recordsByLookupKey: Record<string, MempalaceTranscriptProvenanceRecord>
+  recordsByLookupKey: Record<string, MempalaceMemoryRecord>
+  recordsBySourceFile: Record<string, MempalaceMemoryRecord>
 }
 
 interface RuntimeContract {
@@ -104,11 +112,38 @@ function buildLookupKey(wing: string, room: string, content: string): string {
   return hash.digest('hex')
 }
 
+function buildTranscriptSourceFile(sessionId: string, chunkIndex: number): string {
+  return `mempalace://transcript/${sessionId}/${chunkIndex}`
+}
+
+function buildSummarySourceFile(sessionId: string): string {
+  return `mempalace://summary/${sessionId}`
+}
+
+function buildCandidateSourceFile(
+  sessionId: string,
+  candidateKind: string,
+  candidateId: string,
+): string {
+  return `mempalace://candidate/${sessionId}/${candidateKind}/${candidateId}`
+}
+
+function buildSummarySourceLabel(): string {
+  return 'Session summary'
+}
+
+function buildCandidateSourceLabel(
+  candidateKind: string,
+  candidateKey: string,
+): string {
+  return `${candidateKind}:${candidateKey}`
+}
+
 function mapSearchHit(
   query: string,
   result: Record<string, unknown>,
   index: number,
-  provenance: MempalaceTranscriptProvenanceRecord | null,
+  provenance: MempalaceMemoryRecord | null,
 ): MemorySearchHit {
   const text = typeof result.text === 'string' ? result.text : ''
   const wing = typeof result.wing === 'string' ? result.wing : null
@@ -128,7 +163,7 @@ function mapSearchHit(
     distance,
     wing,
     room,
-    sourceLabel: sourceFile ?? provenance?.transcriptPath ?? null,
+    sourceLabel: provenance?.sourceLabel ?? sourceFile ?? null,
     projectId: provenance?.projectId ?? null,
     locationId: provenance?.locationId ?? null,
     sessionId: provenance?.sessionId ?? null,
@@ -199,11 +234,15 @@ export class MempalaceService {
     let indexedCount = 0
 
     for (const chunk of chunks) {
+      const sourceFile = buildTranscriptSourceFile(
+        input.session.id,
+        chunk.metadata.chunkIndex,
+      )
       const addResult = await this.bridge.addDrawer({
         wing: chunk.metadata.wing,
         room: chunk.metadata.room,
         content: chunk.content,
-        source_file: input.transcriptPath ?? `${input.session.id}.jsonl`,
+        source_file: sourceFile,
       })
       const success = addResult.success === true
       const palaceDrawerId =
@@ -222,10 +261,12 @@ export class MempalaceService {
         chunk.metadata.room,
         chunk.content,
       )
-      indexState.recordsByLookupKey[lookupKey] = {
+      const record: MempalaceTranscriptProvenanceRecord = {
         lookupKey,
         palaceDrawerId,
         drawerId: chunk.drawerId,
+        sourceFile,
+        sourceLabel: input.transcriptPath ?? `${input.session.id}.jsonl`,
         projectId: chunk.metadata.projectId,
         locationId: chunk.metadata.locationId,
         sessionId: chunk.metadata.sessionId,
@@ -238,7 +279,142 @@ export class MempalaceService {
         transcriptPath: input.transcriptPath ?? null,
         chunkIndex: chunk.metadata.chunkIndex,
       }
+      this.upsertRecord(indexState, record)
       indexedCount += 1
+    }
+
+    await this.persistIndexState(indexState)
+
+    return {
+      status: 'indexed',
+      sessionId: input.session.id,
+      indexedCount,
+      skippedCount: 0,
+      warning: null,
+    }
+  }
+
+  async indexStructuredSessionMemory(
+    input: MempalaceStructuredMemoryInput,
+  ): Promise<MempalaceStructuredIndexResult> {
+    const status = await this.runtime.getStatus()
+    if (status.installState !== 'installed') {
+      return {
+        status: 'deferred',
+        sessionId: input.session.id,
+        indexedCount: 0,
+        skippedCount: 0,
+        warning: status.message ?? 'MemPalace runtime is not installed.',
+      }
+    }
+
+    const wing = deriveMempalaceWing(input.project, input.location)
+    const indexState = await this.loadIndexState()
+    let indexedCount = 0
+
+    const summaryText = input.summary.summary.trim()
+    if (summaryText) {
+      const sourceFile = buildSummarySourceFile(input.session.id)
+      const addResult = await this.bridge.addDrawer({
+        wing,
+        room: 'session-summary',
+        content: summaryText,
+        source_file: sourceFile,
+      })
+      const success = addResult.success === true
+      const palaceDrawerId =
+        typeof addResult.drawer_id === 'string' ? addResult.drawer_id : null
+      if (!success || !palaceDrawerId) {
+        const message =
+          typeof addResult.error === 'string'
+            ? addResult.error
+            : 'MemPalace failed to add a session summary drawer.'
+        throw new Error(message)
+      }
+
+      const summaryRecord: MempalaceMemoryRecord = {
+        lookupKey: buildLookupKey(wing, 'session-summary', summaryText),
+        palaceDrawerId,
+        drawerId: `summary:${input.session.id}`,
+        sourceFile,
+        sourceLabel: buildSummarySourceLabel(),
+        projectId: input.project.id,
+        locationId: input.location?.id ?? null,
+        sessionId: input.session.id,
+        eventIds: [...input.summary.sourceEventIds],
+        timestampStart: input.summary.generatedAt,
+        timestampEnd: input.summary.generatedAt,
+        sourceKind: 'session-summary',
+        room: 'session-summary',
+        wing,
+      }
+      this.upsertRecord(indexState, summaryRecord)
+      indexedCount += 1
+    }
+
+    for (const candidate of input.candidates) {
+      const content = candidate.content.trim()
+      if (!content) {
+        continue
+      }
+
+      const room = deriveMempalaceRoomForCandidateKind(candidate.kind)
+      const sourceFile = buildCandidateSourceFile(
+        input.session.id,
+        candidate.kind,
+        candidate.id,
+      )
+      const addResult = await this.bridge.addDrawer({
+        wing,
+        room,
+        content,
+        source_file: sourceFile,
+      })
+      const success = addResult.success === true
+      const palaceDrawerId =
+        typeof addResult.drawer_id === 'string' ? addResult.drawer_id : null
+      if (!success || !palaceDrawerId) {
+        const message =
+          typeof addResult.error === 'string'
+            ? addResult.error
+            : 'MemPalace failed to add a structured memory drawer.'
+        throw new Error(message)
+      }
+
+      const record: MempalaceMemoryRecord = {
+        lookupKey: buildLookupKey(wing, room, content),
+        palaceDrawerId,
+        drawerId: candidate.id,
+        sourceFile,
+        sourceLabel: buildCandidateSourceLabel(candidate.kind, candidate.key),
+        projectId: candidate.projectId,
+        locationId: candidate.locationId,
+        sessionId: candidate.sourceSessionId,
+        eventIds: [...candidate.sourceEventIds],
+        timestampStart: candidate.createdAt,
+        timestampEnd: candidate.updatedAt,
+        sourceKind: candidate.kind,
+        room,
+        wing,
+        candidateId: candidate.id,
+        candidateKind: candidate.kind,
+        scope: candidate.scope,
+        memoryKey: candidate.key,
+        confidence: candidate.confidence,
+        status: candidate.status,
+      }
+      this.upsertRecord(indexState, record)
+      indexedCount += 1
+    }
+
+    if (indexedCount === 0) {
+      return {
+        status: 'skipped',
+        sessionId: input.session.id,
+        indexedCount: 0,
+        skippedCount: 0,
+        warning: null,
+      }
     }
 
     await this.persistIndexState(indexState)
@@ -293,9 +469,14 @@ export class MempalaceService {
           const text = typeof result.text === 'string' ? result.text : ''
           const wing = typeof result.wing === 'string' ? result.wing : ''
           const room = typeof result.room === 'string' ? result.room : ''
-          const provenance = indexState.recordsByLookupKey[
-            buildLookupKey(wing, room, text)
-          ] ?? null
+          const sourceFile =
+            typeof result.source_file === 'string' ? result.source_file : null
+          const provenance =
+            (sourceFile
+              ? indexState.recordsBySourceFile[sourceFile] ?? null
+              : null) ??
+            indexState.recordsByLookupKey[buildLookupKey(wing, room, text)] ??
+            null
           return mapSearchHit(query, result, index, provenance)
         })
 
@@ -343,18 +524,40 @@ export class MempalaceService {
     try {
       const content = await readFile(this.indexStatePath, 'utf8')
       const parsed = JSON.parse(content) as Partial<MempalaceIndexState>
+      const normalizedByLookupKey: Record<string, MempalaceMemoryRecord> = {}
+      const normalizedBySourceFile: Record<string, MempalaceMemoryRecord> = {}
       const records = parsed.recordsByLookupKey
+
       if (!records || typeof records !== 'object') {
-        return { recordsByLookupKey: {} }
+        return {
+          recordsByLookupKey: {},
+          recordsBySourceFile: {},
+        }
       }
 
-      const normalized: Record<string, MempalaceTranscriptProvenanceRecord> = {}
-      for (const [lookupKey, candidate] of Object.entries(records)) {
+      for (const candidate of Object.values(records)) {
         if (!candidate || typeof candidate !== 'object') {
           continue
         }
 
-        const record = candidate as Partial<MempalaceTranscriptProvenanceRecord>
+        const record = candidate as Partial<MempalaceMemoryRecord>
+        const sourceKind =
+          typeof record.sourceKind === 'string'
+            ? record.sourceKind
+            : 'transcript-raw'
+        const room =
+          typeof record.room === 'string'
+            ? record.room
+            : sourceKind === 'session-summary'
+              ? 'session-summary'
+              : 'transcript-raw'
+        const sourceFile =
+          typeof record.sourceFile === 'string'
+            ? record.sourceFile
+            : typeof record.chunkIndex === 'number' &&
+                typeof record.sessionId === 'string'
+              ? buildTranscriptSourceFile(record.sessionId, record.chunkIndex)
+              : null
         if (
           typeof record.lookupKey !== 'string' ||
           typeof record.palaceDrawerId !== 'string' ||
@@ -363,18 +566,24 @@ export class MempalaceService {
           typeof record.sessionId !== 'string' ||
           typeof record.timestampStart !== 'string' ||
           typeof record.timestampEnd !== 'string' ||
-          typeof record.room !== 'string' ||
           typeof record.wing !== 'string' ||
-          typeof record.chunkIndex !== 'number' ||
-          !Array.isArray(record.eventIds)
+          !Array.isArray(record.eventIds) ||
+          !sourceFile
         ) {
           continue
         }
 
-        normalized[lookupKey] = {
+        const normalizedRecord: MempalaceMemoryRecord = {
           lookupKey: record.lookupKey,
           palaceDrawerId: record.palaceDrawerId,
           drawerId: record.drawerId,
+          sourceFile,
+          sourceLabel:
+            typeof record.sourceLabel === 'string'
+              ? record.sourceLabel
+              : typeof record.transcriptPath === 'string'
+                ? record.transcriptPath
+                : null,
           projectId: record.projectId,
           locationId: typeof record.locationId === 'string' ? record.locationId : null,
           sessionId: record.sessionId,
@@ -383,20 +592,41 @@ export class MempalaceService {
           ),
           timestampStart: record.timestampStart,
           timestampEnd: record.timestampEnd,
-          sourceKind: 'transcript-raw',
-          room: 'transcript-raw',
+          sourceKind,
+          room,
           wing: record.wing,
+          candidateId:
+            typeof record.candidateId === 'string' ? record.candidateId : null,
+          candidateKind:
+            typeof record.candidateKind === 'string'
+              ? record.candidateKind
+              : null,
+          scope: typeof record.scope === 'string' ? record.scope : null,
+          memoryKey:
+            typeof record.memoryKey === 'string' ? record.memoryKey : null,
+          confidence:
+            typeof record.confidence === 'number' ? record.confidence : null,
+          status: typeof record.status === 'string' ? record.status : null,
           transcriptPath:
             typeof record.transcriptPath === 'string'
               ? record.transcriptPath
               : null,
-          chunkIndex: record.chunkIndex,
+          chunkIndex:
+            typeof record.chunkIndex === 'number' ? record.chunkIndex : undefined,
         }
+        normalizedByLookupKey[normalizedRecord.lookupKey] = normalizedRecord
+        normalizedBySourceFile[normalizedRecord.sourceFile] = normalizedRecord
       }
 
-      return { recordsByLookupKey: normalized }
+      return {
+        recordsByLookupKey: normalizedByLookupKey,
+        recordsBySourceFile: normalizedBySourceFile,
+      }
     } catch {
-      return { recordsByLookupKey: {} }
+      return {
+        recordsByLookupKey: {},
+        recordsBySourceFile: {},
+      }
     }
   }
 
@@ -407,5 +637,13 @@ export class MempalaceService {
       `${JSON.stringify(state, null, 2)}\n`,
     )
     this.indexStatePromise = Promise.resolve(state)
+  }
+
+  private upsertRecord(
+    state: MempalaceIndexState,
+    record: MempalaceMemoryRecord,
+  ): void {
+    state.recordsByLookupKey[record.lookupKey] = record
+    state.recordsBySourceFile[record.sourceFile] = record
   }
 }

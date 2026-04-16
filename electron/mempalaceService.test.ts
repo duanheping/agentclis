@@ -7,7 +7,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { MempalaceService } from './mempalaceService'
-import type { TranscriptEvent } from '../src/shared/projectMemory'
+import type {
+  ProjectMemoryCandidate,
+  SessionSummary,
+  TranscriptEvent,
+} from '../src/shared/projectMemory'
 
 const tempRoots: string[] = []
 
@@ -230,6 +234,165 @@ describe('MempalaceService', () => {
         sessionId: 'session-1',
         timestampStart: '2026-04-15T12:00:01.000Z',
         timestampEnd: '2026-04-15T12:00:02.000Z',
+      }),
+    )
+  })
+
+  it('indexes structured session summaries and candidates into MemPalace', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agentclis-mempalace-service-'))
+    tempRoots.push(tempRoot)
+
+    const runtime = {
+      getStatus: vi.fn().mockResolvedValue(buildStatus()),
+      installRuntime: vi.fn(),
+    }
+    const bridge = {
+      addDrawer: vi
+        .fn()
+        .mockResolvedValueOnce({
+          success: true,
+          drawer_id: 'drawer_summary',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          drawer_id: 'drawer_decision',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          drawer_id: 'drawer_preference',
+        }),
+      search: vi.fn().mockResolvedValue({
+        results: [
+          {
+            text: 'Captured durable memory from the session.',
+            wing: 'github.com/openai/agenclis',
+            room: 'session-summary',
+            source_file: 'mempalace://summary/session-1',
+            similarity: 0.96,
+          },
+          {
+            text: 'Keep using provider-native instructions for bootstrap injection.',
+            wing: 'github.com/openai/agenclis',
+            room: 'preference',
+            source_file: 'mempalace://candidate/session-1/project-convention/candidate-2',
+            similarity: 0.9,
+          },
+        ],
+      }),
+    }
+    const service = new MempalaceService(runtime, bridge, {
+      indexStatePath: path.join(tempRoot, 'provenance.json'),
+    })
+
+    const summary: SessionSummary = {
+      sessionId: 'session-1',
+      projectId: 'project-1',
+      locationId: 'location-1',
+      generatedAt: '2026-04-15T12:00:10.000Z',
+      extractionVersion: 2,
+      summary: 'Captured durable memory from the session.',
+      sourceEventIds: ['event-1', 'event-2'],
+    }
+    const candidates: ProjectMemoryCandidate[] = [
+      {
+        id: 'candidate-1',
+        projectId: 'project-1',
+        locationId: 'location-1',
+        kind: 'decision',
+        scope: 'project',
+        key: 'use-mempalace',
+        content: 'Use MemPalace as the durable retrieval backend.',
+        confidence: 0.94,
+        status: 'active',
+        createdAt: '2026-04-15T12:00:05.000Z',
+        updatedAt: '2026-04-15T12:00:10.000Z',
+        lastReinforcedAt: '2026-04-15T12:00:10.000Z',
+        sourceSessionId: 'session-1',
+        sourceEventIds: ['event-1', 'event-2'],
+      },
+      {
+        id: 'candidate-2',
+        projectId: 'project-1',
+        locationId: 'location-1',
+        kind: 'project-convention',
+        scope: 'project',
+        key: 'provider-native-bootstrap',
+        content: 'Keep using provider-native instructions for bootstrap injection.',
+        confidence: 0.91,
+        status: 'active',
+        createdAt: '2026-04-15T12:00:06.000Z',
+        updatedAt: '2026-04-15T12:00:10.000Z',
+        lastReinforcedAt: '2026-04-15T12:00:10.000Z',
+        sourceSessionId: 'session-1',
+        sourceEventIds: ['event-2'],
+      },
+    ]
+
+    const indexResult = await service.indexStructuredSessionMemory({
+      project: {
+        id: 'project-1',
+        title: 'agentclis',
+        rootPath: 'C:\\repo\\agentclis',
+        createdAt: '2026-04-15T12:00:00.000Z',
+        updatedAt: '2026-04-15T12:00:00.000Z',
+        identity: {
+          repoRoot: null,
+          gitCommonDir: null,
+          remoteFingerprint: 'github.com/openai/agenclis',
+        },
+      },
+      location: {
+        id: 'location-1',
+        projectId: 'project-1',
+        rootPath: 'C:\\repo\\agentclis',
+        repoRoot: null,
+        gitCommonDir: null,
+        remoteFingerprint: 'github.com/openai/agenclis',
+        label: 'agentclis',
+        createdAt: '2026-04-15T12:00:00.000Z',
+        updatedAt: '2026-04-15T12:00:00.000Z',
+        lastSeenAt: '2026-04-15T12:00:00.000Z',
+      },
+      session: {
+        id: 'session-1',
+        projectId: 'project-1',
+        locationId: 'location-1',
+        title: 'Codex',
+        startupCommand: 'codex',
+        pendingFirstPromptTitle: false,
+        cwd: 'C:\\repo\\agentclis',
+        shell: 'pwsh.exe',
+        createdAt: '2026-04-15T12:00:00.000Z',
+        updatedAt: '2026-04-15T12:00:00.000Z',
+      },
+      summary,
+      candidates,
+    })
+
+    expect(indexResult).toEqual(
+      expect.objectContaining({
+        status: 'indexed',
+        indexedCount: 3,
+      }),
+    )
+
+    const searchResult = await service.search({
+      query: 'bootstrap injection',
+      projectId: 'project-1',
+    })
+
+    expect(searchResult.hits[0]).toEqual(
+      expect.objectContaining({
+        room: 'session-summary',
+        sourceLabel: 'Session summary',
+        sessionId: 'session-1',
+      }),
+    )
+    expect(searchResult.hits[1]).toEqual(
+      expect.objectContaining({
+        room: 'preference',
+        sourceLabel: 'project-convention:provider-native-bootstrap',
+        sessionId: 'session-1',
       }),
     )
   })

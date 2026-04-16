@@ -308,6 +308,69 @@ describe('ProjectMemoryManager', () => {
     ).resolves.toContain(`"extractionVersion": ${PROJECT_MEMORY_EXTRACTION_VERSION}`)
   })
 
+  it('forwards the session summary and structured cards to the MemPalace sink', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
+    const structuredMemorySink = {
+      indexStructuredSessionMemory: vi.fn().mockResolvedValue(undefined),
+    }
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async () => ({
+        summary: 'Captured structured memory for bootstrap composition.',
+        candidates: [
+          {
+            kind: 'decision',
+            scope: 'project',
+            key: 'use-mempalace',
+            content: 'Use MemPalace for deep recall.',
+            confidence: 0.94,
+            sourceEventIds: ['event-1', 'event-2'],
+          },
+          {
+            kind: 'project-convention',
+            scope: 'project',
+            key: 'provider-bootstrap',
+            content: 'Keep provider-native bootstrap injection.',
+            confidence: 0.91,
+            sourceEventIds: ['event-2'],
+          },
+        ],
+      }),
+    })
+    manager.setStructuredMemorySink(structuredMemorySink)
+
+    await manager.captureSession({
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
+      transcript: buildTranscript(),
+    })
+
+    expect(structuredMemorySink.indexStructuredSessionMemory).toHaveBeenCalledTimes(1)
+    expect(structuredMemorySink.indexStructuredSessionMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: expect.objectContaining({ id: 'project-1' }),
+        location: expect.objectContaining({ id: 'location-1' }),
+        session: expect.objectContaining({ id: 'session-1' }),
+        summary: expect.objectContaining({
+          sessionId: 'session-1',
+          summary: 'Captured structured memory for bootstrap composition.',
+        }),
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'decision',
+            key: 'use-mempalace',
+          }),
+          expect.objectContaining({
+            kind: 'project-convention',
+            key: 'provider-bootstrap',
+          }),
+        ]),
+      }),
+    )
+  })
+
   it('writes focused memory docs and prefers synthesized architecture when an architecture extractor is configured', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)

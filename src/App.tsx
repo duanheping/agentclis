@@ -9,6 +9,7 @@ import { CreateSessionDialog } from './components/CreateSessionDialog'
 import { ProjectDiffPanel } from './components/ProjectDiffPanel'
 import { SessionSidebar } from './components/SessionSidebar'
 import { TerminalWorkspace } from './components/TerminalWorkspace'
+import { deriveMempalaceWing } from './shared/memoryIndex'
 import type { MemoryBackendStatus } from './shared/memorySearch'
 import type { MemoryReindexResult } from './shared/memorySearch'
 import type { MemorySearchResult } from './shared/memorySearch'
@@ -1642,9 +1643,13 @@ function App() {
     setMemorySearchErrorMessage(null)
 
     try {
+      const wing = activeProject
+        ? deriveMempalaceWing(activeProject.config)
+        : null
       const result = await agentCli.searchMemory({
         query: trimmedQuery,
         projectId: activeProject?.config.id ?? null,
+        wing,
       })
       setMemorySearchResult(result)
     } catch (error) {

@@ -284,6 +284,16 @@ export interface ProjectMemoryManagerOptions {
   staleAfterSessionCount?: number
 }
 
+export interface ProjectStructuredMemorySink {
+  indexStructuredSessionMemory(input: {
+    project: ProjectConfig
+    location: ProjectLocation | null
+    session: SessionConfig
+    summary: SessionSummary
+    candidates: ProjectMemoryCandidate[]
+  }): Promise<unknown>
+}
+
 interface StoredProjectRecord {
   id?: string
   title?: string
@@ -1872,6 +1882,7 @@ export class ProjectMemoryManager {
   private readonly maxCandidateBytes: number
   private readonly staleAfterSessionCount: number
   private diagnosticReporter?: ProjectMemoryDiagnosticReporter
+  private structuredMemorySink?: ProjectStructuredMemorySink
 
   constructor(
     getLibraryRoot: () => string,
@@ -1897,6 +1908,10 @@ export class ProjectMemoryManager {
 
   setDiagnosticReporter(reporter: ProjectMemoryDiagnosticReporter): void {
     this.diagnosticReporter = reporter
+  }
+
+  setStructuredMemorySink(sink: ProjectStructuredMemorySink | undefined): void {
+    this.structuredMemorySink = sink
   }
 
   isEnabled(): boolean {
@@ -2583,6 +2598,33 @@ export class ProjectMemoryManager {
       nextSnapshot,
       buildSummaryHistory([...summaryHistory, summary]),
     )
+    const structuredCardsForSession = [
+      ...stableFacts,
+      ...extractedCandidates,
+    ]
+
+    if (this.structuredMemorySink) {
+      try {
+        await this.structuredMemorySink.indexStructuredSessionMemory({
+          project: input.project,
+          location: input.location,
+          session: input.session,
+          summary,
+          candidates: structuredCardsForSession,
+        })
+      } catch (error) {
+        this.reportDiagnostic({
+          level: 'warning',
+          code: 'structured-memory-sink-failed',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Structured MemPalace indexing failed.',
+          projectId: input.project.id,
+          sessionId: input.session.id,
+        })
+      }
+    }
 
     await writeJsonFile(
       path.join(projectDirectory, 'summaries', `${input.session.id}.json`),

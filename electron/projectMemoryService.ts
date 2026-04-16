@@ -63,6 +63,13 @@ interface ProjectMemoryServiceDependencies {
       transcriptPath: string
     }): Promise<MempalaceSessionIndexResult>
   }
+  bootstrapComposer?: {
+    composeContext(input: {
+      project: ProjectConfig
+      location: ProjectLocation | null
+      query?: string
+    }): Promise<AssembledProjectContext>
+  }
 }
 
 const MAX_DIAGNOSTICS = 80
@@ -194,6 +201,7 @@ export class ProjectMemoryService {
   private readonly retryDelayMs: number
   private readonly maxAttempts: number
   private readonly memoryBackend?: ProjectMemoryServiceDependencies['memoryBackend']
+  private readonly bootstrapComposer?: ProjectMemoryServiceDependencies['bootstrapComposer']
 
   private state: PersistedProjectMemoryState
   private drainTimer: NodeJS.Timeout | null = null
@@ -216,6 +224,7 @@ export class ProjectMemoryService {
     this.retryDelayMs = options.retryDelayMs ?? 4_000
     this.maxAttempts = options.maxAttempts ?? 3
     this.memoryBackend = dependencies.memoryBackend
+    this.bootstrapComposer = dependencies.bootstrapComposer
     this.state = normalizePersistedState(this.store.store)
     this.store.set(structuredClone(this.state))
 
@@ -234,6 +243,10 @@ export class ProjectMemoryService {
     location: ProjectLocation | null
     query?: string
   }): Promise<AssembledProjectContext> {
+    if (this.manager.isEnabled() && this.bootstrapComposer) {
+      return await this.bootstrapComposer.composeContext(input)
+    }
+
     if (this.manager.isEnabled()) {
       return await this.manager.assembleContext(input)
     }

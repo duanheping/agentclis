@@ -900,6 +900,7 @@ describe('App skills settings', () => {
       expect(agentCli.searchMemory).toHaveBeenCalledWith({
         query: 'prior issue',
         projectId: 'project-1',
+        wing: 'project-1',
       })
     })
 

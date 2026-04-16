@@ -44,6 +44,7 @@ import { ProjectSessionHistoryAgentExtractor } from './projectSessionHistoryAgen
 import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
 import { ProjectIdentityResolver } from './projectIdentity'
 import { ProjectMemoryService } from './projectMemoryService'
+import { BootstrapComposer } from './bootstrapComposer'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { MempalaceRuntime } from './mempalaceRuntime'
 import { MempalaceBridge } from './mempalaceBridge'
@@ -105,12 +106,18 @@ const projectMemoryManager = new ProjectMemoryManager(
     () => skillLibraryManager.getSettings().primaryMergeAgent,
   ),
 )
+projectMemoryManager.setStructuredMemorySink(mempalaceService)
+const bootstrapComposer = new BootstrapComposer(
+  projectMemoryManager,
+  mempalaceService,
+)
 const projectMemoryService = new ProjectMemoryService(
   projectMemoryManager,
   transcriptStore,
   undefined,
   {
     memoryBackend: mempalaceService,
+    bootstrapComposer,
   },
 )
 const sessionManager = new SessionManager({
