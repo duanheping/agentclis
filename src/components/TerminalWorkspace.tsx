@@ -13,6 +13,7 @@ import { Terminal } from '@xterm/xterm'
 
 import {
   buildWindowsCommandPromptTerminalId,
+  isWindowsCommandPromptTerminalId,
   terminalRegistry,
 } from '../lib/terminalRegistry'
 import { getTerminalShortcutInput } from '../lib/terminalKeybindings'
@@ -388,6 +389,8 @@ function TerminalSurface({
 
   useEffect(() => {
     const container = containerRef.current!
+    const shouldPersistTerminalState =
+      !isWindowsCommandPromptTerminalId(terminalId)
     let terminal: Terminal | null = null
     let fitAddon: FitAddon | null = null
     let serializeAddon: SerializeAddon | null = null
@@ -407,7 +410,7 @@ function TerminalSurface({
         snapshotCaptureTimer = null
       }
 
-      if (!terminal) {
+      if (!shouldPersistTerminalState || !terminal) {
         return
       }
 
@@ -429,6 +432,10 @@ function TerminalSurface({
     }
 
     const queueSnapshotCapture = (delayMs = TERMINAL_SNAPSHOT_DEBOUNCE_MS) => {
+      if (!shouldPersistTerminalState) {
+        return
+      }
+
       if (snapshotCaptureTimer !== null) {
         window.clearTimeout(snapshotCaptureTimer)
       }
@@ -489,6 +496,10 @@ function TerminalSurface({
 
         terminal.clear()
         lastSnapshotSignature = null
+        if (!shouldPersistTerminalState) {
+          return
+        }
+
         window.agentCli.updateSessionTerminalSnapshot({
           sessionId: terminalId,
           text: '',
@@ -529,10 +540,12 @@ function TerminalSurface({
         | undefined
 
       try {
-        const replay = await window.agentCli.getSessionTerminalReplay(terminalId)
-        replayChunks = replay.chunks
-        replaySource = replay.source ?? 'transcript'
-        replaySnapshot = replay.snapshot
+        if (shouldPersistTerminalState) {
+          const replay = await window.agentCli.getSessionTerminalReplay(terminalId)
+          replayChunks = replay.chunks
+          replaySource = replay.source ?? 'transcript'
+          replaySnapshot = replay.snapshot
+        }
       } catch {
         replayChunks = []
         replaySource = 'transcript'

@@ -6,8 +6,14 @@ interface TerminalHandle {
   focus: () => void
 }
 
+const WINDOWS_COMMAND_PROMPT_TERMINAL_SUFFIX = ':windows-cmd'
+
 export function buildWindowsCommandPromptTerminalId(sessionId: string): string {
-  return `${sessionId}:windows-cmd`
+  return `${sessionId}${WINDOWS_COMMAND_PROMPT_TERMINAL_SUFFIX}`
+}
+
+export function isWindowsCommandPromptTerminalId(terminalId: string): boolean {
+  return terminalId.endsWith(WINDOWS_COMMAND_PROMPT_TERMINAL_SUFFIX)
 }
 
 class TerminalRegistry {
