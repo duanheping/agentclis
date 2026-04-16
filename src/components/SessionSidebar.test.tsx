@@ -259,6 +259,33 @@ describe('SessionSidebar', () => {
     cleanup()
   })
 
+  it('shows restore summaries before the raw startup command in session rows', () => {
+    const project = buildProject()
+    project.sessions[0] = {
+      ...project.sessions[0],
+      restore: {
+        statusSummary: 'Session finished.',
+        lastMeaningfulReply: null,
+        resultSummary: 'Review ready with the latest result summary.',
+        blockedReason: null,
+        lastError: null,
+        updatedAt: '2026-03-11T00:05:00.000Z',
+        hasTranscript: true,
+        hasTerminalReplay: true,
+      },
+    }
+
+    renderSidebar({
+      projects: [project],
+      showProjectPaths: false,
+    })
+
+    expect(
+      screen.getByText('Review ready with the latest result summary.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/^codex$/i)).not.toBeInTheDocument()
+  })
+
   it('collapses the active project when its header is clicked', async () => {
     const user = userEvent.setup()
 
