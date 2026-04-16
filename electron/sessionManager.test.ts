@@ -3470,6 +3470,145 @@ describe('SessionManager logical project identity and project context', () => {
     })
   })
 
+  it('prefers a persisted terminal snapshot over transcript replay', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readTailEvents: vi.fn(
+        async (): Promise<TranscriptEvent[]> => [
+          {
+            id: 'event-1',
+            sessionId: 'session-a',
+            projectId: 'project-1',
+            locationId: null,
+            timestamp: '2026-03-22T12:00:00.000Z',
+            kind: 'output',
+            source: 'pty',
+            chunk: 'history-1',
+          },
+        ],
+      ),
+    }
+    const terminalSnapshots = {
+      read: vi.fn(async () => ({
+        sessionId: 'session-a',
+        text: 'snapshot-line-1\r\nsnapshot-line-2',
+        lineCount: 2,
+        cols: 120,
+        rows: 36,
+        capturedAt: '2026-04-15T20:30:00.000Z',
+      })),
+      write: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        transcriptStore,
+        terminalSnapshots,
+      },
+    )
+
+    await expect(manager.getSessionTerminalReplay('session-a')).resolves.toEqual({
+      chunks: ['snapshot-line-1\r\nsnapshot-line-2'],
+    })
+    expect(terminalSnapshots.read).toHaveBeenCalledWith('session-a')
+    expect(transcriptStore.readTailEvents).not.toHaveBeenCalled()
+  })
+
+  it('stores renderer terminal snapshots for existing sessions', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const terminalSnapshots = {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        terminalSnapshots,
+      },
+    )
+
+    await manager.updateTerminalSnapshot({
+      sessionId: 'session-a',
+      text: 'snapshot',
+      lineCount: 1,
+      cols: 120,
+      rows: 36,
+      capturedAt: '2026-04-15T20:30:00.000Z',
+    })
+
+    expect(terminalSnapshots.write).toHaveBeenCalledWith({
+      sessionId: 'session-a',
+      text: 'snapshot',
+      lineCount: 1,
+      cols: 120,
+      rows: 36,
+      capturedAt: '2026-04-15T20:30:00.000Z',
+    })
+  })
+
   it('queues project memory capture when a session is closed', async () => {
     const transcriptEvents: TranscriptEvent[] = []
     const transcriptStore = {

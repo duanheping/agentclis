@@ -50,10 +50,20 @@ export interface SessionTerminalReplay {
   chunks: string[]
 }
 
+export interface UpdateSessionTerminalSnapshotInput {
+  sessionId: string
+  text: string
+  lineCount: number
+  cols: number
+  rows: number
+  capturedAt: string
+}
+
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
   listSessions: 'session:list',
   getSessionTerminalReplay: 'session:terminal-replay',
+  updateSessionTerminalSnapshot: 'session:terminal-snapshot-update',
   createProject: 'project:create',
   createSession: 'session:create',
   renameSession: 'session:rename',
@@ -109,6 +119,7 @@ export interface AgentCliApi {
   restoreSessions(): Promise<ListSessionsResponse>
   listSessions(): Promise<ListSessionsResponse>
   getSessionTerminalReplay(sessionId: string): Promise<SessionTerminalReplay>
+  updateSessionTerminalSnapshot(input: UpdateSessionTerminalSnapshotInput): void
   createProject(input: CreateProjectInput): Promise<ProjectSnapshot>
   createSession(input: CreateSessionInput): Promise<SessionSnapshot>
   renameSession(id: string, title: string): Promise<SessionSnapshot>

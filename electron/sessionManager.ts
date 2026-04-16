@@ -10,6 +10,7 @@ import type {
   ProjectArchitectureAnalysisResult,
   ProjectSessionsAnalysisResult,
   SessionTerminalReplay,
+  UpdateSessionTerminalSnapshotInput,
 } from '../src/shared/ipc'
 import {
   buildRuntime,
@@ -68,6 +69,7 @@ import type { ProjectMemoryService } from './projectMemoryService'
 import { resolveProjectMemoryCapability } from './providerCapabilityResolver'
 import { createProjectSessionWorktree } from './projectWorktree'
 import type { TranscriptStore } from './transcriptStore'
+import type { TerminalSnapshotStore } from './terminalSnapshotStore'
 import {
   buildShellArgs,
   resolveShellCommand,
@@ -271,6 +273,7 @@ interface SessionManagerServices {
   }
   transcriptStore?: Pick<TranscriptStore, 'append'> &
     Partial<Pick<TranscriptStore, 'readTailEvents'>>
+  terminalSnapshots?: Pick<TerminalSnapshotStore, 'read' | 'write' | 'delete'>
   projectMemory?: Pick<
     ProjectMemoryService,
     | 'analyzeHistoricalArchitecture'
@@ -333,6 +336,12 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
   dispose: () => undefined,
 }
 
+const noopTerminalSnapshotStore: NonNullable<SessionManagerServices['terminalSnapshots']> = {
+  read: async () => null,
+  write: async () => undefined,
+  delete: async () => undefined,
+}
+
 export class SessionManager {
   private readonly store = new Store<PersistedSessionState>({
     name: 'agenclis-sessions',
@@ -379,6 +388,7 @@ export class SessionManager {
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
   private readonly transcriptStore: NonNullable<SessionManagerServices['transcriptStore']>
+  private readonly terminalSnapshots: NonNullable<SessionManagerServices['terminalSnapshots']>
   private readonly projectMemory: NonNullable<SessionManagerServices['projectMemory']>
 
   private activeSessionId: string | null
@@ -390,6 +400,8 @@ export class SessionManager {
     this.events = events
     this.identityResolver = services.identityResolver ?? defaultIdentityResolver
     this.transcriptStore = services.transcriptStore ?? noopTranscriptStore
+    this.terminalSnapshots =
+      services.terminalSnapshots ?? noopTerminalSnapshotStore
     this.projectMemory = services.projectMemory ?? noopProjectMemory
     const persisted = this.store.store
     this.activeSessionId = persisted.activeSessionId
@@ -506,6 +518,13 @@ export class SessionManager {
   async getSessionTerminalReplay(id: string): Promise<SessionTerminalReplay> {
     this.requireConfig(id)
 
+    const snapshot = await this.terminalSnapshots.read(id)
+    if (snapshot?.text.trim()) {
+      return {
+        chunks: [snapshot.text],
+      }
+    }
+
     const events =
       (await this.transcriptStore.readTailEvents?.(id, {
         kinds: ['output'],
@@ -517,6 +536,16 @@ export class SessionManager {
     return {
       chunks: events.flatMap((event) => (event.chunk ? [event.chunk] : [])),
     }
+  }
+
+  async updateTerminalSnapshot(
+    input: UpdateSessionTerminalSnapshotInput,
+  ): Promise<void> {
+    if (!this.configs.has(input.sessionId)) {
+      return
+    }
+
+    await this.terminalSnapshots.write(input)
   }
 
   getProjectConfigs(): ProjectConfig[] {
@@ -731,6 +760,7 @@ export class SessionManager {
     this.copilotInstructionSnapshots.delete(id)
     this.configs.delete(id)
     this.runtimes.delete(id)
+    await this.terminalSnapshots.delete(id)
 
     if (this.activeSessionId === id) {
       this.activeSessionId =
