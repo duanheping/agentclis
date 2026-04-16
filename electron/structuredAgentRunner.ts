@@ -335,6 +335,50 @@ function buildCopilotPromptContent(input: {
   return parts.join('\n')
 }
 
+function extractCopilotAssistantMessage(raw: string): {
+  finalAnswer: string | null
+  lastAssistantMessage: string | null
+} {
+  const lines = raw
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  let lastAssistantMessage: string | null = null
+
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as {
+        type?: string
+        data?: {
+          content?: unknown
+          phase?: unknown
+        }
+      }
+      if (
+        event?.type === 'assistant.message' &&
+        typeof event.data?.content === 'string' &&
+        event.data.content.trim()
+      ) {
+        const content = event.data.content.trim()
+        if (event.data?.phase === 'final_answer') {
+          return {
+            finalAnswer: content,
+            lastAssistantMessage,
+          }
+        }
+        lastAssistantMessage = content
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return {
+    finalAnswer: null,
+    lastAssistantMessage,
+  }
+}
+
 async function runCopilotStructured(input: {
   tempRoot: string
   schema: string
@@ -361,6 +405,11 @@ async function runCopilotStructured(input: {
       '--allow-all',
       '--no-ask-user',
       '--no-custom-instructions',
+      '--output-format',
+      'json',
+      '--stream',
+      'off',
+      '--silent',
       ...input.contextDirectories.flatMap((directory) => ['--add-dir', directory]),
       '--prompt',
       `Read and follow all instructions in the file at ${promptPath}.`,
@@ -368,8 +417,14 @@ async function runCopilotStructured(input: {
     null,
   )
 
+  const assistantMessage = extractCopilotAssistantMessage(stdout)
+  if (assistantMessage.finalAnswer) {
+    return assistantMessage.finalAnswer
+  }
+
   const fileOutput = await readFile(outputPath, 'utf8').catch(() => '')
-  return fileOutput.trim() ? fileOutput : stdout
+  const trimmedFileOutput = fileOutput.trim()
+  return trimmedFileOutput || assistantMessage.lastAssistantMessage || stdout
 }
 
 export async function runStructuredAgent(input: {
