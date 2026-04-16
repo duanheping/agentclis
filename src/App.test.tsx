@@ -3,11 +3,19 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockTerminalWorkspace = vi.hoisted(() => vi.fn())
+const mockSessionReviewPanel = vi.hoisted(() => vi.fn())
 
 vi.mock('./components/TerminalWorkspace', () => ({
   TerminalWorkspace: (props: unknown) => {
     mockTerminalWorkspace(props)
     return <div data-testid="terminal-workspace" />
+  },
+}))
+
+vi.mock('./components/SessionReviewPanel', () => ({
+  SessionReviewPanel: (props: { open?: boolean }) => {
+    mockSessionReviewPanel(props)
+    return props.open ? <div data-testid="session-review-panel" /> : null
   },
 }))
 
@@ -338,6 +346,9 @@ function createAgentCliMock(
     restoreSessions: vi.fn().mockResolvedValue(workspacePayload),
     listSessions: vi.fn().mockResolvedValue(workspacePayload),
     getSessionTerminalReplay: vi.fn().mockResolvedValue({ chunks: [] }),
+    getSessionTranscriptPage: vi
+      .fn()
+      .mockResolvedValue({ events: [], nextCursor: null }),
     updateSessionTerminalSnapshot: vi.fn(),
     createProject: vi.fn().mockResolvedValue(undefined),
     createSession: vi.fn().mockResolvedValue(undefined),
@@ -544,6 +555,7 @@ describe('App skills settings', () => {
   beforeEach(() => {
     notificationSpy.mockReset()
     mockTerminalWorkspace.mockClear()
+    mockSessionReviewPanel.mockClear()
     window.localStorage.clear()
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -1042,6 +1054,112 @@ describe('App skills settings', () => {
     )
   })
 
+  it('opens the review panel and closes the diff panel from the top bar', async () => {
+    const user = userEvent.setup()
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    const { agentCli } = createAgentCliMock(workspacePayload)
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'Toggle review panel' })
+
+    await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Changes')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Toggle review panel' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-review-panel')).toBeInTheDocument()
+      expect(screen.queryByText('Changes')).not.toBeInTheDocument()
+    })
+  })
+
+  it('keeps a persisted review-panel preference through hydration', async () => {
+    const workspacePayload: ListSessionsResponse = {
+      projects: [
+        {
+          config: {
+            id: 'project-1',
+            title: 'agenclis',
+            rootPath: 'C:\\repo\\agenclis',
+            createdAt: '2026-03-13T16:00:00.000Z',
+            updatedAt: '2026-03-13T16:00:00.000Z',
+          },
+          sessions: [
+            {
+              config: {
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'Codex',
+                startupCommand: 'codex',
+                pendingFirstPromptTitle: false,
+                cwd: 'C:\\repo\\agenclis',
+                shell: 'powershell.exe',
+                createdAt: '2026-03-13T16:00:00.000Z',
+                updatedAt: '2026-03-13T16:00:00.000Z',
+              },
+              runtime: {
+                sessionId: 'session-1',
+                status: 'running',
+                lastActiveAt: '2026-03-13T16:00:00.000Z',
+              },
+            },
+          ],
+        },
+      ],
+      activeSessionId: 'session-1',
+    }
+
+    window.localStorage.setItem('agenclis:review-panel-open', 'true')
+    const { agentCli } = createAgentCliMock(workspacePayload)
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-review-panel')).toBeInTheDocument()
+    })
+  })
+
   it('switches branches from the top bar branch menu', async () => {
     const user = userEvent.setup()
     const workspacePayload: ListSessionsResponse = {
@@ -1518,12 +1636,12 @@ describe('App skills settings', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Changes')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Resize diff panel' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Resize side panel' })).toBeInTheDocument()
     })
 
     mockElementRect(workspaceBody!, { left: 0, width: 1040, height: 900 })
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize diff panel' }), {
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize side panel' }), {
       clientX: 620,
     })
     fireEvent.pointerMove(window, { clientX: 560 })
@@ -1544,6 +1662,7 @@ describe('App permission dropdown', () => {
 
   beforeEach(() => {
     mockTerminalWorkspace.mockClear()
+    mockSessionReviewPanel.mockClear()
     window.localStorage.clear()
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,

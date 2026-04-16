@@ -83,9 +83,21 @@ export interface SessionRuntime {
   lastActiveAt: string
 }
 
+export interface SessionRestoreSnapshot {
+  statusSummary: string
+  lastMeaningfulReply: string | null
+  resultSummary: string | null
+  blockedReason: string | null
+  lastError: string | null
+  updatedAt: string
+  hasTranscript: boolean
+  hasTerminalReplay: boolean
+}
+
 export interface SessionSnapshot {
   config: SessionConfig
   runtime: SessionRuntime
+  restore?: SessionRestoreSnapshot
 }
 
 export interface ProjectSnapshot {

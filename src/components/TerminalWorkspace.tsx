@@ -77,6 +77,11 @@ function buildEmptyTerminalReplay(): SessionTerminalReplay {
   }
 }
 
+interface RestoreCardDetail {
+  label: string
+  value: string
+}
+
 function writeTerminalChunk(
   terminal: Pick<Terminal, 'write'>,
   data: string,
@@ -152,6 +157,97 @@ async function getTerminalReplayWithTimeout(
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
+}
+
+function buildRestoreCardDetails(session: SessionSnapshot): RestoreCardDetail[] {
+  const restore = session.restore
+  if (!restore) {
+    return []
+  }
+
+  const details: RestoreCardDetail[] = []
+
+  if (restore.blockedReason) {
+    details.push({
+      label: 'Attention',
+      value: restore.blockedReason,
+    })
+  }
+
+  if (restore.lastError) {
+    details.push({
+      label: 'Last error',
+      value: restore.lastError,
+    })
+  } else if (restore.resultSummary) {
+    details.push({
+      label: 'Result',
+      value: restore.resultSummary,
+    })
+  }
+
+  if (restore.lastMeaningfulReply) {
+    details.push({
+      label: 'Latest reply',
+      value: restore.lastMeaningfulReply,
+    })
+  }
+
+  return details.slice(0, 2)
+}
+
+function shouldShowRestoreCard(session: SessionSnapshot): boolean {
+  if (!session.restore) {
+    return false
+  }
+
+  if (
+    session.restore.blockedReason ||
+    session.restore.lastError ||
+    session.restore.resultSummary ||
+    session.restore.lastMeaningfulReply
+  ) {
+    return true
+  }
+
+  return (
+    session.runtime.status !== 'running' ||
+    session.runtime.awaitingResponse === true ||
+    (session.runtime.attention ?? null) !== null
+  )
+}
+
+function SessionRestoreCard({ session }: { session: SessionSnapshot }) {
+  if (!shouldShowRestoreCard(session) || !session.restore) {
+    return null
+  }
+
+  const details = buildRestoreCardDetails(session)
+
+  return (
+    <div className="terminal-workspace__restore-card" aria-label="Session restore summary">
+      <div className="terminal-workspace__restore-header">
+        <p className="terminal-workspace__restore-eyebrow">Restored state</p>
+        <h2 className="terminal-workspace__restore-title">{session.config.title}</h2>
+      </div>
+      <p className="terminal-workspace__restore-status">
+        {session.restore.statusSummary}
+      </p>
+      {details.length > 0 ? (
+        <div className="terminal-workspace__restore-details">
+          {details.map((detail) => (
+            <div
+              key={`${detail.label}:${detail.value}`}
+              className="terminal-workspace__restore-detail"
+            >
+              <span className="terminal-workspace__restore-label">{detail.label}</span>
+              <span className="terminal-workspace__restore-value">{detail.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function readTerminalSplitRatioPreference(): number {
@@ -332,20 +428,23 @@ export function TerminalWorkspace({
   return (
     <div ref={workspaceRef} className="terminal-workspace">
       {activeSession ? (
-        <SessionTerminalStack
-          key={activeSession.config.id}
-          sessionId={activeSession.config.id}
-          active
-          showWindowsCommandPrompt={windowsCommandPromptSessionIds.includes(
-            activeSession.config.id,
-          )}
-          splitRatio={splitRatio}
-          focusTerminalId={focusTerminalId}
-          focusTerminalSequence={focusTerminalSequence}
-          onFocusTerminalHandled={onFocusTerminalHandled}
-          onSplitResizerPointerDown={handleSplitResizerPointerDown}
-          onSplitResizerKeyDown={handleSplitResizerKeyDown}
-        />
+        <>
+          <SessionRestoreCard session={activeSession} />
+          <SessionTerminalStack
+            key={activeSession.config.id}
+            sessionId={activeSession.config.id}
+            active
+            showWindowsCommandPrompt={windowsCommandPromptSessionIds.includes(
+              activeSession.config.id,
+            )}
+            splitRatio={splitRatio}
+            focusTerminalId={focusTerminalId}
+            focusTerminalSequence={focusTerminalSequence}
+            onFocusTerminalHandled={onFocusTerminalHandled}
+            onSplitResizerPointerDown={handleSplitResizerPointerDown}
+            onSplitResizerKeyDown={handleSplitResizerKeyDown}
+          />
+        </>
       ) : null}
     </div>
   )

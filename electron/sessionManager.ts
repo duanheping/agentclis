@@ -7,8 +7,10 @@ import path from 'node:path'
 import Store from 'electron-store'
 
 import type {
+  GetSessionTranscriptPageInput,
   ProjectArchitectureAnalysisResult,
   ProjectSessionsAnalysisResult,
+  SessionTranscriptPage,
   SessionTerminalReplay,
   UpdateSessionTerminalSnapshotInput,
 } from '../src/shared/ipc'
@@ -30,6 +32,7 @@ import {
   type SessionDataEvent,
   type SessionAttentionKind,
   type SessionExitMeta,
+  type SessionRestoreSnapshot,
   type SessionRuntime,
   type SessionRuntimeEvent,
   type SessionSnapshot,
@@ -77,6 +80,14 @@ import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
 import { resolveProjectMemoryCapability } from './providerCapabilityResolver'
 import { createProjectSessionWorktree } from './projectWorktree'
+import {
+  applyRuntimeToSessionRestoreSnapshot,
+  applyTerminalReplayToSessionRestoreSnapshot,
+  applyTranscriptEventToSessionRestoreSnapshot,
+  buildSessionRestoreSnapshot,
+  normalizeSessionRestoreSnapshot,
+  sessionRestoreSnapshotsEqual,
+} from './sessionRestoreSnapshot'
 import type { TranscriptStore } from './transcriptStore'
 import type { TerminalSnapshotStore } from './terminalSnapshotStore'
 import {
@@ -168,6 +179,8 @@ const TOUCH_RUNTIME_DEBOUNCE_MS = 300
 const INPUT_TRANSCRIPT_FLUSH_MS = 250
 const SESSION_TERMINAL_REPLAY_MAX_BYTES = 2 * 1024 * 1024
 const SESSION_TERMINAL_REPLAY_MAX_EVENTS = 5_000
+const SESSION_RESTORE_BACKFILL_MAX_BYTES = 128 * 1024
+const SESSION_RESTORE_BACKFILL_MAX_EVENTS = 80
 const ANSI_ESCAPE_REGEX = new RegExp(
   `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
   'gu',
@@ -265,6 +278,7 @@ interface PersistedSessionState {
   locations: ProjectLocation[]
   sessions: StoredSessionConfig[]
   runtimes: Array<Pick<SessionRuntime, 'sessionId' | 'lastActiveAt'>>
+  restoreSnapshots?: Record<string, SessionRestoreSnapshot>
   copilotInstructionSnapshots?: Record<string, string>
   activeSessionId: string | null
 }
@@ -281,7 +295,7 @@ interface SessionManagerServices {
     inspect: (rootPath: string) => Promise<ProjectLocationIdentity>
   }
   transcriptStore?: Pick<TranscriptStore, 'append'> &
-    Partial<Pick<TranscriptStore, 'readTailEvents'>>
+    Partial<Pick<TranscriptStore, 'readTailEvents' | 'readEventsPage'>>
   terminalSnapshots?: Pick<TerminalSnapshotStore, 'read' | 'write' | 'delete'>
   projectMemory?: Pick<
     ProjectMemoryService,
@@ -313,6 +327,10 @@ const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResol
 const noopTranscriptStore: NonNullable<SessionManagerServices['transcriptStore']> = {
   append: async () => undefined,
   readTailEvents: async () => [],
+  readEventsPage: async () => ({
+    events: [],
+    nextCursor: null,
+  }),
 }
 
 const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = {
@@ -369,6 +387,7 @@ export class SessionManager {
   private readonly locations = new Map<string, ProjectLocation>()
   private readonly configs = new Map<string, SessionConfig>()
   private readonly runtimes = new Map<string, SessionRuntime>()
+  private readonly restoreSnapshots = new Map<string, SessionRestoreSnapshot>()
   private readonly terminals = new Map<string, IPty>()
   private readonly pendingFirstPromptBuffers = new Map<string, string>()
   private readonly liveAttentionBuffers = new Map<string, string>()
@@ -408,6 +427,7 @@ export class SessionManager {
 
   private activeSessionId: string | null
   private restored = false
+  private restoreSnapshotBackfillStarted = false
   private identityRefreshTimer: NodeJS.Timeout | null = null
   private memoryBackfillTimer: NodeJS.Timeout | null = null
 
@@ -467,14 +487,25 @@ export class SessionManager {
         hydratedConfig.updatedAt ||
         hydratedConfig.createdAt
       this.configs.set(hydratedConfig.id, hydratedConfig)
-      this.runtimes.set(
+      const hydratedRuntime = buildRuntime(
         hydratedConfig.id,
-        buildRuntime(hydratedConfig.id, 'exited', restoredLastActiveAt),
+        'exited',
+        restoredLastActiveAt,
       )
+      this.runtimes.set(hydratedConfig.id, hydratedRuntime)
+      const normalizedRestoreSnapshot = normalizeSessionRestoreSnapshot(
+        persisted.restoreSnapshots?.[hydratedConfig.id],
+        hydratedRuntime,
+      )
+      this.restoreSnapshots.set(hydratedConfig.id, normalizedRestoreSnapshot)
       this.claimExternalSession(hydratedConfig)
       this.trackHistoricalExternalSessionRecovery(hydratedConfig)
 
       if (
+        !sessionRestoreSnapshotsEqual(
+          persisted.restoreSnapshots?.[hydratedConfig.id],
+          normalizedRestoreSnapshot,
+        ) ||
         persistedRuntime?.lastActiveAt !== restoredLastActiveAt ||
         config.projectId !== hydratedConfig.projectId ||
         config.title !== hydratedConfig.title ||
@@ -521,6 +552,10 @@ export class SessionManager {
     if (!this.restored) {
       this.restored = true
       this.scheduleBackgroundProjectMaintenance()
+      if (!this.restoreSnapshotBackfillStarted) {
+        this.restoreSnapshotBackfillStarted = true
+        void this.backfillRestoreSnapshotsFromTranscriptTail().catch(() => undefined)
+      }
 
       if (this.activeSessionId) {
         this.scheduleSessionStart(this.activeSessionId)
@@ -573,6 +608,21 @@ export class SessionManager {
     }
   }
 
+  async getSessionTranscriptPage(
+    input: GetSessionTranscriptPageInput,
+  ): Promise<SessionTranscriptPage> {
+    this.requireConfig(input.sessionId)
+    return await this.transcriptStore.readEventsPage?.(input.sessionId, {
+      cursor: input.cursor,
+      limit: input.limit,
+      kinds: input.kinds,
+      search: input.search,
+    }) ?? {
+      events: [],
+      nextCursor: null,
+    }
+  }
+
   async updateTerminalSnapshot(
     input: UpdateSessionTerminalSnapshotInput,
   ): Promise<void> {
@@ -581,6 +631,11 @@ export class SessionManager {
     }
 
     await this.terminalSnapshots.write(input)
+    this.updateRestoreSnapshot(
+      input.sessionId,
+      (current) =>
+        applyTerminalReplayToSessionRestoreSnapshot(current, input.capturedAt),
+    )
   }
 
   getProjectConfigs(): ProjectConfig[] {
@@ -714,7 +769,9 @@ export class SessionManager {
     }
 
     this.configs.set(id, config)
-    this.runtimes.set(id, buildRuntime(id))
+    const initialRuntime = buildRuntime(id)
+    this.runtimes.set(id, initialRuntime)
+    this.restoreSnapshots.set(id, buildSessionRestoreSnapshot(initialRuntime))
     this.touchProject(project.id, now)
     this.activeSessionId = id
     this.persist()
@@ -795,6 +852,7 @@ export class SessionManager {
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
+    this.restoreSnapshots.delete(id)
     this.configs.delete(id)
     this.runtimes.delete(id)
     await this.terminalSnapshots.delete(id)
@@ -3078,6 +3136,10 @@ export class SessionManager {
     }
 
     this.runtimes.set(id, nextRuntime)
+    this.updateRestoreSnapshot(
+      id,
+      (current) => applyRuntimeToSessionRestoreSnapshot(current, nextRuntime),
+    )
     if (Object.keys(patch).length > 0) {
       this.appendTranscriptEvent({
         sessionId: id,
@@ -3239,7 +3301,7 @@ export class SessionManager {
     }
 
     const locationId = input.locationId ?? config?.locationId ?? null
-    return this.transcriptStore.append({
+    const event: TranscriptEvent = {
       id: crypto.randomUUID(),
       sessionId: input.sessionId,
       projectId,
@@ -3249,6 +3311,12 @@ export class SessionManager {
       source: input.source,
       chunk: input.chunk,
       metadata: input.metadata,
+    }
+    return this.transcriptStore.append(event).then(() => {
+      this.updateRestoreSnapshot(
+        input.sessionId,
+        (current) => applyTranscriptEventToSessionRestoreSnapshot(current, event),
+      )
     })
   }
 
@@ -3418,6 +3486,7 @@ export class SessionManager {
     return {
       config: this.requireConfig(id),
       runtime: this.runtimes.get(id) ?? buildRuntime(id),
+      restore: this.restoreSnapshots.get(id),
     }
   }
 
@@ -3710,6 +3779,11 @@ export class SessionManager {
         sessionId: runtime.sessionId,
         lastActiveAt: runtime.lastActiveAt,
       })),
+      restoreSnapshots: Object.fromEntries(
+        Array.from(this.restoreSnapshots.entries()).filter(([sessionId]) =>
+          this.configs.has(sessionId),
+        ),
+      ),
       copilotInstructionSnapshots: Object.fromEntries(
         Array.from(this.copilotInstructionSnapshots.entries()).filter(
           ([sessionId, snapshot]) =>
@@ -3722,6 +3796,96 @@ export class SessionManager {
 
   private normalizePath(value: string): string {
     return value.trim().replace(/[\\/]+$/, '').toLowerCase()
+  }
+
+  private shouldBackfillRestoreSnapshot(id: string): boolean {
+    const restore = this.restoreSnapshots.get(id)
+    if (!restore) {
+      return true
+    }
+
+    return (
+      !restore.blockedReason &&
+      !restore.lastError &&
+      !restore.resultSummary &&
+      !restore.lastMeaningfulReply &&
+      !restore.hasTranscript
+    )
+  }
+
+  private async backfillRestoreSnapshotsFromTranscriptTail(): Promise<void> {
+    let shouldPersist = false
+
+    for (const config of this.configs.values()) {
+      if (!this.shouldBackfillRestoreSnapshot(config.id)) {
+        continue
+      }
+
+      const runtime = this.runtimes.get(config.id) ?? buildRuntime(config.id)
+      let tailEvents: TranscriptEvent[] = []
+      try {
+        tailEvents =
+          (await this.transcriptStore.readTailEvents?.(config.id, {
+            maxBytes: SESSION_RESTORE_BACKFILL_MAX_BYTES,
+            maxEvents: SESSION_RESTORE_BACKFILL_MAX_EVENTS,
+          })) ?? []
+      } catch {
+        continue
+      }
+      if (tailEvents.length === 0) {
+        continue
+      }
+
+      let nextRestoreSnapshot =
+        this.restoreSnapshots.get(config.id) ??
+        buildSessionRestoreSnapshot(runtime)
+
+      for (const event of tailEvents) {
+        nextRestoreSnapshot = applyTranscriptEventToSessionRestoreSnapshot(
+          nextRestoreSnapshot,
+          event,
+        )
+      }
+
+      nextRestoreSnapshot = normalizeSessionRestoreSnapshot(
+        nextRestoreSnapshot,
+        runtime,
+      )
+      const currentRestoreSnapshot = this.restoreSnapshots.get(config.id)
+      if (sessionRestoreSnapshotsEqual(currentRestoreSnapshot, nextRestoreSnapshot)) {
+        continue
+      }
+
+      this.restoreSnapshots.set(config.id, nextRestoreSnapshot)
+      shouldPersist = true
+    }
+
+    if (shouldPersist) {
+      this.persist()
+    }
+  }
+
+  private updateRestoreSnapshot(
+    id: string,
+    updater: (current: SessionRestoreSnapshot) => SessionRestoreSnapshot,
+    persist = true,
+  ): void {
+    const runtime = this.runtimes.get(id)
+    if (!runtime) {
+      return
+    }
+
+    const current =
+      this.restoreSnapshots.get(id) ?? buildSessionRestoreSnapshot(runtime)
+    const next = normalizeSessionRestoreSnapshot(updater(current), runtime)
+    if (sessionRestoreSnapshotsEqual(current, next)) {
+      return
+    }
+
+    this.restoreSnapshots.set(id, next)
+    if (persist && this.configs.has(id)) {
+      this.persist()
+    }
   }
 
   private getErrorMessage(error: unknown): string {

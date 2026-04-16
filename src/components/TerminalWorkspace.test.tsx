@@ -225,6 +225,40 @@ describe('TerminalWorkspace', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows a restore summary card for the active session', () => {
+    const session = buildSession()
+    session.restore = {
+      statusSummary: 'Session finished.',
+      lastMeaningfulReply:
+        'Updated the restore snapshot path so review state can survive restart.',
+      resultSummary: 'Session exited successfully.',
+      blockedReason: null,
+      lastError: null,
+      updatedAt: '2026-04-16T12:00:00.000Z',
+      hasTranscript: true,
+      hasTerminalReplay: true,
+    }
+
+    render(
+      <TerminalWorkspace
+        sessions={[session]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    expect(
+      screen.getByRole('heading', { name: 'Session 1' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Restored state')).toBeInTheDocument()
+    expect(screen.getByText('Session exited successfully.')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Updated the restore snapshot path so review state can survive restart.',
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('defaults the agent terminal to roughly two thirds of the split height', async () => {
     const { container } = render(
       <TerminalWorkspace

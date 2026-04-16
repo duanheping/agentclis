@@ -2,6 +2,10 @@ import { appendFile, mkdir, open, readFile, truncate } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import type {
+  GetSessionTranscriptPageInput,
+  SessionTranscriptPage,
+} from '../src/shared/ipc'
 import type { TranscriptEvent } from '../src/shared/projectMemory'
 import { writeUtf8FileAtomic } from './atomicFile'
 
@@ -15,6 +19,8 @@ interface TranscriptIndex {
 const DEFAULT_BASE_ROOT = path.join(os.homedir(), 'AppData', 'Roaming', 'agenclis')
 const TAIL_SCAN_CHUNK_BYTES = 64 * 1024
 const TAIL_REPLAY_READ_CHUNK_BYTES = 256 * 1024
+const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 50
+const MAX_TRANSCRIPT_PAGE_LIMIT = 200
 
 interface ParseResult {
   events: TranscriptEvent[]
@@ -39,6 +45,53 @@ interface TailSelectionState {
   byteCount: number
   allowMalformedTail: boolean
   tailReversed: TranscriptEvent[]
+}
+
+function clampTranscriptPageLimit(value: number | undefined): number {
+  const normalized = Number.isFinite(value)
+    ? Math.floor(value ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT)
+    : DEFAULT_TRANSCRIPT_PAGE_LIMIT
+  return Math.min(
+    MAX_TRANSCRIPT_PAGE_LIMIT,
+    Math.max(1, normalized || DEFAULT_TRANSCRIPT_PAGE_LIMIT),
+  )
+}
+
+function normalizeTranscriptSearch(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? ''
+  return normalized || null
+}
+
+function matchesTranscriptSearch(
+  event: TranscriptEvent,
+  normalizedSearch: string | null,
+): boolean {
+  if (!normalizedSearch) {
+    return true
+  }
+
+  const searchableFields = [
+    event.kind,
+    event.source,
+    event.chunk ?? '',
+    JSON.stringify(event.metadata ?? {}),
+  ]
+
+  return searchableFields.some((field) =>
+    field.toLowerCase().includes(normalizedSearch),
+  )
+}
+
+function normalizeTranscriptPageCursor(
+  cursor: string | null | undefined,
+  maxValue: number,
+): number {
+  const parsed = Number.parseInt(cursor ?? '', 10)
+  if (!Number.isFinite(parsed)) {
+    return maxValue
+  }
+
+  return Math.min(maxValue, Math.max(0, parsed))
 }
 
 function parseTranscriptEvents(content: string): ParseResult {
@@ -357,6 +410,33 @@ export class TranscriptStore {
       return []
     } finally {
       await handle?.close().catch(() => undefined)
+    }
+  }
+
+  async readEventsPage(
+    sessionId: string,
+    options: Omit<GetSessionTranscriptPageInput, 'sessionId'> = {},
+  ): Promise<SessionTranscriptPage> {
+    const limit = clampTranscriptPageLimit(options.limit)
+    const normalizedSearch = normalizeTranscriptSearch(options.search)
+    const allowedKinds = new Set(options.kinds ?? [])
+    const events = await this.readEvents(sessionId)
+    const filteredEvents = events.filter((event) => {
+      if (allowedKinds.size > 0 && !allowedKinds.has(event.kind)) {
+        return false
+      }
+
+      return matchesTranscriptSearch(event, normalizedSearch)
+    })
+    const endExclusive = normalizeTranscriptPageCursor(
+      options.cursor,
+      filteredEvents.length,
+    )
+    const startIndex = Math.max(0, endExclusive - limit)
+
+    return {
+      events: filteredEvents.slice(startIndex, endExclusive),
+      nextCursor: startIndex > 0 ? String(startIndex) : null,
     }
   }
 
