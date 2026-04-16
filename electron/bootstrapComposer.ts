@@ -34,12 +34,12 @@ function uniqueFileReferences(results: MemorySearchResult[]): string[] {
 
   for (const result of results) {
     for (const hit of result.hits) {
-      const sourceLabel = hit.sourceLabel?.trim()
-      if (!sourceLabel || seen.has(sourceLabel)) {
+      const sourcePath = hit.sourcePath?.trim()
+      if (!sourcePath || seen.has(sourcePath)) {
         continue
       }
-      seen.add(sourceLabel)
-      references.push(sourceLabel)
+      seen.add(sourcePath)
+      references.push(sourcePath)
     }
   }
 

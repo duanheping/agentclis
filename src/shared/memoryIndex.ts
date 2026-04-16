@@ -41,7 +41,9 @@ export interface MempalaceMemoryRecord {
   palaceDrawerId: string
   drawerId: string
   sourceFile: string
+  sourceAliases?: string[]
   sourceLabel: string | null
+  sourcePath?: string | null
   projectId: string
   locationId: string | null
   sessionId: string
@@ -65,7 +67,9 @@ export interface MempalaceMemoryRecordInput {
   drawerId: string
   content: string
   sourceFile: string
+  sourceAliases?: string[]
   sourceLabel: string | null
+  sourcePath?: string | null
   projectId: string
   locationId: string | null
   sessionId: string
