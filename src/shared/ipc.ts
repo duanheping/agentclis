@@ -49,11 +49,18 @@ export interface ProjectSessionsAnalysisResult {
 export interface SessionTerminalReplay {
   chunks: string[]
   source?: 'transcript' | 'snapshot'
+  snapshot?: {
+    format: 'text' | 'serialized'
+    cols: number
+    rows: number
+    content: string
+  }
 }
 
 export interface UpdateSessionTerminalSnapshotInput {
   sessionId: string
   text: string
+  serialized?: string
   lineCount: number
   cols: number
   rows: number

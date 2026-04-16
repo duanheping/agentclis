@@ -3518,6 +3518,7 @@ describe('SessionManager logical project identity and project context', () => {
       read: vi.fn(async () => ({
         sessionId: 'session-a',
         text: 'snapshot-line-1\r\nsnapshot-line-2',
+        serialized: '\u001b[2Jsnapshot-line-1\r\nsnapshot-line-2',
         lineCount: 2,
         cols: 120,
         rows: 36,
@@ -3541,11 +3542,23 @@ describe('SessionManager logical project identity and project context', () => {
     )
 
     await expect(manager.getSessionTerminalReplay('session-a')).resolves.toEqual({
-      chunks: ['snapshot-line-1\r\nsnapshot-line-2'],
+      chunks: ['history-1'],
       source: 'snapshot',
+      snapshot: {
+        format: 'serialized',
+        cols: 120,
+        rows: 36,
+        content: '\u001b[2Jsnapshot-line-1\r\nsnapshot-line-2',
+      },
     })
     expect(terminalSnapshots.read).toHaveBeenCalledWith('session-a')
-    expect(transcriptStore.readTailEvents).not.toHaveBeenCalled()
+    expect(transcriptStore.readTailEvents).toHaveBeenCalledWith('session-a', {
+      kinds: ['output'],
+      maxBytes: 2 * 1024 * 1024,
+      maxEvents: 5_000,
+      requireChunk: true,
+      afterTimestamp: '2026-04-15T20:30:00.000Z',
+    })
   })
 
   it('stores renderer terminal snapshots for existing sessions', async () => {
@@ -3595,6 +3608,7 @@ describe('SessionManager logical project identity and project context', () => {
     await manager.updateTerminalSnapshot({
       sessionId: 'session-a',
       text: 'snapshot',
+      serialized: '\u001b[2Jsnapshot',
       lineCount: 1,
       cols: 120,
       rows: 36,
@@ -3604,6 +3618,7 @@ describe('SessionManager logical project identity and project context', () => {
     expect(terminalSnapshots.write).toHaveBeenCalledWith({
       sessionId: 'session-a',
       text: 'snapshot',
+      serialized: '\u001b[2Jsnapshot',
       lineCount: 1,
       cols: 120,
       rows: 36,

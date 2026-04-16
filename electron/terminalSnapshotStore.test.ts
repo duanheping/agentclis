@@ -29,6 +29,7 @@ describe('TerminalSnapshotStore', () => {
     await store.write({
       sessionId: 'session-1',
       text: 'line-1\r\nline-2',
+      serialized: '\u001b[2Jline-1\r\nline-2',
       lineCount: 2,
       cols: 120,
       rows: 36,
@@ -38,6 +39,7 @@ describe('TerminalSnapshotStore', () => {
     await expect(store.read('session-1')).resolves.toEqual({
       sessionId: 'session-1',
       text: 'line-1\r\nline-2',
+      serialized: '\u001b[2Jline-1\r\nline-2',
       lineCount: 2,
       cols: 120,
       rows: 36,
@@ -51,6 +53,7 @@ describe('TerminalSnapshotStore', () => {
     await store.write({
       sessionId: 'session-1',
       text: 'line-1',
+      serialized: '\u001b[2Jline-1',
       lineCount: 1,
       cols: 120,
       rows: 36,
@@ -60,6 +63,7 @@ describe('TerminalSnapshotStore', () => {
     await store.write({
       sessionId: 'session-1',
       text: '',
+      serialized: '',
       lineCount: 0,
       cols: 120,
       rows: 36,
@@ -75,5 +79,33 @@ describe('TerminalSnapshotStore', () => {
     await mkdir(path.dirname(filePath), { recursive: true })
     await writeFile(filePath, '{not-json', 'utf8')
     await expect(store.read('session-1')).resolves.toBeNull()
+  })
+
+  it('reads older text-only snapshot files for backward compatibility', async () => {
+    const store = await createStore()
+    const filePath = store.getSnapshotPath('session-1')
+    await mkdir(path.dirname(filePath), { recursive: true })
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        sessionId: 'session-1',
+        text: 'legacy snapshot',
+        lineCount: 1,
+        cols: 100,
+        rows: 30,
+        capturedAt: '2026-04-15T21:00:00.000Z',
+      }),
+      'utf8',
+    )
+
+    await expect(store.read('session-1')).resolves.toEqual({
+      sessionId: 'session-1',
+      text: 'legacy snapshot',
+      serialized: undefined,
+      lineCount: 1,
+      cols: 100,
+      rows: 30,
+      capturedAt: '2026-04-15T21:00:00.000Z',
+    })
   })
 })

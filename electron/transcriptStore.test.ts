@@ -406,6 +406,56 @@ describe('TranscriptStore', () => {
     ])
   })
 
+  it('reads only transcript events newer than a timestamp boundary', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(
+      buildEvent({
+        id: 'event-1',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'chunk-1',
+        timestamp: '2026-03-22T12:00:00.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-2',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'chunk-2',
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-3',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'chunk-3',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    )
+
+    await expect(
+      store.readTailEvents('session-1', {
+        kinds: ['output'],
+        requireChunk: true,
+        afterTimestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    ).resolves.toEqual([
+      buildEvent({
+        id: 'event-3',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'chunk-3',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    ])
+  })
+
   it('writes the transcript index without leaving temp files behind', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
     tempRoots.push(tempRoot)

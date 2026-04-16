@@ -8,6 +8,7 @@ import {
 } from 'react'
 
 import { FitAddon } from '@xterm/addon-fit'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { Terminal } from '@xterm/xterm'
 
 import {
@@ -64,6 +65,15 @@ const TERMINAL_SPLIT_RESIZER_SIZE = 12
 const TERMINAL_SPLIT_KEYBOARD_STEP = 32
 const TERMINAL_SCROLLBACK_LINES = 50_000
 const TERMINAL_SNAPSHOT_DEBOUNCE_MS = 1_500
+
+function writeTerminalData(
+  terminal: Pick<Terminal, 'write'>,
+  data: string,
+): Promise<void> {
+  return new Promise((resolve) => {
+    terminal.write(data, resolve)
+  })
+}
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -358,6 +368,9 @@ function TerminalSurface({
   const fitAddonRef = useRef<FitAddon | null>(null)
   const fitTerminalRef = useRef<(() => void) | null>(null)
   const activeRef = useRef(active)
+  const autoFocusRef = useRef(autoFocus)
+  const focusRequestSequenceRef = useRef(focusRequestSequence)
+  const onFocusRequestHandledRef = useRef(onFocusRequestHandled)
   const onInputRef = useRef(onInput)
   const onResizeRef = useRef(onResize)
 
@@ -366,95 +379,27 @@ function TerminalSurface({
   }, [active])
 
   useEffect(() => {
+    autoFocusRef.current = autoFocus
+    focusRequestSequenceRef.current = focusRequestSequence
+    onFocusRequestHandledRef.current = onFocusRequestHandled
     onInputRef.current = onInput
     onResizeRef.current = onResize
-  }, [onInput, onResize])
+  }, [autoFocus, focusRequestSequence, onFocusRequestHandled, onInput, onResize])
 
   useEffect(() => {
-    const terminal = new Terminal({
-      cursorBlink: true,
-      fontFamily: '"Cascadia Mono", Consolas, monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
-      scrollback: TERMINAL_SCROLLBACK_LINES,
-      allowTransparency: true,
-      linkHandler: {
-        activate: (_event, text) => {
-          void window.agentCli.openExternalLink(text)
-        },
-      },
-      windowsPty: {
-        backend: 'conpty',
-      },
-      theme: {
-        background: '#161616',
-        foreground: '#e8e8ea',
-        cursor: '#dbc29d',
-        scrollbarSliderBackground: 'rgba(227, 211, 182, 0.22)',
-        scrollbarSliderHoverBackground: 'rgba(227, 211, 182, 0.38)',
-        scrollbarSliderActiveBackground: 'rgba(227, 211, 182, 0.48)',
-        black: '#202020',
-        brightBlack: '#6d6d72',
-        red: '#ff7f7f',
-        brightRed: '#ffaaaa',
-        green: '#78d48f',
-        brightGreen: '#a6e3b5',
-        yellow: '#d8bf91',
-        brightYellow: '#f0dfbe',
-        blue: '#87a5d6',
-        brightBlue: '#adc2e7',
-        magenta: '#c6add8',
-        brightMagenta: '#e0c7ef',
-        cyan: '#8ab3af',
-        brightCyan: '#acd0cc',
-        white: '#d4d4d8',
-        brightWhite: '#fafafb',
-      },
-    })
-
-    const fitAddon = new FitAddon()
-    terminal.loadAddon(fitAddon)
     const container = containerRef.current!
-    terminal.open(container)
-    const detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
-      container,
-      terminal,
-    )
-    const markdownFileLinks = terminal.registerLinkProvider(
-      createMarkdownFileLinkProvider(terminal, (target) => {
-        void window.agentCli.openFileReference(target)
-      }, (target) => {
-        void window.agentCli.openExternalLink(target)
-      }),
-    )
-    const detachPasteHandler = attachPlainTextPasteHandler(terminal, {
-      resolveFilePath: (file) => window.agentCli.getPathForFile(file),
-      persistFile: async (file) =>
-        window.agentCli.persistTransientFile({
-          name: file.name,
-          type: file.type,
-          data: await file.arrayBuffer(),
-        }),
-    })
-    terminal.attachCustomKeyEventHandler((event) => {
-      const shortcutInput = getTerminalShortcutInput(event)
-      if (shortcutInput === null) {
-        return true
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-      onInputRef.current(shortcutInput)
-      return false
-    })
-
-    const fitTerminal = () => {
-      fitAddon.fit()
-      void onResizeRef.current(terminal.cols, terminal.rows)
+    let terminal: Terminal | null = null
+    let fitAddon: FitAddon | null = null
+    let serializeAddon: SerializeAddon | null = null
+    let detachInteractiveScrollbar: () => void = () => {}
+    let markdownFileLinks: { dispose: () => void } = {
+      dispose: () => undefined,
     }
-    fitTerminalRef.current = fitTerminal
+    let detachPasteHandler: () => void = () => {}
+    let resizeObserver: ResizeObserver | null = null
+    let dataDisposable: { dispose: () => void } | null = null
     let snapshotCaptureTimer: ReturnType<typeof window.setTimeout> | null = null
-    let lastSnapshotText: string | null = null
+    let lastSnapshotSignature: string | null = null
 
     const flushSnapshotCapture = () => {
       if (snapshotCaptureTimer !== null) {
@@ -462,12 +407,21 @@ function TerminalSurface({
         snapshotCaptureTimer = null
       }
 
-      const snapshot = captureTerminalSnapshot(terminal)
-      if (!snapshot || snapshot.text === lastSnapshotText) {
+      if (!terminal) {
         return
       }
 
-      lastSnapshotText = snapshot.text
+      const snapshot = captureTerminalSnapshot(terminal, serializeAddon)
+      if (!snapshot) {
+        return
+      }
+
+      const snapshotSignature = `${snapshot.text}\u0000${snapshot.serialized ?? ''}`
+      if (snapshotSignature === lastSnapshotSignature) {
+        return
+      }
+
+      lastSnapshotSignature = snapshotSignature
       window.agentCli.updateSessionTerminalSnapshot({
         sessionId: terminalId,
         ...snapshot,
@@ -488,6 +442,10 @@ function TerminalSurface({
     let suppressRestoreClear = false
 
     const writeReplayChunk = (chunk: string) => {
+      if (!terminal) {
+        return
+      }
+
       const filteredChunk = stripScrollbackClear(chunk)
       if (!filteredChunk) {
         return
@@ -498,6 +456,10 @@ function TerminalSurface({
     }
 
     const writeLiveChunk = (chunk: string) => {
+      if (!terminal) {
+        return
+      }
+
       const filteredChunk = stripScrollbackClear(chunk)
       if (!filteredChunk) {
         return
@@ -521,67 +483,207 @@ function TerminalSurface({
       write: writeLiveChunk,
       writeReplay: writeReplayChunk,
       clear: () => {
+        if (!terminal) {
+          return
+        }
+
         terminal.clear()
-        lastSnapshotText = null
+        lastSnapshotSignature = null
         window.agentCli.updateSessionTerminalSnapshot({
           sessionId: terminalId,
           text: '',
+          serialized: '',
           lineCount: 0,
           cols: terminal.cols,
           rows: terminal.rows,
           capturedAt: new Date().toISOString(),
         })
       },
-      fit: fitTerminal,
-      focus: () => terminal.focus(),
+      fit: () => {
+        if (!terminal || !fitAddon) {
+          return
+        }
+
+        fitAddon.fit()
+        void onResizeRef.current(terminal.cols, terminal.rows)
+      },
+      focus: () => terminal?.focus(),
     }
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (!activeRef.current) {
-        return
-      }
-
-      requestAnimationFrame(fitTerminal)
-    })
-
-    resizeObserver.observe(container)
-
-    const disposable = terminal.onData((data) => {
-      onInputRef.current(data)
-    })
-
-    terminalRef.current = terminal
-    fitAddonRef.current = fitAddon
     let disposed = false
+
+    const fitTerminal = () => {
+      terminalHandle.fit()
+    }
+    fitTerminalRef.current = fitTerminal
 
     void (async () => {
       let replayChunks: string[] = []
       let replaySource: 'transcript' | 'snapshot' = 'transcript'
+      let replaySnapshot:
+        | {
+            format: 'text' | 'serialized'
+            cols: number
+            rows: number
+            content: string
+          }
+        | undefined
 
       try {
         const replay = await window.agentCli.getSessionTerminalReplay(terminalId)
         replayChunks = replay.chunks
         replaySource = replay.source ?? 'transcript'
+        replaySnapshot = replay.snapshot
       } catch {
         replayChunks = []
         replaySource = 'transcript'
+        replaySnapshot = undefined
       }
 
       if (disposed) {
         return
       }
 
-      suppressRestoreClear = replayChunks.length > 0
-      terminalRegistry.register(terminalId, terminalHandle, replayChunks, {
-        source: replaySource,
+      terminal = new Terminal({
+        cursorBlink: true,
+        fontFamily: '"Cascadia Mono", Consolas, monospace',
+        fontSize: 13,
+        lineHeight: 1.25,
+        scrollback: TERMINAL_SCROLLBACK_LINES,
+        allowTransparency: true,
+        cols:
+          replaySource === 'snapshot' && (replaySnapshot?.cols ?? 0) > 0
+            ? replaySnapshot?.cols
+            : undefined,
+        rows:
+          replaySource === 'snapshot' && (replaySnapshot?.rows ?? 0) > 0
+            ? replaySnapshot?.rows
+            : undefined,
+        linkHandler: {
+          activate: (_event, text) => {
+            void window.agentCli.openExternalLink(text)
+          },
+        },
+        windowsPty: {
+          backend: 'conpty',
+        },
+        theme: {
+          background: '#161616',
+          foreground: '#e8e8ea',
+          cursor: '#dbc29d',
+          scrollbarSliderBackground: 'rgba(227, 211, 182, 0.22)',
+          scrollbarSliderHoverBackground: 'rgba(227, 211, 182, 0.38)',
+          scrollbarSliderActiveBackground: 'rgba(227, 211, 182, 0.48)',
+          black: '#202020',
+          brightBlack: '#6d6d72',
+          red: '#ff7f7f',
+          brightRed: '#ffaaaa',
+          green: '#78d48f',
+          brightGreen: '#a6e3b5',
+          yellow: '#d8bf91',
+          brightYellow: '#f0dfbe',
+          blue: '#87a5d6',
+          brightBlue: '#adc2e7',
+          magenta: '#c6add8',
+          brightMagenta: '#e0c7ef',
+          cyan: '#8ab3af',
+          brightCyan: '#acd0cc',
+          white: '#d4d4d8',
+          brightWhite: '#fafafb',
+        },
       })
-      queueSnapshotCapture(0)
-    })()
 
-    requestAnimationFrame(fitTerminal)
+      fitAddon = new FitAddon()
+      serializeAddon = new SerializeAddon()
+      terminal.loadAddon(fitAddon)
+      terminal.loadAddon(serializeAddon)
+      terminal.attachCustomKeyEventHandler((event) => {
+        const shortcutInput = getTerminalShortcutInput(event)
+        if (shortcutInput === null) {
+          return true
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        onInputRef.current(shortcutInput)
+        return false
+      })
+
+      if (
+        replaySource === 'snapshot' &&
+        replaySnapshot?.content
+      ) {
+        await writeTerminalData(terminal, replaySnapshot.content)
+      }
+
+      if (disposed) {
+        terminal.dispose()
+        terminal = null
+        fitAddon = null
+        serializeAddon = null
+        return
+      }
+
+      terminal.open(container)
+      detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
+        container,
+        terminal,
+      )
+      markdownFileLinks = terminal.registerLinkProvider(
+        createMarkdownFileLinkProvider(terminal, (target) => {
+          void window.agentCli.openFileReference(target)
+        }, (target) => {
+          void window.agentCli.openExternalLink(target)
+        }),
+      )
+      detachPasteHandler = attachPlainTextPasteHandler(terminal, {
+        resolveFilePath: (file) => window.agentCli.getPathForFile(file),
+        persistFile: async (file) =>
+          window.agentCli.persistTransientFile({
+            name: file.name,
+            type: file.type,
+            data: await file.arrayBuffer(),
+          }),
+      })
+
+      resizeObserver = new ResizeObserver(() => {
+        if (!activeRef.current) {
+          return
+        }
+
+        requestAnimationFrame(fitTerminal)
+      })
+      resizeObserver.observe(container)
+
+      dataDisposable = terminal.onData((data) => {
+        onInputRef.current(data)
+      })
+
+      terminalRef.current = terminal
+      fitAddonRef.current = fitAddon
+      suppressRestoreClear =
+        replayChunks.length > 0 || Boolean(replaySnapshot?.content)
+      terminalRegistry.register(
+        terminalId,
+        terminalHandle,
+        replayChunks,
+      )
+      queueSnapshotCapture(0)
+      requestAnimationFrame(() => {
+        fitTerminal()
+
+        if (activeRef.current && autoFocusRef.current) {
+          terminal?.focus()
+        }
+
+        if (activeRef.current && focusRequestSequenceRef.current > 0) {
+          terminal?.focus()
+          onFocusRequestHandledRef.current?.(focusRequestSequenceRef.current)
+        }
+      })
+    })().catch(() => undefined)
 
     const handlePointerDownCapture = (event: PointerEvent) => {
-      if (!activeRef.current || event.button !== 0) {
+      if (!activeRef.current || event.button !== 0 || !terminal) {
         return
       }
 
@@ -605,13 +707,13 @@ function TerminalSurface({
       detachInteractiveScrollbar()
       markdownFileLinks.dispose()
       detachPasteHandler()
-      resizeObserver.disconnect()
-      disposable.dispose()
+      resizeObserver?.disconnect()
+      dataDisposable?.dispose()
       if (snapshotCaptureTimer !== null) {
         window.clearTimeout(snapshotCaptureTimer)
       }
       terminalRegistry.unregister(terminalId)
-      terminal.dispose()
+      terminal?.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
       fitTerminalRef.current = null

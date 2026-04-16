@@ -27,6 +27,7 @@ interface ReadTailEventsOptions {
   maxBytes?: number
   maxEvents?: number
   requireChunk?: boolean
+  afterTimestamp?: string
 }
 
 interface TailSelectionState {
@@ -34,6 +35,7 @@ interface TailSelectionState {
   maxBytes: number
   maxEvents: number
   requireChunk: boolean
+  afterTimestamp: string | null
   byteCount: number
   allowMalformedTail: boolean
   tailReversed: TranscriptEvent[]
@@ -165,6 +167,10 @@ function collectTailEventFromLine(
 
   state.allowMalformedTail = false
 
+  if (state.afterTimestamp && event.timestamp <= state.afterTimestamp) {
+    return true
+  }
+
   if (state.allowedKinds.size > 0 && !state.allowedKinds.has(event.kind)) {
     return false
   }
@@ -281,6 +287,10 @@ export class TranscriptStore {
       maxBytes: Math.max(0, options.maxBytes ?? 0),
       maxEvents: Math.max(0, options.maxEvents ?? 0),
       requireChunk: options.requireChunk ?? false,
+      afterTimestamp:
+        typeof options.afterTimestamp === 'string' && options.afterTimestamp
+          ? options.afterTimestamp
+          : null,
       byteCount: 0,
       allowMalformedTail: true,
       tailReversed: [],

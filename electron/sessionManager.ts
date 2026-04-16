@@ -519,10 +519,28 @@ export class SessionManager {
     this.requireConfig(id)
 
     const snapshot = await this.terminalSnapshots.read(id)
-    if (snapshot?.text.trim()) {
+    const serializedSnapshot = snapshot?.serialized?.trim()
+    const plainTextSnapshot = snapshot?.text.trim()
+    if (snapshot && (serializedSnapshot || plainTextSnapshot)) {
+      const snapshotContent = serializedSnapshot ? snapshot.serialized! : snapshot.text
+      const deltaEvents =
+        (await this.transcriptStore.readTailEvents?.(id, {
+          kinds: ['output'],
+          maxBytes: SESSION_TERMINAL_REPLAY_MAX_BYTES,
+          maxEvents: SESSION_TERMINAL_REPLAY_MAX_EVENTS,
+          requireChunk: true,
+          afterTimestamp: snapshot.capturedAt,
+        })) ?? []
+
       return {
-        chunks: [snapshot.text],
+        chunks: deltaEvents.flatMap((event) => (event.chunk ? [event.chunk] : [])),
         source: 'snapshot',
+        snapshot: {
+          format: serializedSnapshot ? 'serialized' : 'text',
+          cols: snapshot.cols,
+          rows: snapshot.rows,
+          content: snapshotContent,
+        },
       }
     }
 
