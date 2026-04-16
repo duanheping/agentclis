@@ -4042,6 +4042,158 @@ describe('SessionManager logical project identity and project context', () => {
     })
   })
 
+  it('backfills older restore snapshots from transcript tails during restore', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:10:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readTailEvents: vi.fn(async () => [
+        {
+          id: 'event-1',
+          sessionId: 'session-a',
+          projectId: 'project-1',
+          locationId: null,
+          timestamp: '2026-03-22T12:11:00.000Z',
+          kind: 'output',
+          source: 'pty',
+          chunk: 'Backfilled reply from transcript history',
+        },
+        {
+          id: 'event-2',
+          sessionId: 'session-a',
+          projectId: 'project-1',
+          locationId: null,
+          timestamp: '2026-03-22T12:12:00.000Z',
+          kind: 'system',
+          source: 'system',
+          chunk: 'Session exited with code 0.',
+        },
+      ]),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        transcriptStore,
+      },
+    )
+
+    await manager.restoreSessions()
+
+    await vi.waitFor(() => {
+      expect(manager.listSessions().projects[0]?.sessions[0]?.restore).toMatchObject({
+        lastMeaningfulReply: 'Backfilled reply from transcript history',
+        resultSummary: 'Session exited successfully.',
+        hasTranscript: true,
+      })
+    })
+  })
+
+  it('continues restore-snapshot backfill when a transcript tail read fails', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'first session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:10:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-1',
+          title: 'second session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:10:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readTailEvents: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('tail read failed'))
+        .mockResolvedValueOnce([
+          {
+            id: 'event-1',
+            sessionId: 'session-b',
+            projectId: 'project-1',
+            locationId: null,
+            timestamp: '2026-03-22T12:13:00.000Z',
+            kind: 'output',
+            source: 'pty',
+            chunk: 'Recovered from the second transcript tail',
+          },
+        ]),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        transcriptStore,
+      },
+    )
+
+    await manager.restoreSessions()
+
+    await vi.waitFor(() => {
+      expect(manager.listSessions().projects[0]?.sessions[1]?.restore).toMatchObject({
+        lastMeaningfulReply: 'Recovered from the second transcript tail',
+        hasTranscript: true,
+      })
+    })
+  })
+
   it('persists restore snapshots with reply and result summaries', async () => {
     const manager = new SessionManager({
       onData: () => undefined,

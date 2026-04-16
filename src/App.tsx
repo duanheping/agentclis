@@ -7,6 +7,7 @@ import type {
 import './App.css'
 import { CreateSessionDialog } from './components/CreateSessionDialog'
 import { ProjectDiffPanel } from './components/ProjectDiffPanel'
+import { SessionReviewPanel } from './components/SessionReviewPanel'
 import { SessionSidebar } from './components/SessionSidebar'
 import { TerminalWorkspace } from './components/TerminalWorkspace'
 import { deriveMempalaceWing } from './shared/memoryIndex'
@@ -44,6 +45,7 @@ import { useSessionsStore } from './store/useSessionsStore'
 const SHOW_PROJECT_PATHS_KEY = 'agenclis:show-project-paths'
 const SIDEBAR_OPEN_KEY = 'agenclis:sidebar-open'
 const DIFF_PANEL_OPEN_KEY = 'agenclis:diff-panel-open'
+const REVIEW_PANEL_OPEN_KEY = 'agenclis:review-panel-open'
 const SIDEBAR_WIDTH_KEY = 'agenclis:sidebar-width'
 const DIFF_PANEL_WIDTH_KEY = 'agenclis:diff-panel-width'
 const DEFAULT_SIDEBAR_WIDTH = 288
@@ -103,6 +105,10 @@ function readSidebarOpenPreference(): boolean {
 
 function readDiffPanelOpenPreference(): boolean {
   return readBooleanPreference(DIFF_PANEL_OPEN_KEY, false)
+}
+
+function readReviewPanelOpenPreference(): boolean {
+  return readBooleanPreference(REVIEW_PANEL_OPEN_KEY, false)
 }
 
 function readSidebarWidthPreference(): number {
@@ -226,6 +232,9 @@ function App() {
   const [diffPanelOpen, setDiffPanelOpen] = useState<boolean>(() =>
     readDiffPanelOpenPreference(),
   )
+  const [reviewPanelOpen, setReviewPanelOpen] = useState<boolean>(() =>
+    readReviewPanelOpenPreference(),
+  )
   const [diffPanelWidth, setDiffPanelWidth] = useState<number>(() =>
     readDiffPanelWidthPreference(),
   )
@@ -317,6 +326,8 @@ function App() {
     activeSessionId !== null &&
     windowsCommandPromptSessionIds.includes(activeSessionId)
   const showDiffPanel = hydrated && diffPanelOpen && Boolean(activeWorkspacePath)
+  const showReviewPanel = hydrated && reviewPanelOpen && Boolean(activeSession)
+  const showRightPanel = showDiffPanel || showReviewPanel
   const featuredProject = activeProject ?? projects[0] ?? null
   const showWelcomeWorkspace = hydrated && sessions.length === 0
   const availableProjectBranches = projectGitOverview?.branches ?? []
@@ -835,6 +846,14 @@ function App() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(REVIEW_PANEL_OPEN_KEY, String(reviewPanelOpen))
+    } catch {
+      // Ignore preference persistence failures and keep the in-memory state.
+    }
+  }, [reviewPanelOpen])
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(DIFF_PANEL_WIDTH_KEY, String(diffPanelWidth))
     } catch {
       // Ignore preference persistence failures and keep the in-memory state.
@@ -857,7 +876,7 @@ function App() {
         setSidebarWidth((current) => clampSidebarWidth(current))
       }
 
-      if (showDiffPanel && workspaceBodyRef.current) {
+      if (showRightPanel && workspaceBodyRef.current) {
         setDiffPanelWidth((current) => clampDiffPanelWidth(current))
       }
     }
@@ -868,7 +887,13 @@ function App() {
     return () => {
       window.removeEventListener('resize', syncPaneWidths)
     }
-  }, [showDiffPanel, sidebarOpen])
+  }, [showRightPanel, sidebarOpen])
+
+  useEffect(() => {
+    if (hydrated && reviewPanelOpen && !activeSession) {
+      setReviewPanelOpen(false)
+    }
+  }, [activeSession, hydrated, reviewPanelOpen])
 
   useEffect(() => {
     if (!projectBranchMenuOpen) {
@@ -1311,7 +1336,28 @@ function App() {
   }
 
   const handleToggleDiffPanel = () => {
+    if (reviewPanelOpen) {
+      setReviewPanelOpen(false)
+      setDiffPanelOpen(true)
+      return
+    }
+
     setDiffPanelOpen((current) => !current)
+  }
+
+  const handleToggleReviewPanel = () => {
+    if (!activeSession) {
+      setErrorMessage('There is no active session.')
+      return
+    }
+
+    if (diffPanelOpen) {
+      setDiffPanelOpen(false)
+      setReviewPanelOpen(true)
+      return
+    }
+
+    setReviewPanelOpen((current) => !current)
   }
 
   const handleRefreshProjectDiff = async () => {
@@ -1936,6 +1982,16 @@ function App() {
 
           <button
             type="button"
+            className={`titlebar-action${showReviewPanel ? ' is-active' : ''}`}
+            aria-label="Toggle review panel"
+            disabled={!activeSession}
+            onClick={handleToggleReviewPanel}
+          >
+            <span className="titlebar-action__label">Review</span>
+          </button>
+
+          <button
+            type="button"
             className={`titlebar-action${diffPanelOpen ? ' is-active' : ''}`}
             aria-label="Toggle diff panel"
             disabled={!activeWorkspacePath}
@@ -2035,7 +2091,7 @@ function App() {
 
         <section
           ref={workspaceBodyRef}
-          className={`workspace-shell__body${showDiffPanel ? ' workspace-shell__body--with-diff' : ''}`}
+          className={`workspace-shell__body${showRightPanel ? ' workspace-shell__body--with-diff' : ''}`}
           style={workspaceBodyStyle}
         >
           {!hydrated ? (
@@ -2177,16 +2233,23 @@ function App() {
             />
           )}
 
-          {showDiffPanel ? (
+          {showRightPanel ? (
             <button
               type="button"
               className="pane-resizer workspace-shell__resizer"
-              aria-label="Resize diff panel"
+              aria-label="Resize side panel"
               onKeyDown={handleDiffResizerKeyDown}
               onPointerDown={handleDiffResizerPointerDown}
             />
           ) : null}
-          {showDiffPanel ? (
+          {showReviewPanel ? (
+            <SessionReviewPanel
+              open
+              session={activeSession}
+              onClose={() => setReviewPanelOpen(false)}
+            />
+          ) : null}
+          {showDiffPanel && !showReviewPanel ? (
             <ProjectDiffPanel
               overview={projectGitOverview}
               loading={projectGitLoading}

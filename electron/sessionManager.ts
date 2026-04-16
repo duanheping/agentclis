@@ -179,6 +179,8 @@ const TOUCH_RUNTIME_DEBOUNCE_MS = 300
 const INPUT_TRANSCRIPT_FLUSH_MS = 250
 const SESSION_TERMINAL_REPLAY_MAX_BYTES = 2 * 1024 * 1024
 const SESSION_TERMINAL_REPLAY_MAX_EVENTS = 5_000
+const SESSION_RESTORE_BACKFILL_MAX_BYTES = 128 * 1024
+const SESSION_RESTORE_BACKFILL_MAX_EVENTS = 80
 const ANSI_ESCAPE_REGEX = new RegExp(
   `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
   'gu',
@@ -425,6 +427,7 @@ export class SessionManager {
 
   private activeSessionId: string | null
   private restored = false
+  private restoreSnapshotBackfillStarted = false
   private identityRefreshTimer: NodeJS.Timeout | null = null
   private memoryBackfillTimer: NodeJS.Timeout | null = null
 
@@ -549,6 +552,10 @@ export class SessionManager {
     if (!this.restored) {
       this.restored = true
       this.scheduleBackgroundProjectMaintenance()
+      if (!this.restoreSnapshotBackfillStarted) {
+        this.restoreSnapshotBackfillStarted = true
+        void this.backfillRestoreSnapshotsFromTranscriptTail().catch(() => undefined)
+      }
 
       if (this.activeSessionId) {
         this.scheduleSessionStart(this.activeSessionId)
@@ -3789,6 +3796,73 @@ export class SessionManager {
 
   private normalizePath(value: string): string {
     return value.trim().replace(/[\\/]+$/, '').toLowerCase()
+  }
+
+  private shouldBackfillRestoreSnapshot(id: string): boolean {
+    const restore = this.restoreSnapshots.get(id)
+    if (!restore) {
+      return true
+    }
+
+    return (
+      !restore.blockedReason &&
+      !restore.lastError &&
+      !restore.resultSummary &&
+      !restore.lastMeaningfulReply &&
+      !restore.hasTranscript
+    )
+  }
+
+  private async backfillRestoreSnapshotsFromTranscriptTail(): Promise<void> {
+    let shouldPersist = false
+
+    for (const config of this.configs.values()) {
+      if (!this.shouldBackfillRestoreSnapshot(config.id)) {
+        continue
+      }
+
+      const runtime = this.runtimes.get(config.id) ?? buildRuntime(config.id)
+      let tailEvents: TranscriptEvent[] = []
+      try {
+        tailEvents =
+          (await this.transcriptStore.readTailEvents?.(config.id, {
+            maxBytes: SESSION_RESTORE_BACKFILL_MAX_BYTES,
+            maxEvents: SESSION_RESTORE_BACKFILL_MAX_EVENTS,
+          })) ?? []
+      } catch {
+        continue
+      }
+      if (tailEvents.length === 0) {
+        continue
+      }
+
+      let nextRestoreSnapshot =
+        this.restoreSnapshots.get(config.id) ??
+        buildSessionRestoreSnapshot(runtime)
+
+      for (const event of tailEvents) {
+        nextRestoreSnapshot = applyTranscriptEventToSessionRestoreSnapshot(
+          nextRestoreSnapshot,
+          event,
+        )
+      }
+
+      nextRestoreSnapshot = normalizeSessionRestoreSnapshot(
+        nextRestoreSnapshot,
+        runtime,
+      )
+      const currentRestoreSnapshot = this.restoreSnapshots.get(config.id)
+      if (sessionRestoreSnapshotsEqual(currentRestoreSnapshot, nextRestoreSnapshot)) {
+        continue
+      }
+
+      this.restoreSnapshots.set(config.id, nextRestoreSnapshot)
+      shouldPersist = true
+    }
+
+    if (shouldPersist) {
+      this.persist()
+    }
   }
 
   private updateRestoreSnapshot(
