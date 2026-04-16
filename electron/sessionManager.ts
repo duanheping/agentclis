@@ -522,6 +522,7 @@ export class SessionManager {
     if (snapshot?.text.trim()) {
       return {
         chunks: [snapshot.text],
+        source: 'snapshot',
       }
     }
 
@@ -535,6 +536,7 @@ export class SessionManager {
 
     return {
       chunks: events.flatMap((event) => (event.chunk ? [event.chunk] : [])),
+      source: 'transcript',
     }
   }
 

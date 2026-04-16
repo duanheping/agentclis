@@ -398,6 +398,32 @@ describe('TerminalWorkspace', () => {
     )
   })
 
+  it('does not append buffered startup output on top of a snapshot replay', async () => {
+    window.agentCli.getSessionTerminalReplay = vi.fn().mockResolvedValue({
+      chunks: ['restored snapshot'],
+      source: 'snapshot',
+    })
+    terminalRegistry.write('session-1', '\x1b[2J')
+    terminalRegistry.write('session-1', 'OpenAI Codex banner')
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+      expect(terminalInstances[0]?.write).toHaveBeenCalledOnce()
+    })
+
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith('restored snapshot')
+  })
+
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
     render(
       <TerminalWorkspace
