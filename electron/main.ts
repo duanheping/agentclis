@@ -664,6 +664,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.getSessionTerminalReplay, (_event, sessionId) =>
     sessionManager.getSessionTerminalReplay(sessionId),
   )
+  ipcMain.handle(IPC_CHANNELS.getSessionTranscriptPage, (_event, input) =>
+    sessionManager.getSessionTranscriptPage(input),
+  )
   ipcMain.on(IPC_CHANNELS.updateSessionTerminalSnapshot, (_event, input) => {
     void sessionManager.updateTerminalSnapshot(input)
   })

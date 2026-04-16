@@ -7,8 +7,10 @@ import path from 'node:path'
 import Store from 'electron-store'
 
 import type {
+  GetSessionTranscriptPageInput,
   ProjectArchitectureAnalysisResult,
   ProjectSessionsAnalysisResult,
+  SessionTranscriptPage,
   SessionTerminalReplay,
   UpdateSessionTerminalSnapshotInput,
 } from '../src/shared/ipc'
@@ -291,7 +293,7 @@ interface SessionManagerServices {
     inspect: (rootPath: string) => Promise<ProjectLocationIdentity>
   }
   transcriptStore?: Pick<TranscriptStore, 'append'> &
-    Partial<Pick<TranscriptStore, 'readTailEvents'>>
+    Partial<Pick<TranscriptStore, 'readTailEvents' | 'readEventsPage'>>
   terminalSnapshots?: Pick<TerminalSnapshotStore, 'read' | 'write' | 'delete'>
   projectMemory?: Pick<
     ProjectMemoryService,
@@ -323,6 +325,10 @@ const defaultIdentityResolver: NonNullable<SessionManagerServices['identityResol
 const noopTranscriptStore: NonNullable<SessionManagerServices['transcriptStore']> = {
   append: async () => undefined,
   readTailEvents: async () => [],
+  readEventsPage: async () => ({
+    events: [],
+    nextCursor: null,
+  }),
 }
 
 const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = {
@@ -592,6 +598,21 @@ export class SessionManager {
     return {
       chunks: events.flatMap((event) => (event.chunk ? [event.chunk] : [])),
       source: 'transcript',
+    }
+  }
+
+  async getSessionTranscriptPage(
+    input: GetSessionTranscriptPageInput,
+  ): Promise<SessionTranscriptPage> {
+    this.requireConfig(input.sessionId)
+    return await this.transcriptStore.readEventsPage?.(input.sessionId, {
+      cursor: input.cursor,
+      limit: input.limit,
+      kinds: input.kinds,
+      search: input.search,
+    }) ?? {
+      events: [],
+      nextCursor: null,
     }
   }
 

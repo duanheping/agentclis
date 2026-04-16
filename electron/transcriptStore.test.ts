@@ -456,6 +456,137 @@ describe('TranscriptStore', () => {
     ])
   })
 
+  it('reads paged transcript events from newest to oldest pages', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent({ id: 'event-1', chunk: 'alpha' }))
+    await store.append(
+      buildEvent({
+        id: 'event-2',
+        chunk: 'beta',
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-3',
+        chunk: 'gamma',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    )
+
+    const latestPage = await store.readEventsPage('session-1', {
+      limit: 2,
+    })
+
+    expect(latestPage).toEqual({
+      events: [
+        buildEvent({
+          id: 'event-2',
+          chunk: 'beta',
+          timestamp: '2026-03-22T12:00:01.000Z',
+        }),
+        buildEvent({
+          id: 'event-3',
+          chunk: 'gamma',
+          timestamp: '2026-03-22T12:00:02.000Z',
+        }),
+      ],
+      nextCursor: '1',
+    })
+
+    await expect(
+      store.readEventsPage('session-1', {
+        cursor: latestPage.nextCursor,
+        limit: 2,
+      }),
+    ).resolves.toEqual({
+      events: [
+        buildEvent({
+          id: 'event-1',
+          chunk: 'alpha',
+        }),
+      ],
+      nextCursor: null,
+    })
+  })
+
+  it('filters transcript pages by kind and search text', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(
+      buildEvent({
+        id: 'event-1',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'first reply',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-2',
+        kind: 'system',
+        source: 'system',
+        chunk: 'Session exited with code 0.',
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-3',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'second reply with result',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    )
+
+    await expect(
+      store.readEventsPage('session-1', {
+        kinds: ['output'],
+        search: 'result',
+      }),
+    ).resolves.toEqual({
+      events: [
+        buildEvent({
+          id: 'event-3',
+          kind: 'output',
+          source: 'pty',
+          chunk: 'second reply with result',
+          timestamp: '2026-03-22T12:00:02.000Z',
+        }),
+      ],
+      nextCursor: null,
+    })
+  })
+
+  it('ignores a malformed transcript tail during paged reads', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent({ id: 'event-1', chunk: 'alpha' }))
+    await appendFile(store.getTranscriptPath('session-1'), '{"broken"', 'utf8')
+
+    await expect(
+      store.readEventsPage('session-1', {
+        limit: 10,
+      }),
+    ).resolves.toEqual({
+      events: [
+        buildEvent({
+          id: 'event-1',
+          chunk: 'alpha',
+        }),
+      ],
+      nextCursor: null,
+    })
+  })
+
   it('writes the transcript index without leaving temp files behind', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
     tempRoots.push(tempRoot)

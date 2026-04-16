@@ -338,6 +338,9 @@ function createAgentCliMock(
     restoreSessions: vi.fn().mockResolvedValue(workspacePayload),
     listSessions: vi.fn().mockResolvedValue(workspacePayload),
     getSessionTerminalReplay: vi.fn().mockResolvedValue({ chunks: [] }),
+    getSessionTranscriptPage: vi
+      .fn()
+      .mockResolvedValue({ events: [], nextCursor: null }),
     updateSessionTerminalSnapshot: vi.fn(),
     createProject: vi.fn().mockResolvedValue(undefined),
     createSession: vi.fn().mockResolvedValue(undefined),

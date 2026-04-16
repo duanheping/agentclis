@@ -3726,6 +3726,94 @@ describe('SessionManager logical project identity and project context', () => {
     })
   })
 
+  it('reads paged transcript events for an existing session', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEventsPage: vi.fn(async () => ({
+        events: [
+          {
+            id: 'event-2',
+            sessionId: 'session-a',
+            projectId: 'project-1',
+            locationId: null,
+            timestamp: '2026-03-22T12:00:02.000Z',
+            kind: 'output',
+            source: 'pty',
+            chunk: 'latest reply',
+          },
+        ],
+        nextCursor: '4',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        transcriptStore,
+      },
+    )
+
+    await expect(
+      manager.getSessionTranscriptPage({
+        sessionId: 'session-a',
+        limit: 1,
+        cursor: '5',
+        kinds: ['output'],
+        search: 'reply',
+      }),
+    ).resolves.toEqual({
+      events: [
+        {
+          id: 'event-2',
+          sessionId: 'session-a',
+          projectId: 'project-1',
+          locationId: null,
+          timestamp: '2026-03-22T12:00:02.000Z',
+          kind: 'output',
+          source: 'pty',
+          chunk: 'latest reply',
+        },
+      ],
+      nextCursor: '4',
+    })
+    expect(transcriptStore.readEventsPage).toHaveBeenCalledWith('session-a', {
+      cursor: '5',
+      limit: 1,
+      kinds: ['output'],
+      search: 'reply',
+    })
+  })
+
   it('prefers a persisted terminal snapshot over transcript replay', async () => {
     mocks.setPersistedState({
       projects: [

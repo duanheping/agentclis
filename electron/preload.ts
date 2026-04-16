@@ -41,6 +41,8 @@ const api: AgentCliApi = {
   listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.listSessions),
   getSessionTerminalReplay: (sessionId) =>
     ipcRenderer.invoke(IPC_CHANNELS.getSessionTerminalReplay, sessionId),
+  getSessionTranscriptPage: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.getSessionTranscriptPage, input),
   updateSessionTerminalSnapshot: (input) => {
     ipcRenderer.send(IPC_CHANNELS.updateSessionTerminalSnapshot, input)
   },

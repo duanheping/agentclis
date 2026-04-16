@@ -1,4 +1,8 @@
 import type {
+  TranscriptEvent,
+  TranscriptEventKind,
+} from './projectMemory'
+import type {
   CreateProjectInput,
   CreateSessionInput,
   ListSessionsResponse,
@@ -75,10 +79,24 @@ export interface UpdateSessionTerminalSnapshotInput {
   capturedAt: string
 }
 
+export interface GetSessionTranscriptPageInput {
+  sessionId: string
+  cursor?: string | null
+  limit?: number
+  kinds?: TranscriptEventKind[]
+  search?: string | null
+}
+
+export interface SessionTranscriptPage {
+  events: TranscriptEvent[]
+  nextCursor: string | null
+}
+
 export const IPC_CHANNELS = {
   restoreSessions: 'session:restore',
   listSessions: 'session:list',
   getSessionTerminalReplay: 'session:terminal-replay',
+  getSessionTranscriptPage: 'session:transcript-page',
   updateSessionTerminalSnapshot: 'session:terminal-snapshot-update',
   createProject: 'project:create',
   createSession: 'session:create',
@@ -139,6 +157,9 @@ export interface AgentCliApi {
   restoreSessions(): Promise<ListSessionsResponse>
   listSessions(): Promise<ListSessionsResponse>
   getSessionTerminalReplay(sessionId: string): Promise<SessionTerminalReplay>
+  getSessionTranscriptPage(
+    input: GetSessionTranscriptPageInput,
+  ): Promise<SessionTranscriptPage>
   updateSessionTerminalSnapshot(input: UpdateSessionTerminalSnapshotInput): void
   createProject(input: CreateProjectInput): Promise<ProjectSnapshot>
   createSession(input: CreateSessionInput): Promise<SessionSnapshot>
