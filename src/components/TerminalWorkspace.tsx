@@ -66,14 +66,55 @@ const TERMINAL_SPLIT_RESIZER_SIZE = 12
 const TERMINAL_SPLIT_KEYBOARD_STEP = 32
 const TERMINAL_SCROLLBACK_LINES = 50_000
 const TERMINAL_SNAPSHOT_DEBOUNCE_MS = 1_500
+const TERMINAL_RESTORE_CHUNK_SIZE = 64 * 1024
 
-function writeTerminalData(
+function writeTerminalChunk(
   terminal: Pick<Terminal, 'write'>,
   data: string,
 ): Promise<void> {
   return new Promise((resolve) => {
     terminal.write(data, resolve)
   })
+}
+
+function waitForNextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve())
+      return
+    }
+
+    window.setTimeout(resolve, 0)
+  })
+}
+
+async function writeTerminalData(
+  terminal: Pick<Terminal, 'write'>,
+  data: string,
+): Promise<void> {
+  if (!data) {
+    return
+  }
+
+  if (data.length <= TERMINAL_RESTORE_CHUNK_SIZE) {
+    await writeTerminalChunk(terminal, data)
+    return
+  }
+
+  for (
+    let offset = 0;
+    offset < data.length;
+    offset += TERMINAL_RESTORE_CHUNK_SIZE
+  ) {
+    await writeTerminalChunk(
+      terminal,
+      data.slice(offset, offset + TERMINAL_RESTORE_CHUNK_SIZE),
+    )
+
+    if (offset + TERMINAL_RESTORE_CHUNK_SIZE < data.length) {
+      await waitForNextFrame()
+    }
+  }
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -625,21 +666,6 @@ function TerminalSurface({
         return false
       })
 
-      if (
-        replaySource === 'snapshot' &&
-        replaySnapshot?.content
-      ) {
-        await writeTerminalData(terminal, replaySnapshot.content)
-      }
-
-      if (disposed) {
-        terminal.dispose()
-        terminal = null
-        fitAddon = null
-        serializeAddon = null
-        return
-      }
-
       terminal.open(container)
       detachInteractiveScrollbar = attachInteractiveXtermScrollbar(
         container,
@@ -677,6 +703,15 @@ function TerminalSurface({
 
       terminalRef.current = terminal
       fitAddonRef.current = fitAddon
+
+      if (replaySource === 'snapshot' && replaySnapshot?.content) {
+        await writeTerminalData(terminal, replaySnapshot.content)
+      }
+
+      if (disposed) {
+        return
+      }
+
       suppressRestoreClear =
         replayChunks.length > 0 || Boolean(replaySnapshot?.content)
       terminalRegistry.register(
