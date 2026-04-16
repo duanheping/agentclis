@@ -214,6 +214,18 @@ function buildGenericSessionSummary(eventCount: number): string {
   return `This session recorded ${eventCount} transcript event${eventCount === 1 ? '' : 's'}.`
 }
 
+function isBestEffortExtractorFormatError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error instanceof SyntaxError ||
+    /returned invalid json/iu.test(error.message) ||
+    /is not valid json/iu.test(error.message)
+  )
+}
+
 function buildGenericHistoricalSessionsSummary(sessionCount: number): string {
   return `Analyzed ${sessionCount} stored session${sessionCount === 1 ? '' : 's'} for durable project memory.`
 }
@@ -2661,16 +2673,23 @@ export class ProjectMemoryManager {
           normalizedTranscript,
         })
       } catch (error) {
-        this.reportDiagnostic({
-          level: 'warning',
-          code: 'extractor-failed',
-          message:
-            error instanceof Error
-              ? error.message
-              : 'Project memory extraction failed.',
-          projectId: input.project.id,
-          sessionId: input.session.id,
-        })
+        if (isBestEffortExtractorFormatError(error)) {
+          extractorResult = {
+            summary: '',
+            candidates: [],
+          }
+        } else {
+          this.reportDiagnostic({
+            level: 'warning',
+            code: 'extractor-failed',
+            message:
+              error instanceof Error
+                ? error.message
+                : 'Project memory extraction failed.',
+            projectId: input.project.id,
+            sessionId: input.session.id,
+          })
+        }
       }
     }
 

@@ -13,6 +13,7 @@ type SpawnCall = {
   command: string
   args: string[]
   cwd?: string
+  env?: NodeJS.ProcessEnv
 }
 
 type MockChildProcess = EventEmitter & {
@@ -51,12 +52,14 @@ function createSpawnMock(options: {
   const calls: SpawnCall[] = []
   const spawnImpl = vi.fn((command: string, args: string[], spawnOptions?: {
     cwd?: string
+    env?: NodeJS.ProcessEnv
   }) => {
     const child = createMockChildProcess()
     calls.push({
       command,
       args: [...args],
       cwd: spawnOptions?.cwd,
+      env: spawnOptions?.env,
     })
 
     queueMicrotask(async () => {
@@ -199,12 +202,21 @@ describe('MempalaceRuntime', () => {
       expect.arrayContaining([
         expect.stringContaining('py -3 -c'),
         expect.stringContaining('-m venv'),
-        expect.stringContaining('-m pip install --upgrade pip'),
+        expect.stringContaining('-m pip install --upgrade pip setuptools wheel hatchling'),
         expect.stringContaining(
-          '-m pip install git+https://github.com/duanheping/mempalace.git@74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+          '-m pip install --no-build-isolation git+https://github.com/duanheping/mempalace.git@74e5bf6090cb239b1b48b5a015670842a99a2c8c',
         ),
       ]),
     )
+    const pipCalls = calls.filter(
+      (call) => call.args.includes('-m') && call.args.includes('pip'),
+    )
+    expect(pipCalls).toHaveLength(2)
+    for (const call of pipCalls) {
+      expect(call.env?.PIP_CONFIG_FILE).toMatch(/nul$/iu)
+      expect(call.env?.PIP_INDEX_URL).toBe('https://pypi.org/simple')
+      expect(call.env?.PIP_DISABLE_PIP_VERSION_CHECK).toBe('1')
+    }
 
     const metadataPath = path.join(
       tempRoot,

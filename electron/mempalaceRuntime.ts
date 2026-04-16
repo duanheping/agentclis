@@ -64,6 +64,11 @@ interface ProcessResult {
   stderr: string
 }
 
+interface ProcessCommandOptions {
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+}
+
 export interface MempalaceRuntimeOptions {
   manifestPath?: string
   appDataRoot?: string
@@ -73,6 +78,7 @@ export interface MempalaceRuntimeOptions {
 }
 
 type InstallationState = 'missing' | 'installed' | 'invalid'
+const PUBLIC_PYPI_INDEX_URL = 'https://pypi.org/simple'
 
 function truncateUtf8Tail(value: string, maxBytes: number): string {
   if (maxBytes <= 0) {
@@ -204,6 +210,20 @@ async function fileExists(targetPath: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+function buildPipInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const nextEnv: NodeJS.ProcessEnv = {
+    ...env,
+    PIP_CONFIG_FILE: os.devNull,
+    PIP_DISABLE_PIP_VERSION_CHECK: '1',
+    PIP_INDEX_URL: PUBLIC_PYPI_INDEX_URL,
+  }
+
+  delete nextEnv.PIP_EXTRA_INDEX_URL
+  delete nextEnv.PIP_TRUSTED_HOST
+
+  return nextEnv
 }
 
 export class MempalaceRuntime {
@@ -343,6 +363,7 @@ export class MempalaceRuntime {
       const runtimePaths = this.resolveRuntimePaths(manifest)
       const minimumPythonVersion = parseMinimumPythonVersion(manifest.python)
       const resolvedPython = await this.resolveSystemPython(minimumPythonVersion)
+      const pipEnv = buildPipInstallEnv(this.env)
 
       await mkdir(runtimePaths.installRoot, { recursive: true })
       await mkdir(runtimePaths.palacePath, { recursive: true })
@@ -354,13 +375,34 @@ export class MempalaceRuntime {
       )
       await this.runProcessCommand(
         runtimePaths.venvPythonPath,
-        ['-m', 'pip', 'install', '--upgrade', 'pip'],
+        [
+          '-m',
+          'pip',
+          'install',
+          '--upgrade',
+          'pip',
+          'setuptools',
+          'wheel',
+          'hatchling',
+        ],
         runtimePaths.installRoot,
+        {
+          env: pipEnv,
+        },
       )
       await this.runProcessCommand(
         runtimePaths.venvPythonPath,
-        ['-m', 'pip', 'install', `git+${manifest.repo}@${manifest.commit}`],
+        [
+          '-m',
+          'pip',
+          'install',
+          '--no-build-isolation',
+          `git+${manifest.repo}@${manifest.commit}`,
+        ],
         runtimePaths.installRoot,
+        {
+          env: pipEnv,
+        },
       )
 
       const metadata: MempalaceRuntimeMetadata = {
@@ -707,6 +749,7 @@ export class MempalaceRuntime {
     command: string,
     args: string[],
     cwd?: string,
+    options: ProcessCommandOptions = {},
   ): Promise<ProcessResult> {
     return await new Promise<ProcessResult>((resolve, reject) => {
       let stdout = ''
@@ -714,8 +757,8 @@ export class MempalaceRuntime {
       let settled = false
 
       const child = this.spawnImpl(command, args, {
-        cwd,
-        env: this.env,
+        cwd: options.cwd ?? cwd,
+        env: options.env ?? this.env,
         stdio: 'pipe',
         windowsHide: true,
       })

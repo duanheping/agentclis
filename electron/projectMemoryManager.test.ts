@@ -308,6 +308,44 @@ describe('ProjectMemoryManager', () => {
     ).resolves.toContain(`"extractionVersion": ${PROJECT_MEMORY_EXTRACTION_VERSION}`)
   })
 
+  it('falls back to deterministic summaries when the extractor returns malformed JSON output', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
+    const diagnostics: Array<{ code: string; message: string }> = []
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async () => {
+        throw new SyntaxError(`Unexpected token 'D', "Done - I wrote..." is not valid JSON`)
+      },
+    })
+    manager.setDiagnosticReporter((entry) => {
+      diagnostics.push({
+        code: entry.code,
+        message: entry.message,
+      })
+    })
+
+    await manager.captureSession({
+      project: buildProjectAt(repoRoot),
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
+      transcript: buildTranscript(),
+    })
+
+    const memoryRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'remote-github.com-openai-agenclis',
+    )
+    const latestSummary = JSON.parse(
+      await readFile(path.join(memoryRoot, 'summaries', 'session-1.json'), 'utf8'),
+    ) as SessionSummary
+
+    expect(latestSummary.summary).toBe('Session "Codex" focused on Implement project memory.')
+    expect(diagnostics).toEqual([])
+  })
+
   it('forwards the session summary and structured cards to the MemPalace sink', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)

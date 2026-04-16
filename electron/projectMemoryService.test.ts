@@ -236,6 +236,78 @@ describe('ProjectMemoryService', () => {
     service.dispose()
   })
 
+  it('falls back silently when MemPalace is unavailable instead of recording an empty-context warning', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => true),
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: 'Legacy bootstrap fallback.',
+        fileReferences: ['C:\\memory\\memory.md'],
+        summaryExcerpt: 'Legacy summary',
+      })),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const bootstrapComposer = {
+      composeContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+        architectureExcerpt: null,
+      })),
+    }
+    const memoryBackend = {
+      getStatus: vi.fn(async () => ({
+        backend: 'mempalace' as const,
+        repo: 'https://github.com/duanheping/mempalace.git',
+        commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        installState: 'failed' as const,
+        runtimeState: 'failed' as const,
+        installRoot: 'C:\\runtime',
+        palacePath: 'C:\\palace',
+        pythonPath: null,
+        module: 'mempalace.mcp_server',
+        message: 'MemPalace runtime installation is incomplete or failed.',
+        lastError: 'pip timed out',
+      })),
+      indexSessionTranscript: vi.fn(),
+    }
+    const transcriptStore = buildTranscriptStore()
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        bootstrapComposer,
+        memoryBackend,
+      },
+    )
+
+    const context = await service.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+
+    const persistedState = storeState.get() as {
+      diagnostics: Array<{ code: string; message: string }>
+    }
+    expect(context.bootstrapMessage).toBe('Legacy bootstrap fallback.')
+    expect(bootstrapComposer.composeContext).toHaveBeenCalledTimes(1)
+    expect(memoryBackend.getStatus).toHaveBeenCalledTimes(1)
+    expect(manager.assembleContext).toHaveBeenCalledTimes(1)
+    expect(persistedState.diagnostics).toEqual([])
+    service.dispose()
+  })
+
   it('records bootstrap composer failures instead of silently blaming the Skill Library root', async () => {
     const manager = {
       isEnabled: vi.fn(() => false),
