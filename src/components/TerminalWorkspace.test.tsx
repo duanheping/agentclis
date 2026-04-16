@@ -221,6 +221,7 @@ describe('TerminalWorkspace', () => {
     cleanup()
     terminalRegistry.forget('session-1')
     terminalRegistry.forget('session-1:windows-cmd')
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -532,6 +533,31 @@ describe('TerminalWorkspace', () => {
     await waitFor(() => {
       expect(mockFit).toHaveBeenCalled()
     })
+  })
+
+  it('falls back to an empty replay when replay fetch never resolves', async () => {
+    vi.useFakeTimers()
+    window.agentCli.getSessionTerminalReplay = vi.fn(
+      () => new Promise(() => undefined),
+    )
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+      'session-1',
+    )
+    expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+    expect(terminalInstances[0]?.open).toHaveBeenCalledTimes(1)
   })
 
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
