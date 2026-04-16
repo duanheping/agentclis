@@ -26,18 +26,24 @@ export class TerminalSnapshotStore {
     try {
       const content = await readFile(this.getSnapshotPath(sessionId), 'utf8')
       const parsed = JSON.parse(content) as Partial<PersistedTerminalSnapshot>
+      const normalizedText =
+        typeof parsed.text === 'string' ? parsed.text : ''
+      const normalizedSerialized =
+        typeof parsed.serialized === 'string' && parsed.serialized.trim()
+          ? parsed.serialized
+          : undefined
       if (
-        typeof parsed.text !== 'string' ||
-        !parsed.text.trim() ||
         typeof parsed.sessionId !== 'string' ||
-        parsed.sessionId !== sessionId
+        parsed.sessionId !== sessionId ||
+        (!normalizedText.trim() && !normalizedSerialized)
       ) {
         return null
       }
 
       return {
         sessionId,
-        text: parsed.text,
+        text: normalizedText,
+        serialized: normalizedSerialized,
         lineCount:
           typeof parsed.lineCount === 'number' && Number.isFinite(parsed.lineCount)
             ? parsed.lineCount
@@ -61,7 +67,7 @@ export class TerminalSnapshotStore {
   }
 
   async write(snapshot: PersistedTerminalSnapshot): Promise<void> {
-    if (!snapshot.text.trim()) {
+    if (!snapshot.text.trim() && !snapshot.serialized?.trim()) {
       await this.delete(snapshot.sessionId)
       return
     }

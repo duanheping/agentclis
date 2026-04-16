@@ -75,23 +75,23 @@ describe('TerminalRegistry', () => {
     terminalRegistry.forget('test-replay-writer')
   })
 
-  it('does not append buffered live chunks after a snapshot replay', () => {
+  it('merges buffered live chunks after a snapshot replay using replay overlap', () => {
     const write = vi.fn()
     const writeReplay = vi.fn()
     const handle = { write, writeReplay, clear: vi.fn(), fit: vi.fn(), focus: vi.fn() }
 
-    terminalRegistry.write('test-snapshot-replay', '\x1b[2J')
-    terminalRegistry.write('test-snapshot-replay', 'resume-banner')
+    terminalRegistry.write('test-snapshot-replay', 'delta-2')
+    terminalRegistry.write('test-snapshot-replay', 'live-1')
     terminalRegistry.register(
       'test-snapshot-replay',
       handle,
-      ['restored snapshot'],
-      { source: 'snapshot' },
+      ['delta-1', 'delta-2'],
     )
 
     expect(writeReplay).toHaveBeenCalledOnce()
-    expect(writeReplay).toHaveBeenCalledWith('restored snapshot')
-    expect(write).not.toHaveBeenCalled()
+    expect(writeReplay).toHaveBeenCalledWith('delta-1delta-2')
+    expect(write).toHaveBeenCalledOnce()
+    expect(write).toHaveBeenCalledWith('live-1')
     terminalRegistry.forget('test-snapshot-replay')
   })
 

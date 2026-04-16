@@ -6,10 +6,6 @@ interface TerminalHandle {
   focus: () => void
 }
 
-interface TerminalReplayOptions {
-  source?: 'transcript' | 'snapshot'
-}
-
 export function buildWindowsCommandPromptTerminalId(sessionId: string): string {
   return `${sessionId}:windows-cmd`
 }
@@ -22,16 +18,14 @@ class TerminalRegistry {
     id: string,
     handle: TerminalHandle,
     replayChunks: string[] = [],
-    replayOptions: TerminalReplayOptions = {},
   ): void {
     this.handles.set(id, handle)
 
     const pendingChunks = this.bufferedOutput.get(id) ?? []
     const replayText = replayChunks.join('')
-    const pendingText =
-      replayOptions.source === 'snapshot'
-        ? ''
-        : pendingChunks.slice(findReplayOverlap(replayChunks, pendingChunks)).join('')
+    const pendingText = pendingChunks
+      .slice(findReplayOverlap(replayChunks, pendingChunks))
+      .join('')
     const replayWriter = handle.writeReplay ?? handle.write
 
     if (replayText) {

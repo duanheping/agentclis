@@ -5,6 +5,7 @@ import type { SessionSnapshot } from '../shared/session'
 import { terminalRegistry } from '../lib/terminalRegistry'
 
 const mockFit = vi.hoisted(() => vi.fn())
+const mockSerialize = vi.hoisted(() => vi.fn(() => 'serialized-snapshot'))
 const mockTerminalConstructor = vi.hoisted(() => vi.fn())
 const terminalInstances = vi.hoisted(() => [] as Array<{
   write: ReturnType<typeof vi.fn>
@@ -30,7 +31,9 @@ vi.mock('@xterm/xterm', () => ({
       },
     }
 
-    loadAddon = vi.fn()
+    loadAddon = vi.fn((addon: { activate?: (terminal: unknown) => void }) => {
+      addon.activate?.(this)
+    })
     open = vi.fn((container: HTMLElement) => {
       const terminalRoot = document.createElement('div')
       terminalRoot.className = 'xterm'
@@ -56,7 +59,9 @@ vi.mock('@xterm/xterm', () => ({
     onData = vi.fn(() => ({
       dispose: vi.fn(),
     }))
-    write = vi.fn()
+    write = vi.fn((_data: string, callback?: () => void) => {
+      callback?.()
+    })
     scrollLines = vi.fn()
     clear = vi.fn()
     focus = vi.fn(() => {
@@ -72,6 +77,13 @@ vi.mock('@xterm/xterm', () => ({
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class MockFitAddon {
     fit = mockFit
+  },
+}))
+
+vi.mock('@xterm/addon-serialize', () => ({
+  SerializeAddon: class MockSerializeAddon {
+    activate() {}
+    serialize = mockSerialize
   },
 }))
 
@@ -157,6 +169,7 @@ describe('TerminalWorkspace', () => {
   beforeEach(() => {
     window.localStorage.clear()
     mockFit.mockClear()
+    mockSerialize.mockClear()
     mockTerminalConstructor.mockClear()
     terminalInstances.length = 0
 
@@ -272,7 +285,7 @@ describe('TerminalWorkspace', () => {
     ).toBeCloseTo(18.92, 1)
   })
 
-  it('configures terminals for long ConPTY-backed sessions', () => {
+  it('configures terminals for long ConPTY-backed sessions', async () => {
     render(
       <TerminalWorkspace
         sessions={[buildSession()]}
@@ -281,17 +294,19 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    expect(mockTerminalConstructor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scrollback: 50_000,
-        windowsPty: {
-          backend: 'conpty',
-        },
-      }),
-    )
+    await waitFor(() => {
+      expect(mockTerminalConstructor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scrollback: 50_000,
+          windowsPty: {
+            backend: 'conpty',
+          },
+        }),
+      )
+    })
   })
 
-  it('only mounts xterm surfaces for the active session', () => {
+  it('only mounts xterm surfaces for the active session', async () => {
     render(
       <TerminalWorkspace
         sessions={[
@@ -304,10 +319,12 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+    })
   })
 
-  it('routes OSC hyperlinks through the Electron external-link bridge', () => {
+  it('routes OSC hyperlinks through the Electron external-link bridge', async () => {
     render(
       <TerminalWorkspace
         sessions={[buildSession()]}
@@ -316,13 +333,22 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    const terminalOptions = mockTerminalConstructor.mock.calls[0]?.[0] as {
-      linkHandler?: {
-        activate: (event: MouseEvent, text: string) => void
-      }
-    }
+    await waitFor(() => {
+      expect(mockTerminalConstructor).toHaveBeenCalled()
+    })
 
-    terminalOptions.linkHandler?.activate({} as MouseEvent, 'https://example.com')
+    const terminalOptions = mockTerminalConstructor.mock.calls[0]?.[0] as
+      | {
+          linkHandler?: {
+            activate: (event: MouseEvent, text: string) => void
+          }
+        }
+      | undefined
+
+    terminalOptions?.linkHandler?.activate(
+      {} as MouseEvent,
+      'https://example.com',
+    )
 
     expect(window.agentCli.openExternalLink).toHaveBeenCalledWith(
       'https://example.com',
@@ -400,10 +426,16 @@ describe('TerminalWorkspace', () => {
 
   it('does not append buffered startup output on top of a snapshot replay', async () => {
     window.agentCli.getSessionTerminalReplay = vi.fn().mockResolvedValue({
-      chunks: ['restored snapshot'],
+      chunks: ['delta-shared'],
       source: 'snapshot',
+      snapshot: {
+        format: 'serialized',
+        cols: 120,
+        rows: 36,
+        content: '\u001b[2Jrestored snapshot',
+      },
     })
-    terminalRegistry.write('session-1', '\x1b[2J')
+    terminalRegistry.write('session-1', 'delta-shared')
     terminalRegistry.write('session-1', 'OpenAI Codex banner')
 
     render(
@@ -418,10 +450,24 @@ describe('TerminalWorkspace', () => {
       expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
         'session-1',
       )
-      expect(terminalInstances[0]?.write).toHaveBeenCalledOnce()
+      expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(3)
     })
 
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith('restored snapshot')
+    expect(mockTerminalConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cols: 120,
+        rows: 36,
+      }),
+    )
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
+      '\u001b[2Jrestored snapshot',
+      expect.any(Function),
+    )
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(2, 'delta-shared')
+    expect(terminalInstances[0]?.write).toHaveBeenNthCalledWith(
+      3,
+      'OpenAI Codex banner',
+    )
   })
 
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
@@ -435,15 +481,14 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    const textareas = document.querySelectorAll('.xterm textarea')
-
     await waitFor(() => {
+      const textareas = document.querySelectorAll('.xterm textarea')
       expect(textareas).toHaveLength(2)
       expect(document.activeElement).toBe(textareas[1])
     })
   })
 
-  it('keeps the xterm overlay scrollbar interactive for pointer dragging', () => {
+  it('keeps the xterm overlay scrollbar interactive for pointer dragging', async () => {
     const { container } = render(
       <TerminalWorkspace
         sessions={[buildSession()]}
@@ -452,16 +497,18 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    const scrollbar = container.querySelector(
-      '.terminal-surface .xterm .xterm-scrollable-element > .scrollbar.invisible.fade',
-    ) as HTMLDivElement | null
+    await waitFor(() => {
+      const scrollbar = container.querySelector(
+        '.terminal-surface .xterm .xterm-scrollable-element > .scrollbar.invisible.fade',
+      ) as HTMLDivElement | null
 
-    expect(scrollbar).not.toBeNull()
-    expect(scrollbar?.style.opacity).toBe('1')
-    expect(scrollbar?.style.pointerEvents).toBe('auto')
-    expect(scrollbar?.style.zIndex).toBe('11')
-    expect(scrollbar?.style.background).toBe('rgba(0, 0, 0, 0)')
-    expect(scrollbar?.style.transition).toBe('none')
+      expect(scrollbar).not.toBeNull()
+      expect(scrollbar?.style.opacity).toBe('1')
+      expect(scrollbar?.style.pointerEvents).toBe('auto')
+      expect(scrollbar?.style.zIndex).toBe('11')
+      expect(scrollbar?.style.background).toBe('rgba(0, 0, 0, 0)')
+      expect(scrollbar?.style.transition).toBe('none')
+    })
   })
 
   it('refocuses the active terminal when the surface is clicked', async () => {
@@ -473,23 +520,30 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    const terminalTextarea = container.querySelector(
-      '.terminal-surface .xterm textarea',
-    ) as HTMLTextAreaElement | null
     const terminalSurface = container.querySelector(
       '.terminal-surface',
     ) as HTMLDivElement | null
     const outsideButton = document.createElement('button')
     document.body.appendChild(outsideButton)
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('.terminal-surface .xterm textarea'),
+      ).not.toBeNull()
+    })
+
     outsideButton.focus()
 
-    expect(terminalTextarea).not.toBeNull()
     expect(terminalSurface).not.toBeNull()
     expect(document.activeElement).toBe(outsideButton)
 
     fireEvent.pointerDown(terminalSurface!, { button: 0 })
 
     await waitFor(() => {
+      const terminalTextarea = container.querySelector(
+        '.terminal-surface .xterm textarea',
+      ) as HTMLTextAreaElement | null
+      expect(terminalTextarea).not.toBeNull()
       expect(document.activeElement).toBe(terminalTextarea)
     })
 
