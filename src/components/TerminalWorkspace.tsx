@@ -288,12 +288,16 @@ function SessionTerminalStack({
   onSplitResizerPointerDown,
   onSplitResizerKeyDown,
 }: SessionTerminalStackProps) {
+  const windowsCommandPromptTerminalId =
+    buildWindowsCommandPromptTerminalId(sessionId)
   const splitStyle = showWindowsCommandPrompt
     ? ({
         '--terminal-split-top-size': `${Math.max(splitRatio * 100, 1)}fr`,
         '--terminal-split-bottom-size': `${Math.max((1 - splitRatio) * 100, 1)}fr`,
       } as CSSProperties)
     : undefined
+  const shouldAutoFocusAgentTerminal =
+    focusTerminalId === null || focusTerminalId === sessionId
 
   return (
     <div
@@ -307,7 +311,7 @@ function SessionTerminalStack({
         <TerminalSurface
           terminalId={sessionId}
           active={active}
-          autoFocus
+          autoFocus={shouldAutoFocusAgentTerminal}
           focusRequestSequence={
             focusTerminalId === sessionId ? focusTerminalSequence : 0
           }
@@ -333,10 +337,10 @@ function SessionTerminalStack({
           <div className="terminal-pane terminal-pane--windows-cmd has-header">
             <div className="terminal-pane__header">Windows cmd</div>
             <TerminalSurface
-              terminalId={buildWindowsCommandPromptTerminalId(sessionId)}
+              terminalId={windowsCommandPromptTerminalId}
               active={active}
               focusRequestSequence={
-                focusTerminalId === buildWindowsCommandPromptTerminalId(sessionId)
+                focusTerminalId === windowsCommandPromptTerminalId
                   ? focusTerminalSequence
                   : 0
               }
