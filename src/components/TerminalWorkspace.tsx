@@ -26,6 +26,7 @@ import {
   stripScrollbackClear,
 } from '../lib/terminalEscapeFilter'
 import { captureTerminalSnapshot } from '../lib/terminalSnapshot'
+import type { SessionTerminalReplay } from '../shared/ipc'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
@@ -67,6 +68,14 @@ const TERMINAL_SPLIT_KEYBOARD_STEP = 32
 const TERMINAL_SCROLLBACK_LINES = 50_000
 const TERMINAL_SNAPSHOT_DEBOUNCE_MS = 1_500
 const TERMINAL_RESTORE_CHUNK_SIZE = 64 * 1024
+const TERMINAL_REPLAY_FETCH_TIMEOUT_MS = 1_500
+
+function buildEmptyTerminalReplay(): SessionTerminalReplay {
+  return {
+    chunks: [],
+    source: 'transcript',
+  }
+}
 
 function writeTerminalChunk(
   terminal: Pick<Terminal, 'write'>,
@@ -113,6 +122,30 @@ async function writeTerminalData(
 
     if (offset + TERMINAL_RESTORE_CHUNK_SIZE < data.length) {
       await waitForNextFrame()
+    }
+  }
+}
+
+async function getTerminalReplayWithTimeout(
+  terminalId: string,
+): Promise<SessionTerminalReplay> {
+  let timeoutId: ReturnType<typeof window.setTimeout> | null = null
+  const timeoutReplay = new Promise<SessionTerminalReplay>((resolve) => {
+    timeoutId = window.setTimeout(() => {
+      resolve(buildEmptyTerminalReplay())
+    }, TERMINAL_REPLAY_FETCH_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([
+      window.agentCli.getSessionTerminalReplay(terminalId),
+      timeoutReplay,
+    ])
+  } catch {
+    return buildEmptyTerminalReplay()
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId)
     }
   }
 }
@@ -586,7 +619,7 @@ function TerminalSurface({
 
       try {
         if (shouldPersistTerminalState) {
-          const replay = await window.agentCli.getSessionTerminalReplay(terminalId)
+          const replay = await getTerminalReplayWithTimeout(terminalId)
           replayChunks = replay.chunks
           replaySource = replay.source ?? 'transcript'
           replaySnapshot = replay.snapshot
