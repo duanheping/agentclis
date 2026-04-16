@@ -7,8 +7,14 @@ import { terminalRegistry } from '../lib/terminalRegistry'
 const mockFit = vi.hoisted(() => vi.fn())
 const mockSerialize = vi.hoisted(() => vi.fn(() => 'serialized-snapshot'))
 const mockTerminalConstructor = vi.hoisted(() => vi.fn())
+const mockTerminalWriteHandler = vi.hoisted(() =>
+  vi.fn((_data: string, callback?: () => void) => {
+    callback?.()
+  }),
+)
 const terminalInstances = vi.hoisted(() => [] as Array<{
   write: ReturnType<typeof vi.fn>
+  open: ReturnType<typeof vi.fn>
 }>)
 
 vi.mock('@xterm/xterm', () => ({
@@ -59,8 +65,8 @@ vi.mock('@xterm/xterm', () => ({
     onData = vi.fn(() => ({
       dispose: vi.fn(),
     }))
-    write = vi.fn((_data: string, callback?: () => void) => {
-      callback?.()
+    write = vi.fn((data: string, callback?: () => void) => {
+      mockTerminalWriteHandler(data, callback)
     })
     scrollLines = vi.fn()
     clear = vi.fn()
@@ -171,6 +177,10 @@ describe('TerminalWorkspace', () => {
     mockFit.mockClear()
     mockSerialize.mockClear()
     mockTerminalConstructor.mockClear()
+    mockTerminalWriteHandler.mockReset()
+    mockTerminalWriteHandler.mockImplementation((_data: string, callback?: () => void) => {
+      callback?.()
+    })
     terminalInstances.length = 0
 
     vi.stubGlobal(
@@ -468,6 +478,60 @@ describe('TerminalWorkspace', () => {
       3,
       'OpenAI Codex banner',
     )
+  })
+
+  it('opens the terminal before awaiting a large snapshot replay', async () => {
+    let releaseSnapshotWrite: (() => void) | null = null
+    mockTerminalWriteHandler.mockImplementation((data: string, callback?: () => void) => {
+      if (data === 'large snapshot') {
+        releaseSnapshotWrite = callback ?? null
+        return
+      }
+
+      callback?.()
+    })
+    window.agentCli.getSessionTerminalReplay = vi.fn().mockResolvedValue({
+      chunks: [],
+      source: 'snapshot',
+      snapshot: {
+        format: 'serialized',
+        cols: 120,
+        rows: 36,
+        content: 'large snapshot',
+      },
+    })
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+      expect(terminalInstances[0]?.open).toHaveBeenCalledTimes(1)
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
+        'large snapshot',
+        expect.any(Function),
+      )
+      expect(releaseSnapshotWrite).not.toBeNull()
+    })
+
+    expect(
+      terminalInstances[0]?.open.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      terminalInstances[0]?.write.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    )
+
+    releaseSnapshotWrite?.()
+
+    await waitFor(() => {
+      expect(mockFit).toHaveBeenCalled()
+    })
   })
 
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
