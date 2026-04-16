@@ -37,45 +37,32 @@ function buildLocation(): ProjectLocation {
   }
 }
 
-function buildFallbackContext(): AssembledProjectContext {
-  return {
-    projectId: 'project-1',
-    locationId: 'location-1',
-    generatedAt: '2026-04-15T12:00:00.000Z',
-    bootstrapMessage: 'Legacy bootstrap',
-    fileReferences: [
-      'C:\\memory\\memory.md',
-      'C:\\memory\\critical-files.md',
-    ],
-    summaryExcerpt: 'Legacy summary',
-    architectureExcerpt: 'Renderer -> preload -> main',
-  }
-}
-
 describe('BootstrapComposer', () => {
-  it('falls back to the legacy bootstrap when MemPalace is unavailable', async () => {
-    const legacySource = {
-      assembleContext: vi.fn().mockResolvedValue(buildFallbackContext()),
-    }
+  it('returns an empty context when MemPalace is unavailable', async () => {
     const memorySearch = {
       getStatus: vi.fn().mockRejectedValue(new Error('bridge offline')),
       search: vi.fn(),
     }
-    const composer = new BootstrapComposer(legacySource, memorySearch)
+    const composer = new BootstrapComposer(memorySearch)
 
     const result = await composer.composeContext({
       project: buildProject(),
       location: buildLocation(),
     })
 
-    expect(result).toEqual(buildFallbackContext())
+    expect(result).toEqual<AssembledProjectContext>({
+      projectId: 'project-1',
+      locationId: 'location-1',
+      generatedAt: expect.any(String),
+      bootstrapMessage: null,
+      fileReferences: [],
+      summaryExcerpt: null,
+      architectureExcerpt: null,
+    })
     expect(memorySearch.search).not.toHaveBeenCalled()
   })
 
-  it('composes a structured bootstrap from MemPalace cards and keeps legacy references', async () => {
-    const legacySource = {
-      assembleContext: vi.fn().mockResolvedValue(buildFallbackContext()),
-    }
+  it('composes a structured bootstrap from MemPalace cards and uses searched source paths', async () => {
     const memorySearch = {
       getStatus: vi.fn().mockResolvedValue({
         backend: 'mempalace' as const,
@@ -105,6 +92,25 @@ describe('BootstrapComposer', () => {
               distance: null,
               sessionId: 'session-1',
               room: 'session-summary',
+              sourceLabel: 'C:\\memory\\summaries\\latest.md',
+            },
+          ],
+          warning: null,
+        })
+        .mockResolvedValueOnce({
+          backend: 'mempalace' as const,
+          query: 'architecture overview',
+          hitCount: 1,
+          hits: [
+            {
+              id: 'architecture-1',
+              backend: 'mempalace' as const,
+              textPreview: 'Renderer -> preload -> main',
+              similarity: 0.94,
+              distance: null,
+              sessionId: null,
+              room: 'architecture',
+              sourceLabel: 'C:\\memory\\architecture.json',
             },
           ],
           warning: null,
@@ -122,6 +128,7 @@ describe('BootstrapComposer', () => {
               distance: null,
               sessionId: 'session-1',
               room: 'decision',
+              sourceLabel: 'C:\\memory\\decisions.json',
             },
           ],
           warning: null,
@@ -139,6 +146,7 @@ describe('BootstrapComposer', () => {
               distance: null,
               sessionId: 'session-1',
               room: 'preference',
+              sourceLabel: 'C:\\memory\\preferences.json',
             },
           ],
           warning: null,
@@ -156,6 +164,7 @@ describe('BootstrapComposer', () => {
               distance: null,
               sessionId: 'session-1',
               room: 'workflow',
+              sourceLabel: 'C:\\memory\\component-workflows.md',
             },
           ],
           warning: null,
@@ -173,6 +182,7 @@ describe('BootstrapComposer', () => {
               distance: null,
               sessionId: 'session-1',
               room: 'troubleshooting',
+              sourceLabel: 'C:\\memory\\troubleshooting.md',
             },
           ],
           warning: null,
@@ -190,12 +200,13 @@ describe('BootstrapComposer', () => {
               distance: null,
               sessionId: 'session-1',
               room: 'critical-file',
+              sourceLabel: 'C:\\memory\\critical-files.md',
             },
           ],
           warning: null,
         }),
     }
-    const composer = new BootstrapComposer(legacySource, memorySearch)
+    const composer = new BootstrapComposer(memorySearch)
 
     const result = await composer.composeContext({
       project: buildProject(),
@@ -209,7 +220,22 @@ describe('BootstrapComposer', () => {
         room: 'session-summary',
       }),
     )
-    expect(result.fileReferences).toEqual(buildFallbackContext().fileReferences)
+    expect(memorySearch.search).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        wing: 'github.com/openai/agenclis',
+        room: 'architecture',
+      }),
+    )
+    expect(result.fileReferences).toEqual([
+      'C:\\memory\\summaries\\latest.md',
+      'C:\\memory\\architecture.json',
+      'C:\\memory\\decisions.json',
+      'C:\\memory\\preferences.json',
+      'C:\\memory\\component-workflows.md',
+      'C:\\memory\\troubleshooting.md',
+      'C:\\memory\\critical-files.md',
+    ])
     expect(result.bootstrapMessage).toContain('Structured summary from MemPalace.')
     expect(result.bootstrapMessage).toContain('Active decisions:')
     expect(result.bootstrapMessage).toContain('Project preferences:')

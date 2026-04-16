@@ -3,14 +3,6 @@ import type { AssembledProjectContext, ProjectLocation } from '../src/shared/pro
 import type { MemoryBackendStatus, MemorySearchHit, MemorySearchResult } from '../src/shared/memorySearch'
 import type { ProjectConfig } from '../src/shared/session'
 
-interface LegacyBootstrapSource {
-  assembleContext(input: {
-    project: ProjectConfig
-    location: ProjectLocation | null
-    query?: string
-  }): Promise<AssembledProjectContext>
-}
-
 interface StructuredMemorySearchSource {
   getStatus(): Promise<MemoryBackendStatus>
   search(input: {
@@ -36,15 +28,28 @@ function hasHits(result: MemorySearchResult | null | undefined): boolean {
   return (result?.hits.length ?? 0) > 0
 }
 
+function uniqueFileReferences(results: MemorySearchResult[]): string[] {
+  const seen = new Set<string>()
+  const references: string[] = []
+
+  for (const result of results) {
+    for (const hit of result.hits) {
+      const sourceLabel = hit.sourceLabel?.trim()
+      if (!sourceLabel || seen.has(sourceLabel)) {
+        continue
+      }
+      seen.add(sourceLabel)
+      references.push(sourceLabel)
+    }
+  }
+
+  return references
+}
+
 export class BootstrapComposer {
-  private readonly legacySource: LegacyBootstrapSource
   private readonly memorySearch: StructuredMemorySearchSource
 
-  constructor(
-    legacySource: LegacyBootstrapSource,
-    memorySearch: StructuredMemorySearchSource,
-  ) {
-    this.legacySource = legacySource
+  constructor(memorySearch: StructuredMemorySearchSource) {
     this.memorySearch = memorySearch
   }
 
@@ -53,22 +58,35 @@ export class BootstrapComposer {
     location: ProjectLocation | null
     query?: string
   }): Promise<AssembledProjectContext> {
-    const fallback = await this.legacySource.assembleContext(input)
-
     const status = await this.getBackendStatus()
     if (!status || status.installState !== 'installed') {
-      return fallback
+      return this.buildEmptyContext(input)
     }
 
     const wing = deriveMempalaceWing(input.project, input.location)
-    const query = input.query?.trim() ?? ''
-    const [summaryResult, decisions, preferences, workflows, troubleshooting, criticalFiles] =
+    const query = input.query?.trim()
+    const [
+      summaryResult,
+      architectureResult,
+      decisions,
+      preferences,
+      workflows,
+      troubleshooting,
+      criticalFiles,
+    ] =
       await Promise.all([
         this.memorySearch.search({
           query: query || 'latest summary',
           projectId: input.project.id,
           wing,
           room: 'session-summary',
+          limit: 1,
+        }),
+        this.memorySearch.search({
+          query: query || 'architecture overview',
+          projectId: input.project.id,
+          wing,
+          room: 'architecture',
           limit: 1,
         }),
         this.memorySearch.search({
@@ -110,6 +128,7 @@ export class BootstrapComposer {
 
     const hasStructuredMaterial =
       hasHits(summaryResult) ||
+      hasHits(architectureResult) ||
       hasHits(decisions) ||
       hasHits(preferences) ||
       hasHits(workflows) ||
@@ -117,28 +136,33 @@ export class BootstrapComposer {
       hasHits(criticalFiles)
 
     if (!hasStructuredMaterial) {
-      return fallback
+      return this.buildEmptyContext(input)
     }
 
-    const summaryLine =
-      summaryResult.hits[0]?.textPreview ??
-      fallback.summaryExcerpt ??
-      null
+    const summaryLine = summaryResult.hits[0]?.textPreview ?? null
+    const architectureLine = architectureResult.hits[0]?.textPreview ?? null
     const decisionPreview = formatPreview(decisions.hits, 4)
     const preferencePreview = formatPreview(preferences.hits, 4)
     const workflowPreview = formatPreview(workflows.hits, 4)
     const troubleshootingPreview = formatPreview(troubleshooting.hits, 4)
     const criticalFilesPreview = formatPreview(criticalFiles.hits, 5)
+    const fileReferences = uniqueFileReferences([
+      summaryResult,
+      architectureResult,
+      decisions,
+      preferences,
+      workflows,
+      troubleshooting,
+      criticalFiles,
+    ])
 
     const bootstrapParts = [
       'Use the project memory for this logical project before proceeding.',
-      fallback.fileReferences.length > 0 ? 'Read:' : null,
-      ...fallback.fileReferences.map((filePath) => `- ${filePath}`),
+      fileReferences.length > 0 ? 'Read:' : null,
+      ...fileReferences.map((filePath) => `- ${filePath}`),
       input.location ? `Current local checkout: ${input.location.label}` : null,
       summaryLine ? `Latest summary: ${summaryLine}` : null,
-      fallback.architectureExcerpt
-        ? `Architecture overview: ${fallback.architectureExcerpt}`
-        : null,
+      architectureLine ? `Architecture overview: ${architectureLine}` : null,
       decisionPreview ? `Active decisions:\n${decisionPreview}` : null,
       preferencePreview ? `Project preferences:\n${preferencePreview}` : null,
       workflowPreview ? `Component workflows:\n${workflowPreview}` : null,
@@ -149,10 +173,13 @@ export class BootstrapComposer {
     ].filter((value): value is string => Boolean(value))
 
     return {
-      ...fallback,
+      projectId: input.project.id,
+      locationId: input.location?.id ?? null,
       generatedAt: new Date().toISOString(),
       bootstrapMessage: bootstrapParts.join('\n'),
+      fileReferences,
       summaryExcerpt: summaryLine,
+      architectureExcerpt: architectureLine,
     }
   }
 
@@ -161,6 +188,21 @@ export class BootstrapComposer {
       return await this.memorySearch.getStatus()
     } catch {
       return null
+    }
+  }
+
+  private buildEmptyContext(input: {
+    project: ProjectConfig
+    location: ProjectLocation | null
+  }): AssembledProjectContext {
+    return {
+      projectId: input.project.id,
+      locationId: input.location?.id ?? null,
+      generatedAt: new Date().toISOString(),
+      bootstrapMessage: null,
+      fileReferences: [],
+      summaryExcerpt: null,
+      architectureExcerpt: null,
     }
   }
 }

@@ -144,6 +144,98 @@ describe('ProjectMemoryService', () => {
     service.dispose()
   })
 
+  it('uses the bootstrap composer even when the legacy library root is disabled', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => false),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const bootstrapComposer = {
+      composeContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: 'Bootstrap from MemPalace cards.',
+        fileReferences: [],
+        summaryExcerpt: 'MemPalace summary',
+      })),
+    }
+    const transcriptStore = buildTranscriptStore()
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        bootstrapComposer,
+      },
+    )
+
+    const context = await service.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+
+    expect(context.bootstrapMessage).toBe('Bootstrap from MemPalace cards.')
+    expect(bootstrapComposer.composeContext).toHaveBeenCalledTimes(1)
+    expect(manager.assembleContext).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  it('keeps MemPalace as the authoritative bootstrap source when the composer returns no message', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => true),
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: 'Legacy bootstrap should not be used.',
+        fileReferences: ['C:\\memory\\memory.md'],
+        summaryExcerpt: 'Legacy summary',
+      })),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const bootstrapComposer = {
+      composeContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+        architectureExcerpt: null,
+      })),
+    }
+    const transcriptStore = buildTranscriptStore()
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        bootstrapComposer,
+      },
+    )
+
+    const context = await service.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+
+    expect(context.bootstrapMessage).toBeNull()
+    expect(bootstrapComposer.composeContext).toHaveBeenCalledTimes(1)
+    expect(manager.assembleContext).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
   it('deduplicates low-priority backfill when a high-priority capture arrives for the same session', async () => {
     const manager = {
       isEnabled: vi.fn(() => true),

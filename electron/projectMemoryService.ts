@@ -22,7 +22,11 @@ import type { HistoricalProjectSessionDescriptor } from './projectSessionHistory
 import type { PreparedStructuredAgent } from './structuredAgentRunner'
 import type { TranscriptStore } from './transcriptStore'
 import type { MempalaceSessionIndexResult } from '../src/shared/memoryIndex'
-import type { MemoryReindexResult } from '../src/shared/memorySearch'
+import type {
+  MemoryBackendStatus,
+  MemoryReindexResult,
+} from '../src/shared/memorySearch'
+import type { MempalaceLegacyImportBundle } from '../src/shared/memoryIndex'
 
 type ProjectMemoryJobType = 'capture-session' | 'backfill-session'
 type ProjectMemoryJobPriority = 'high' | 'low'
@@ -58,10 +62,14 @@ interface ProjectMemoryServiceOptions {
 
 interface ProjectMemoryServiceDependencies {
   memoryBackend?: {
+    getStatus?(): Promise<MemoryBackendStatus>
     indexSessionTranscript(input: ProjectMemoryJobPayload & {
       transcript: TranscriptEvent[]
       transcriptPath: string
     }): Promise<MempalaceSessionIndexResult>
+    importLegacyProjectMemory?(
+      input: MempalaceLegacyImportBundle,
+    ): Promise<unknown>
   }
   bootstrapComposer?: {
     composeContext(input: {
@@ -243,7 +251,7 @@ export class ProjectMemoryService {
     location: ProjectLocation | null
     query?: string
   }): Promise<AssembledProjectContext> {
-    if (this.manager.isEnabled() && this.bootstrapComposer) {
+    if (this.bootstrapComposer) {
       return await this.bootstrapComposer.composeContext(input)
     }
 
@@ -285,6 +293,33 @@ export class ProjectMemoryService {
     },
   ): Promise<ProjectMemoryRefreshResult> {
     return await this.manager.refreshHistoricalImport(projects, options)
+  }
+
+  async importLegacyProjectMemory(projects: ProjectConfig[]): Promise<void> {
+    if (!this.memoryBackend?.importLegacyProjectMemory) {
+      return
+    }
+
+    for (const project of projects) {
+      const bundle = await this.manager.buildLegacyImportBundle(project)
+      if (!bundle) {
+        continue
+      }
+
+      await this.memoryBackend.importLegacyProjectMemory(bundle)
+    }
+  }
+
+  async getMemoryBackendStatus(): Promise<MemoryBackendStatus | null> {
+    if (!this.memoryBackend?.getStatus) {
+      return null
+    }
+
+    try {
+      return await this.memoryBackend.getStatus()
+    } catch {
+      return null
+    }
   }
 
   async analyzeHistoricalArchitecture(

@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -264,6 +266,7 @@ function buildProjectMemoryServiceMock(
       analyzedSessionCount: 0,
       skippedSessionCount: 0,
     })),
+    getMemoryBackendStatus: vi.fn(async () => null),
     dispose: vi.fn(() => undefined),
     ...overrides,
   }
@@ -591,7 +594,10 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    expectSpawnedPowerShellCommand(0, 'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a')
+    expectSpawnedPowerShellCommand(
+      0,
+      'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
+    )
 
     expect(onConfig).toHaveBeenCalledWith({
       sessionId: 'session-a',
@@ -830,7 +836,10 @@ describe('SessionManager restore policy', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
 
-    expectSpawnedPowerShellCommand(0, 'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a')
+    expectSpawnedPowerShellCommand(
+      0,
+      'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
+    )
   })
 
   it('keeps a restore session failed when only an ineligible Codex Desktop transcript is available', async () => {
@@ -3050,6 +3059,151 @@ describe('SessionManager logical project identity and project context', () => {
     ).toBe('Copilot project memory payload')
   })
 
+  it('adds a read-only MemPalace MCP config to new Copilot sessions when the backend is installed', async () => {
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
+    }
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'Copilot project memory payload',
+      })),
+      getMemoryBackendStatus: vi.fn(async () => ({
+        backend: 'mempalace' as const,
+        repo: 'https://github.com/duanheping/mempalace.git',
+        commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        installState: 'installed' as const,
+        runtimeState: 'running' as const,
+        installRoot: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
+        pythonPath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c\\venv\\Scripts\\python.exe',
+        module: 'mempalace.mcp_server',
+        message: null,
+        lastError: null,
+      })),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot --model gpt-5.2',
+      attachProjectContext: true,
+    })
+
+    await vi.runOnlyPendingTimersAsync()
+
+    const spawnArgs = (mocks.spawn.mock.calls[0] as unknown[] | undefined)?.[1] as
+      | string[]
+      | undefined
+    const encodedCommand = spawnArgs?.[3]
+    const decodedCommand = encodedCommand
+      ? Buffer.from(encodedCommand, 'base64').toString('utf16le')
+      : ''
+    expect(decodedCommand).toContain('copilot --model gpt-5.2')
+    expect(decodedCommand).toContain('--additional-mcp-config @')
+
+    await manager.closeSession(session.config.id)
+  })
+
+  it('adds a project-scoped MemPalace MCP config to new Codex sessions when the backend is installed', async () => {
+    const projectRootPath = mkdtempSync(path.join(os.tmpdir(), 'agenclis-codex-mcp-'))
+    const transcriptStore = {
+      append: vi.fn(async () => undefined),
+      readEvents: vi.fn(async () => []),
+    }
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'Codex project memory payload',
+      })),
+      getMemoryBackendStatus: vi.fn(async () => ({
+        backend: 'mempalace' as const,
+        repo: 'https://github.com/duanheping/mempalace.git',
+        commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        installState: 'installed' as const,
+        runtimeState: 'running' as const,
+        installRoot: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
+        pythonPath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c\\venv\\Scripts\\python.exe',
+        module: 'mempalace.mcp_server',
+        message: null,
+        lastError: null,
+      })),
+    })
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'repo',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/openai/agenclis',
+      })),
+    }
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        identityResolver,
+        transcriptStore,
+        projectMemory,
+      },
+    )
+
+    const configPath = path.join(projectRootPath, '.codex', 'config.toml')
+
+    try {
+      const session = await manager.createSession({
+        projectTitle: 'Workspace',
+        projectRootPath,
+        startupCommand: 'codex',
+        attachProjectContext: true,
+      })
+
+      await vi.runOnlyPendingTimersAsync()
+
+      expectSpawnedPowerShellCommand(0, 'codex')
+      expect(projectMemory.getMemoryBackendStatus).toHaveBeenCalledTimes(1)
+      expect(existsSync(configPath)).toBe(true)
+      await expect(readFile(configPath, 'utf8')).resolves.toContain(
+        '[mcp_servers.agentclis_mempalace]',
+      )
+
+      await manager.closeSession(session.config.id)
+      expect(existsSync(configPath)).toBe(false)
+    } finally {
+      rmSync(projectRootPath, { recursive: true, force: true })
+    }
+  })
+
   it('reuses the persisted Copilot instructions snapshot when restoring a resumed session', async () => {
     const projectRootPath = path.join(
       os.tmpdir(),
@@ -3132,9 +3286,10 @@ describe('SessionManager logical project identity and project context', () => {
     })
 
     expect(projectMemory.assembleContext).not.toHaveBeenCalled()
-    expectSpawnedPowerShellCommand(
-      0,
-      `copilot --model gpt-5.2 --resume ${externalSessionId}`,
+     expect(projectMemory.getMemoryBackendStatus).not.toHaveBeenCalled()
+     expectSpawnedPowerShellCommand(
+       0,
+       `copilot --model gpt-5.2 --resume ${externalSessionId}`,
     )
   })
 
@@ -3217,6 +3372,106 @@ describe('SessionManager logical project identity and project context', () => {
     })
 
     expect(projectMemory.assembleContext).not.toHaveBeenCalled()
+  })
+
+  it('does not retrofit a MemPalace MCP config onto restored external Codex sessions', async () => {
+    const projectRootPath = mkdtempSync(path.join(os.tmpdir(), 'agenclis-codex-restore-mcp-'))
+    const externalSessionId = '019cf7a4-db19-78a0-a9b1-b9e3d2b0126a'
+    const projectMemory = buildProjectMemoryServiceMock({
+      assembleContext: vi.fn(async () => ({
+        ...buildProjectMemoryContext(),
+        bootstrapMessage: 'memory that must not generate a new codex mcp config',
+      })),
+      getMemoryBackendStatus: vi.fn(async () => ({
+        backend: 'mempalace' as const,
+        repo: 'https://github.com/duanheping/mempalace.git',
+        commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        installState: 'installed' as const,
+        runtimeState: 'running' as const,
+        installRoot: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
+        palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
+        pythonPath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c\\venv\\Scripts\\python.exe',
+        module: 'mempalace.mcp_server',
+        message: null,
+        lastError: null,
+      })),
+    })
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: projectRootPath,
+          createdAt: '2026-04-07T13:00:00.000Z',
+          updatedAt: '2026-04-07T13:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: 'codex restore',
+          startupCommand: 'codex',
+          pendingFirstPromptTitle: false,
+          cwd: projectRootPath,
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          projectMemoryMode: 'codex-developer-instructions',
+          createdAt: '2026-04-07T13:00:00.000Z',
+          updatedAt: '2026-04-07T13:01:00.000Z',
+          externalSession: {
+            provider: 'codex',
+            sessionId: externalSessionId,
+            detectedAt: '2026-04-07T13:00:10.000Z',
+          },
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.codex',
+        'sessions',
+        '2026',
+        '04',
+        '07',
+        `rollout-2026-04-07T13-00-05-${externalSessionId}.jsonl`,
+      ),
+      [
+        `{"timestamp":"2026-04-07T13:00:05.000Z","type":"session_meta","payload":{"id":"${externalSessionId}","timestamp":"2026-04-07T13:00:05.000Z","cwd":"${projectRootPath.replace(/\\/g, '\\\\')}","originator":"codex_cli_rs"}}`,
+      ].join('\n'),
+      '2026-04-07T13:01:00.000Z',
+    )
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      {
+        projectMemory,
+      },
+    )
+
+    try {
+      await manager.restoreSessions()
+      await vi.waitFor(() => {
+        expect(mocks.spawn).toHaveBeenCalledTimes(1)
+      })
+
+      expect(projectMemory.getMemoryBackendStatus).not.toHaveBeenCalled()
+      expect(existsSync(path.join(projectRootPath, '.codex', 'config.toml'))).toBe(false)
+      expectSpawnedPowerShellCommand(
+        0,
+        `codex resume ${externalSessionId}`,
+      )
+    } finally {
+      rmSync(projectRootPath, { recursive: true, force: true })
+    }
   })
 
   it('cleans up Copilot instructions file on session close', async () => {

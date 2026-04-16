@@ -107,10 +107,7 @@ const projectMemoryManager = new ProjectMemoryManager(
   ),
 )
 projectMemoryManager.setStructuredMemorySink(mempalaceService)
-const bootstrapComposer = new BootstrapComposer(
-  projectMemoryManager,
-  mempalaceService,
-)
+const bootstrapComposer = new BootstrapComposer(mempalaceService)
 const projectMemoryService = new ProjectMemoryService(
   projectMemoryManager,
   transcriptStore,
@@ -719,6 +716,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.installMemoryRuntime, () =>
     mempalaceService.installRuntime().then((result) => {
       if (result.success) {
+        void projectMemoryService.importLegacyProjectMemory(
+          sessionManager.getProjectConfigs(),
+        )
         projectMemoryService.resume()
         sessionManager.scheduleProjectMemoryBackfill()
       }

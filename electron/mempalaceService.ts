@@ -12,7 +12,10 @@ import type {
   MemorySearchResult,
 } from '../src/shared/memorySearch'
 import type {
+  MempalaceLegacyImportBundle,
+  MempalaceLegacyImportResult,
   MempalaceMemoryRecord,
+  MempalaceMemoryRecordInput,
   MempalaceStructuredIndexResult,
   MempalaceStructuredMemoryInput,
   MempalaceSessionIndexResult,
@@ -166,7 +169,7 @@ function mapSearchHit(
     sourceLabel: provenance?.sourceLabel ?? sourceFile ?? null,
     projectId: provenance?.projectId ?? null,
     locationId: provenance?.locationId ?? null,
-    sessionId: provenance?.sessionId ?? null,
+    sessionId: provenance?.sessionId?.trim() ? provenance.sessionId : null,
     timestampStart: provenance?.timestampStart ?? null,
     timestampEnd: provenance?.timestampEnd ?? null,
   }
@@ -428,6 +431,46 @@ export class MempalaceService {
     }
   }
 
+  async importLegacyProjectMemory(
+    input: MempalaceLegacyImportBundle,
+  ): Promise<MempalaceLegacyImportResult> {
+    const status = await this.runtime.getStatus()
+    if (status.installState !== 'installed') {
+      return {
+        status: 'deferred',
+        projectId: input.projectId,
+        indexedCount: 0,
+        warning: status.message ?? 'MemPalace runtime is not installed.',
+      }
+    }
+
+    if (input.records.length === 0) {
+      return {
+        status: 'skipped',
+        projectId: input.projectId,
+        indexedCount: 0,
+        warning: null,
+      }
+    }
+
+    const indexState = await this.loadIndexState()
+    let indexedCount = 0
+
+    for (const record of input.records) {
+      await this.persistMemoryRecord(indexState, record)
+      indexedCount += 1
+    }
+
+    await this.persistIndexState(indexState)
+
+    return {
+      status: 'indexed',
+      projectId: input.projectId,
+      indexedCount,
+      warning: null,
+    }
+  }
+
   async search(input: MemorySearchRequest): Promise<MemorySearchResult> {
     const query = input.query.trim()
     if (!query) {
@@ -645,5 +688,53 @@ export class MempalaceService {
   ): void {
     state.recordsByLookupKey[record.lookupKey] = record
     state.recordsBySourceFile[record.sourceFile] = record
+  }
+
+  private async persistMemoryRecord(
+    state: MempalaceIndexState,
+    record: MempalaceMemoryRecordInput,
+  ): Promise<void> {
+    const addResult = await this.bridge.addDrawer({
+      wing: record.wing,
+      room: record.room,
+      content: record.content,
+      source_file: record.sourceFile,
+    })
+    const success = addResult.success === true
+    const palaceDrawerId =
+      typeof addResult.drawer_id === 'string' ? addResult.drawer_id : null
+
+    if (!success || !palaceDrawerId) {
+      const message =
+        typeof addResult.error === 'string'
+          ? addResult.error
+          : 'MemPalace failed to add a memory drawer.'
+      throw new Error(message)
+    }
+
+    this.upsertRecord(state, {
+      lookupKey: buildLookupKey(record.wing, record.room, record.content),
+      palaceDrawerId,
+      drawerId: record.drawerId,
+      sourceFile: record.sourceFile,
+      sourceLabel: record.sourceLabel,
+      projectId: record.projectId,
+      locationId: record.locationId,
+      sessionId: record.sessionId,
+      eventIds: [...record.eventIds],
+      timestampStart: record.timestampStart,
+      timestampEnd: record.timestampEnd,
+      sourceKind: record.sourceKind,
+      room: record.room,
+      wing: record.wing,
+      chunkIndex: record.chunkIndex,
+      transcriptPath: record.transcriptPath,
+      candidateId: record.candidateId,
+      candidateKind: record.candidateKind,
+      scope: record.scope,
+      memoryKey: record.memoryKey,
+      confidence: record.confidence,
+      status: record.status,
+    })
   }
 }

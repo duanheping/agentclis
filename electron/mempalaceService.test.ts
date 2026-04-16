@@ -12,6 +12,7 @@ import type {
   SessionSummary,
   TranscriptEvent,
 } from '../src/shared/projectMemory'
+import type { MempalaceLegacyImportBundle } from '../src/shared/memoryIndex'
 
 const tempRoots: string[] = []
 
@@ -393,6 +394,120 @@ describe('MempalaceService', () => {
         room: 'preference',
         sourceLabel: 'project-convention:provider-native-bootstrap',
         sessionId: 'session-1',
+      }),
+    )
+  })
+
+  it('imports legacy artifact records into MemPalace with preserved source paths', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agentclis-mempalace-service-'))
+    tempRoots.push(tempRoot)
+
+    const runtime = {
+      getStatus: vi.fn().mockResolvedValue(buildStatus()),
+      installRuntime: vi.fn(),
+    }
+    const bridge = {
+      addDrawer: vi
+        .fn()
+        .mockResolvedValueOnce({
+          success: true,
+          drawer_id: 'legacy-summary',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          drawer_id: 'legacy-architecture',
+        }),
+      search: vi.fn().mockResolvedValue({
+        results: [
+          {
+            text: 'Legacy summary imported from disk.',
+            wing: 'github.com/openai/agenclis',
+            room: 'session-summary',
+            source_file:
+              'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\summaries\\session-1.json#summary',
+            similarity: 0.95,
+          },
+          {
+            text: 'Legacy architecture overview.',
+            wing: 'github.com/openai/agenclis',
+            room: 'architecture',
+            source_file:
+              'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\architecture.json#overview',
+            similarity: 0.9,
+          },
+        ],
+      }),
+    }
+    const service = new MempalaceService(runtime, bridge, {
+      indexStatePath: path.join(tempRoot, 'provenance.json'),
+    })
+    const bundle: MempalaceLegacyImportBundle = {
+      projectId: 'project-1',
+      wing: 'github.com/openai/agenclis',
+      records: [
+        {
+          drawerId: 'legacy-summary:session-1',
+          content: 'Legacy summary imported from disk.',
+          sourceFile:
+            'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\summaries\\session-1.json#summary',
+          sourceLabel:
+            'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\summaries\\session-1.json',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          sessionId: 'session-1',
+          eventIds: ['event-1'],
+          timestampStart: '2026-04-10T12:00:00.000Z',
+          timestampEnd: '2026-04-10T12:00:00.000Z',
+          sourceKind: 'session-summary',
+          room: 'session-summary',
+          wing: 'github.com/openai/agenclis',
+        },
+        {
+          drawerId: 'legacy-architecture:project-1',
+          content: 'Legacy architecture overview.',
+          sourceFile:
+            'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\architecture.json#overview',
+          sourceLabel:
+            'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\architecture.json',
+          projectId: 'project-1',
+          locationId: null,
+          sessionId: '',
+          eventIds: [],
+          timestampStart: '2026-04-10T12:00:00.000Z',
+          timestampEnd: '2026-04-10T12:00:00.000Z',
+          sourceKind: 'architecture',
+          room: 'architecture',
+          wing: 'github.com/openai/agenclis',
+        },
+      ],
+    }
+
+    const importResult = await service.importLegacyProjectMemory(bundle)
+
+    expect(importResult).toEqual(
+      expect.objectContaining({
+        status: 'indexed',
+        indexedCount: 2,
+      }),
+    )
+
+    const searchResult = await service.search({
+      query: 'legacy',
+      wing: 'github.com/openai/agenclis',
+    })
+
+    expect(searchResult.hits[0]).toEqual(
+      expect.objectContaining({
+        sourceLabel:
+          'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\summaries\\session-1.json',
+        sessionId: 'session-1',
+      }),
+    )
+    expect(searchResult.hits[1]).toEqual(
+      expect.objectContaining({
+        sourceLabel:
+          'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\architecture.json',
+        sessionId: null,
       }),
     )
   })

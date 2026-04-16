@@ -6,6 +6,7 @@ import {
   buildCopilotResumeCommand,
   extractCopilotSessionMeta,
   supportsCopilotSessionResume,
+  withCopilotAdditionalMcpConfig,
 } from './copilotCli'
 
 describe('copilotCli', () => {
@@ -136,5 +137,26 @@ describe('copilotCli', () => {
 
   it('stops parsing at -- separator', () => {
     expect(supportsCopilotSessionResume('copilot --model gpt -- help')).toBe(true)
+  })
+
+  it('adds an additional MCP config to an interactive Copilot command', () => {
+    const result = withCopilotAdditionalMcpConfig(
+      'copilot --model gpt-5.2 --allow-all',
+      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\mempalace.json',
+    )
+
+    expect(result).toBe(
+      'copilot --model gpt-5.2 --allow-all --additional-mcp-config @C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\mempalace.json',
+    )
+  })
+
+  it('does not add an MCP config when MCP servers are explicitly disabled', () => {
+    const command = 'copilot --model gpt-5.2 --disable-mcp-server github'
+    expect(
+      withCopilotAdditionalMcpConfig(
+        command,
+        'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\mempalace.json',
+      ),
+    ).toBe(command)
   })
 })

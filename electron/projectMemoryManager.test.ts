@@ -371,6 +371,61 @@ describe('ProjectMemoryManager', () => {
     )
   })
 
+  it('builds a legacy import bundle with preserved artifact paths', async () => {
+    const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
+    tempRoots.push(libraryRoot)
+    const repoRoot = await createArchitectureFixture()
+    const manager = new ProjectMemoryManager(() => libraryRoot, {
+      extract: async () => ({
+        summary: 'Legacy structured memory for migration.',
+        candidates: [
+          {
+            kind: 'decision',
+            scope: 'project',
+            key: 'migrate-memory',
+            content: 'Migrate legacy memory into MemPalace.',
+            confidence: 0.92,
+            sourceEventIds: ['event-1', 'event-2'],
+          },
+        ],
+      }),
+    })
+    const project = buildProjectAt(repoRoot)
+
+    await manager.captureSession({
+      project,
+      location: buildLocationAt(repoRoot),
+      session: buildSessionAt(repoRoot),
+      transcript: buildTranscript(),
+    })
+
+    const bundle = await manager.buildLegacyImportBundle(project)
+    const memoryRoot = path.join(
+      libraryRoot,
+      '.agenclis-memory',
+      'projects',
+      'remote-github.com-openai-agenclis',
+    )
+
+    expect(bundle).not.toBeNull()
+    expect(bundle?.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          room: 'session-summary',
+          sourceLabel: path.join(memoryRoot, 'summaries', 'session-1.json'),
+        }),
+        expect.objectContaining({
+          room: 'decision',
+          sourceLabel: path.join(memoryRoot, 'decisions.json'),
+        }),
+        expect.objectContaining({
+          room: 'architecture',
+          sourceLabel: path.join(memoryRoot, 'architecture.json'),
+        }),
+      ]),
+    )
+  })
+
   it('writes focused memory docs and prefers synthesized architecture when an architecture extractor is configured', async () => {
     const libraryRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-library-'))
     tempRoots.push(libraryRoot)

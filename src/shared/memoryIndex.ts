@@ -30,6 +30,7 @@ export type MempalaceMemoryRoom = (typeof MEMPALACE_MEMORY_ROOMS)[number]
 export const MEMPALACE_SOURCE_KINDS = [
   'transcript-raw',
   'session-summary',
+  'architecture',
   ...PROJECT_MEMORY_CANDIDATE_KINDS,
 ] as const
 
@@ -39,6 +40,30 @@ export interface MempalaceMemoryRecord {
   lookupKey: string
   palaceDrawerId: string
   drawerId: string
+  sourceFile: string
+  sourceLabel: string | null
+  projectId: string
+  locationId: string | null
+  sessionId: string
+  eventIds: string[]
+  timestampStart: string
+  timestampEnd: string
+  sourceKind: MempalaceSourceKind
+  room: MempalaceMemoryRoom
+  wing: string
+  chunkIndex?: number
+  transcriptPath?: string | null
+  candidateId?: string | null
+  candidateKind?: ProjectMemoryCandidateKind | null
+  scope?: ProjectMemoryScope | null
+  memoryKey?: string | null
+  confidence?: number | null
+  status?: ProjectMemoryStatus | null
+}
+
+export interface MempalaceMemoryRecordInput {
+  drawerId: string
+  content: string
   sourceFile: string
   sourceLabel: string | null
   projectId: string
@@ -116,6 +141,19 @@ export interface MempalaceStructuredIndexResult {
   sessionId: string
   indexedCount: number
   skippedCount: number
+  warning: string | null
+}
+
+export interface MempalaceLegacyImportBundle {
+  projectId: string
+  wing: string
+  records: MempalaceMemoryRecordInput[]
+}
+
+export interface MempalaceLegacyImportResult {
+  status: 'indexed' | 'skipped' | 'deferred'
+  projectId: string
+  indexedCount: number
   warning: string | null
 }
 
