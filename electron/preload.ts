@@ -7,6 +7,12 @@ import {
 
 import { IPC_CHANNELS, type AgentCliApi } from '../src/shared/ipc'
 import type {
+  MemoryBackendInstallResult,
+  MemoryReindexResult,
+  MemoryBackendStatus,
+  MemorySearchResult,
+} from '../src/shared/memorySearch'
+import type {
   FullSyncDone,
   FullSyncProgress,
   FullSyncState,
@@ -54,6 +60,24 @@ const api: AgentCliApi = {
     ipcRenderer.invoke(IPC_CHANNELS.getSkillLibrarySettings),
   updateSkillLibrarySettings: (settings) =>
     ipcRenderer.invoke(IPC_CHANNELS.updateSkillLibrarySettings, settings),
+  getMemoryBackendStatus: () =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.getMemoryBackendStatus,
+    ) as Promise<MemoryBackendStatus>,
+  installMemoryRuntime: () =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.installMemoryRuntime,
+    ) as Promise<MemoryBackendInstallResult>,
+  searchMemory: (input) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.searchMemory,
+      input,
+    ) as Promise<MemorySearchResult>,
+  reindexMemoryProject: (input) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.reindexMemoryProject,
+      input,
+    ) as Promise<MemoryReindexResult>,
   analyzeProjectArchitecture: () =>
     ipcRenderer.invoke(IPC_CHANNELS.analyzeProjectArchitecture),
   analyzeProjectSessions: () =>

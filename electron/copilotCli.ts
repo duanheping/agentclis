@@ -128,6 +128,27 @@ export function withCopilotFullAccess(command: string): string | null {
   return joinCommandTokens([parsed.executable, ...resumeOptions])
 }
 
+export function withCopilotAdditionalMcpConfig(
+  command: string,
+  configPath: string,
+): string | null {
+  const parsed = parseCopilotCommand(command)
+  if (!parsed) {
+    return null
+  }
+
+  if (parsed.optionNames.has('--disable-mcp-server')) {
+    return joinCommandTokens([parsed.executable, ...parsed.resumeOptions])
+  }
+
+  return joinCommandTokens([
+    parsed.executable,
+    ...parsed.resumeOptions,
+    '--additional-mcp-config',
+    `@${configPath}`,
+  ])
+}
+
 export function extractCopilotSessionMeta(content: string): CopilotSessionMeta | null {
   const sessionId = findYamlValue(content, 'id')
   const cwd = findYamlValue(content, 'cwd')

@@ -12,6 +12,12 @@ import {
   PROJECT_MEMORY_SCOPES,
   PROJECT_MEMORY_STATUSES,
 } from '../src/shared/projectMemory'
+import {
+  deriveMempalaceRoomForCandidateKind,
+  deriveMempalaceWing,
+  type MempalaceLegacyImportBundle,
+  type MempalaceMemoryRecordInput,
+} from '../src/shared/memoryIndex'
 import type {
   AssembledProjectContext,
   ProjectLocation,
@@ -282,6 +288,16 @@ export interface ProjectMemoryExtractor {
 export interface ProjectMemoryManagerOptions {
   maxCandidateBytes?: number
   staleAfterSessionCount?: number
+}
+
+export interface ProjectStructuredMemorySink {
+  indexStructuredSessionMemory(input: {
+    project: ProjectConfig
+    location: ProjectLocation | null
+    session: SessionConfig
+    summary: SessionSummary
+    candidates: ProjectMemoryCandidate[]
+  }): Promise<unknown>
 }
 
 interface StoredProjectRecord {
@@ -1872,6 +1888,7 @@ export class ProjectMemoryManager {
   private readonly maxCandidateBytes: number
   private readonly staleAfterSessionCount: number
   private diagnosticReporter?: ProjectMemoryDiagnosticReporter
+  private structuredMemorySink?: ProjectStructuredMemorySink
 
   constructor(
     getLibraryRoot: () => string,
@@ -1897,6 +1914,10 @@ export class ProjectMemoryManager {
 
   setDiagnosticReporter(reporter: ProjectMemoryDiagnosticReporter): void {
     this.diagnosticReporter = reporter
+  }
+
+  setStructuredMemorySink(sink: ProjectStructuredMemorySink | undefined): void {
+    this.structuredMemorySink = sink
   }
 
   isEnabled(): boolean {
@@ -2365,6 +2386,135 @@ export class ProjectMemoryManager {
     return this.applyRetentionPolicies(normalizedSnapshot, summaryHistory)
   }
 
+  async buildLegacyImportBundle(
+    project: ProjectConfig,
+  ): Promise<MempalaceLegacyImportBundle | null> {
+    const projectDirectory = this.getProjectDirectory(project)
+    if (!projectDirectory) {
+      return null
+    }
+
+    const [snapshot, summaryHistory, architectureSnapshot, sessionsAnalysis] =
+      await Promise.all([
+        this.readSnapshot(project),
+        this.readSummaryHistoryFromDirectory(projectDirectory),
+        this.readArchitectureSnapshot(project),
+        this.readHistoricalSessionsAnalysisFromDirectory(projectDirectory),
+      ])
+
+    const wing = deriveMempalaceWing(project)
+    const records: MempalaceMemoryRecordInput[] = []
+
+    for (const summary of summaryHistory) {
+      const sourcePath = path.join(
+        projectDirectory,
+        'summaries',
+        `${summary.sessionId}.json`,
+      )
+      records.push({
+        drawerId: `legacy-summary:${summary.sessionId}`,
+        content: summary.summary,
+        sourceFile: `${sourcePath}#summary`,
+        sourceLabel: sourcePath,
+        projectId: summary.projectId,
+        locationId: summary.locationId,
+        sessionId: summary.sessionId,
+        eventIds: [...summary.sourceEventIds],
+        timestampStart: summary.generatedAt,
+        timestampEnd: summary.generatedAt,
+        sourceKind: 'session-summary',
+        room: 'session-summary',
+        wing,
+      })
+    }
+
+    for (const bucket of PROJECT_MEMORY_BUCKETS) {
+      const sourcePath = path.join(projectDirectory, bucket.fileName)
+      for (const candidate of snapshot[bucket.snapshotKey]) {
+        records.push({
+          drawerId: `legacy-candidate:${candidate.id}`,
+          content: candidate.content,
+          sourceFile: `${sourcePath}#${candidate.id}`,
+          sourceLabel: sourcePath,
+          projectId: candidate.projectId,
+          locationId: candidate.locationId,
+          sessionId: candidate.sourceSessionId,
+          eventIds: [...candidate.sourceEventIds],
+          timestampStart: candidate.createdAt,
+          timestampEnd: candidate.updatedAt,
+          sourceKind: candidate.kind,
+          room: deriveMempalaceRoomForCandidateKind(candidate.kind),
+          wing,
+          candidateId: candidate.id,
+          candidateKind: candidate.kind,
+          scope: candidate.scope,
+          memoryKey: candidate.key,
+          confidence: candidate.confidence,
+          status: candidate.status,
+        })
+      }
+    }
+
+    if (architectureSnapshot) {
+      const architectureContent =
+        architectureSnapshot.systemOverview.trim() ||
+        architectureSnapshot.modules
+          .slice(0, 6)
+          .map((module) => `${module.name}: ${module.responsibility}`)
+          .join('\n')
+      if (architectureContent) {
+        const sourcePath = path.join(projectDirectory, 'architecture.json')
+        records.push({
+          drawerId: `legacy-architecture:${project.id}`,
+          content: architectureContent,
+          sourceFile: `${sourcePath}#overview`,
+          sourceLabel: sourcePath,
+          projectId: project.id,
+          locationId: null,
+          sessionId: '',
+          eventIds: [],
+          timestampStart: architectureSnapshot.generatedAt,
+          timestampEnd: architectureSnapshot.generatedAt,
+          sourceKind: 'architecture',
+          room: 'architecture',
+          wing,
+        })
+      }
+    }
+
+    if (sessionsAnalysis?.summary?.trim()) {
+      const sourcePath = path.join(
+        projectDirectory,
+        HISTORICAL_SESSIONS_ANALYSIS_JSON,
+      )
+      records.push({
+        drawerId: `legacy-sessions-analysis:${project.id}`,
+        content: sessionsAnalysis.summary.trim(),
+        sourceFile: `${sourcePath}#summary`,
+        sourceLabel: sourcePath,
+        projectId: project.id,
+        locationId: null,
+        sessionId: '',
+        eventIds: [],
+        timestampStart: sessionsAnalysis.generatedAt,
+        timestampEnd: sessionsAnalysis.generatedAt,
+        sourceKind: 'session-summary',
+        room: 'session-summary',
+        wing,
+      })
+    }
+
+    if (records.length === 0) {
+      return null
+    }
+
+    return {
+      projectId: project.id,
+      wing,
+      records,
+    }
+  }
+
   async hasSessionSummary(
     project: ProjectConfig,
     sessionId: string,
@@ -2583,6 +2733,33 @@ export class ProjectMemoryManager {
       nextSnapshot,
       buildSummaryHistory([...summaryHistory, summary]),
     )
+    const structuredCardsForSession = [
+      ...stableFacts,
+      ...extractedCandidates,
+    ]
+
+    if (this.structuredMemorySink) {
+      try {
+        await this.structuredMemorySink.indexStructuredSessionMemory({
+          project: input.project,
+          location: input.location,
+          session: input.session,
+          summary,
+          candidates: structuredCardsForSession,
+        })
+      } catch (error) {
+        this.reportDiagnostic({
+          level: 'warning',
+          code: 'structured-memory-sink-failed',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Structured MemPalace indexing failed.',
+          projectId: input.project.id,
+          sessionId: input.session.id,
+        })
+      }
+    }
 
     await writeJsonFile(
       path.join(projectDirectory, 'summaries', `${input.session.id}.json`),

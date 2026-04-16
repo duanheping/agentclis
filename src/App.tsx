@@ -9,6 +9,10 @@ import { CreateSessionDialog } from './components/CreateSessionDialog'
 import { ProjectDiffPanel } from './components/ProjectDiffPanel'
 import { SessionSidebar } from './components/SessionSidebar'
 import { TerminalWorkspace } from './components/TerminalWorkspace'
+import { deriveMempalaceWing } from './shared/memoryIndex'
+import type { MemoryBackendStatus } from './shared/memorySearch'
+import type { MemoryReindexResult } from './shared/memorySearch'
+import type { MemorySearchResult } from './shared/memorySearch'
 import {
   buildWindowsCommandPromptTerminalId,
   terminalRegistry,
@@ -273,6 +277,21 @@ function App() {
     useState<SkillAiMergeProposal | null>(null)
   const [skillsErrorMessage, setSkillsErrorMessage] = useState<string | null>(null)
   const [skillsSyncing, setSkillsSyncing] = useState(false)
+  const [memoryBackendStatus, setMemoryBackendStatus] =
+    useState<MemoryBackendStatus | null>(null)
+  const [memoryBackendLoading, setMemoryBackendLoading] =
+    useState(Boolean(agentCli))
+  const [memoryBackendInstalling, setMemoryBackendInstalling] = useState(false)
+  const [memoryBackendReindexing, setMemoryBackendReindexing] = useState(false)
+  const [memoryBackendErrorMessage, setMemoryBackendErrorMessage] =
+    useState<string | null>(null)
+  const [memoryBackendReindexResult, setMemoryBackendReindexResult] =
+    useState<MemoryReindexResult | null>(null)
+  const [memorySearchLoading, setMemorySearchLoading] = useState(false)
+  const [memorySearchErrorMessage, setMemorySearchErrorMessage] =
+    useState<string | null>(null)
+  const [memorySearchResult, setMemorySearchResult] =
+    useState<MemorySearchResult | null>(null)
   const [terminalFocusRequest, setTerminalFocusRequest] =
     useState<TerminalFocusRequest | null>(null)
   const appShellRef = useRef<HTMLDivElement | null>(null)
@@ -499,6 +518,17 @@ function App() {
     setSkillSyncStatus(status)
   }, [agentCli])
 
+  const refreshMemoryBackendStatus = useCallback(async () => {
+    if (!agentCli) {
+      throw new Error('Agent bridge is unavailable.')
+    }
+
+    const status = await agentCli.getMemoryBackendStatus()
+    setMemoryBackendStatus(status)
+    setMemoryBackendErrorMessage(null)
+    return status
+  }, [agentCli])
+
   const refreshProjectGitState = async (projectPath = activeWorkspacePath) => {
     if (!agentCli) {
       throw new Error('Agent bridge is unavailable.')
@@ -638,6 +668,9 @@ function App() {
       setSkillLibrarySettings(null)
       setSkillSyncStatus(null)
       setSkillsLoading(false)
+      setMemoryBackendStatus(null)
+      setMemoryBackendLoading(false)
+      setMemoryBackendReindexResult(null)
       return
     }
 
@@ -723,6 +756,19 @@ function App() {
       }
     })()
 
+    void (async () => {
+      setMemoryBackendLoading(true)
+
+      try {
+        await refreshMemoryBackendStatus()
+      } catch (error) {
+        setMemoryBackendStatus(null)
+        setMemoryBackendErrorMessage(getErrorMessage(error))
+      } finally {
+        setMemoryBackendLoading(false)
+      }
+    })()
+
     return () => {
       unsubscribeData()
       unsubscribeConfig()
@@ -735,6 +781,7 @@ function App() {
   }, [
     agentCli,
     hideWindowsCommandPrompt,
+    refreshMemoryBackendStatus,
     refreshSkillState,
     setInitialData,
     updateConfig,
@@ -1511,6 +1558,138 @@ function App() {
     setSkillAiMergeProposal(null)
   }
 
+  const handleRefreshMemoryBackendStatus = async () => {
+    if (!agentCli) {
+      setMemoryBackendErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setMemoryBackendLoading(true)
+
+    try {
+      await refreshMemoryBackendStatus()
+    } catch (error) {
+      setMemoryBackendErrorMessage(getErrorMessage(error))
+    } finally {
+      setMemoryBackendLoading(false)
+    }
+  }
+
+  const handleInstallMemoryBackend = async () => {
+    if (!agentCli) {
+      setMemoryBackendErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setMemoryBackendInstalling(true)
+    setMemoryBackendErrorMessage(null)
+
+    try {
+      const result = await agentCli.installMemoryRuntime()
+      setMemoryBackendStatus(result.status)
+      setMemoryBackendReindexResult(null)
+      if (!result.success) {
+        setMemoryBackendErrorMessage(
+          result.status.lastError ??
+            result.status.message ??
+            'MemPalace runtime installation failed.',
+        )
+      }
+    } catch (error) {
+      setMemoryBackendErrorMessage(getErrorMessage(error))
+    } finally {
+      setMemoryBackendInstalling(false)
+    }
+  }
+
+  const handleReindexMemoryBackend = async () => {
+    if (!agentCli) {
+      setMemoryBackendErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    setMemoryBackendReindexing(true)
+    setMemoryBackendErrorMessage(null)
+
+    try {
+      const result = await agentCli.reindexMemoryProject({
+        projectId: activeProject?.config.id ?? null,
+      })
+      setMemoryBackendReindexResult(result)
+      if (result.warning) {
+        setMemoryBackendErrorMessage(result.warning)
+      }
+    } catch (error) {
+      setMemoryBackendErrorMessage(getErrorMessage(error))
+    } finally {
+      setMemoryBackendReindexing(false)
+    }
+  }
+
+  const handleSearchMemory = async (query: string) => {
+    if (!agentCli) {
+      setMemorySearchErrorMessage('Agent bridge is unavailable.')
+      return
+    }
+
+    const trimmedQuery = query.trim()
+    if (trimmedQuery.length === 0) {
+      setMemorySearchResult(null)
+      setMemorySearchErrorMessage('Enter a search query first.')
+      return
+    }
+
+    setMemorySearchLoading(true)
+    setMemorySearchErrorMessage(null)
+
+    try {
+      const wing = activeProject
+        ? deriveMempalaceWing(activeProject.config)
+        : null
+      const result = await agentCli.searchMemory({
+        query: trimmedQuery,
+        projectId: activeProject?.config.id ?? null,
+        wing,
+      })
+      setMemorySearchResult(result)
+    } catch (error) {
+      setMemorySearchResult(null)
+      setMemorySearchErrorMessage(getErrorMessage(error))
+    } finally {
+      setMemorySearchLoading(false)
+    }
+  }
+
+  const handleOpenMemorySearchSession = async (sessionId: string) => {
+    await handleActivateSession(sessionId)
+  }
+
+  const handleOpenMemoryBackendInstallRoot = async () => {
+    if (!agentCli || !memoryBackendStatus) {
+      return
+    }
+
+    try {
+      setMemoryBackendErrorMessage(null)
+      await agentCli.openPath(memoryBackendStatus.installRoot)
+    } catch (error) {
+      setMemoryBackendErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleOpenMemoryBackendPalacePath = async () => {
+    if (!agentCli || !memoryBackendStatus) {
+      return
+    }
+
+    try {
+      setMemoryBackendErrorMessage(null)
+      await agentCli.openPath(memoryBackendStatus.palacePath)
+    } catch (error) {
+      setMemoryBackendErrorMessage(getErrorMessage(error))
+    }
+  }
+
   const openCreateSessionDialog = (
     projectId: string | null = null,
     mode: CreateDialogMode = 'default',
@@ -1808,8 +1987,24 @@ function App() {
           projectSessionsAnalyzing={projectSessionsAnalyzing}
           projectArchitectureAnalysisStatus={projectArchitectureAnalysisStatus}
           projectSessionsAnalysisStatus={projectSessionsAnalysisStatus}
+          memoryBackendStatus={memoryBackendStatus}
+          memoryBackendLoading={memoryBackendLoading}
+          memoryBackendInstalling={memoryBackendInstalling}
+          memoryBackendReindexing={memoryBackendReindexing}
+          memoryBackendErrorMessage={memoryBackendErrorMessage}
+          memoryBackendReindexResult={memoryBackendReindexResult}
+          memorySearchLoading={memorySearchLoading}
+          memorySearchErrorMessage={memorySearchErrorMessage}
+          memorySearchResult={memorySearchResult}
           skillAiMergeProposal={skillAiMergeProposal}
           skillsErrorMessage={skillsErrorMessage}
+          onInstallMemoryBackend={handleInstallMemoryBackend}
+          onRefreshMemoryBackendStatus={handleRefreshMemoryBackendStatus}
+          onReindexMemoryBackend={handleReindexMemoryBackend}
+          onSearchMemory={handleSearchMemory}
+          onOpenMemorySearchSession={handleOpenMemorySearchSession}
+          onOpenMemoryBackendInstallRoot={handleOpenMemoryBackendInstallRoot}
+          onOpenMemoryBackendPalacePath={handleOpenMemoryBackendPalacePath}
           onPickSkillLibraryRoot={handlePickSkillLibraryRoot}
           onClearSkillLibraryRoot={handleClearSkillLibraryRoot}
           onOpenSkillLibraryRoot={handleOpenSkillLibraryRoot}

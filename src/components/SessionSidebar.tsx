@@ -21,6 +21,11 @@ import {
   type SessionSnapshot,
 } from '../shared/session'
 import { getSessionAttentionBadgeLabel } from '../shared/sessionAttention'
+import type { MemoryBackendStatus } from '../shared/memorySearch'
+import type { MemoryReindexResult } from '../shared/memorySearch'
+import type { MemorySearchResult } from '../shared/memorySearch'
+import { MemoryBackendSettings } from './MemoryBackendSettings'
+import { MemorySearchPanel } from './MemorySearchPanel'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
@@ -48,8 +53,24 @@ interface SessionSidebarProps {
   projectSessionsAnalyzing: boolean
   projectArchitectureAnalysisStatus: string | null
   projectSessionsAnalysisStatus: string | null
+  memoryBackendStatus: MemoryBackendStatus | null
+  memoryBackendLoading: boolean
+  memoryBackendInstalling: boolean
+  memoryBackendReindexing: boolean
+  memoryBackendErrorMessage: string | null
+  memoryBackendReindexResult: MemoryReindexResult | null
+  memorySearchLoading: boolean
+  memorySearchErrorMessage: string | null
+  memorySearchResult: MemorySearchResult | null
   skillAiMergeProposal: SkillAiMergeProposal | null
   skillsErrorMessage: string | null
+  onInstallMemoryBackend: () => Promise<void>
+  onRefreshMemoryBackendStatus: () => Promise<void>
+  onReindexMemoryBackend: () => Promise<void>
+  onSearchMemory: (query: string) => Promise<void>
+  onOpenMemorySearchSession: (sessionId: string) => Promise<void>
+  onOpenMemoryBackendInstallRoot: () => Promise<void>
+  onOpenMemoryBackendPalacePath: () => Promise<void>
   onPickSkillLibraryRoot: () => Promise<void>
   onClearSkillLibraryRoot: () => Promise<void>
   onOpenSkillLibraryRoot: () => Promise<void>
@@ -376,8 +397,24 @@ export function SessionSidebar({
   projectSessionsAnalyzing,
   projectArchitectureAnalysisStatus,
   projectSessionsAnalysisStatus,
+  memoryBackendStatus,
+  memoryBackendLoading,
+  memoryBackendInstalling,
+  memoryBackendReindexing,
+  memoryBackendErrorMessage,
+  memoryBackendReindexResult,
+  memorySearchLoading,
+  memorySearchErrorMessage,
+  memorySearchResult,
   skillAiMergeProposal,
   skillsErrorMessage,
+  onInstallMemoryBackend,
+  onRefreshMemoryBackendStatus,
+  onReindexMemoryBackend,
+  onSearchMemory,
+  onOpenMemorySearchSession,
+  onOpenMemoryBackendInstallRoot,
+  onOpenMemoryBackendPalacePath,
   onPickSkillLibraryRoot,
   onClearSkillLibraryRoot,
   onOpenSkillLibraryRoot,
@@ -761,6 +798,46 @@ export function SessionSidebar({
                     <span>Show project paths in the sidebar</span>
                   </label>
                 </div>
+
+                <MemoryBackendSettings
+                  status={memoryBackendStatus}
+                  loading={memoryBackendLoading}
+                  installing={memoryBackendInstalling}
+                  reindexing={memoryBackendReindexing}
+                  errorMessage={memoryBackendErrorMessage}
+                  reindexResult={memoryBackendReindexResult}
+                  onInstall={() => {
+                    void onInstallMemoryBackend()
+                  }}
+                  onRefresh={() => {
+                    void onRefreshMemoryBackendStatus()
+                  }}
+                  onReindex={() => {
+                    void onReindexMemoryBackend()
+                  }}
+                  onOpenInstallRoot={() => {
+                    void onOpenMemoryBackendInstallRoot()
+                  }}
+                  onOpenPalacePath={() => {
+                    void onOpenMemoryBackendPalacePath()
+                  }}
+                />
+
+                <MemorySearchPanel
+                  projects={projects}
+                  activeProjectId={activeProjectId}
+                  status={memoryBackendStatus}
+                  loading={memorySearchLoading}
+                  errorMessage={memorySearchErrorMessage}
+                  result={memorySearchResult}
+                  onSearch={(query) => {
+                    void onSearchMemory(query)
+                  }}
+                  onOpenSession={(sessionId) => {
+                    setSettingsOpen(false)
+                    void onOpenMemorySearchSession(sessionId)
+                  }}
+                />
 
                 <div className="sidebar-settings__section">
                   <div className="sidebar-settings__section-header">

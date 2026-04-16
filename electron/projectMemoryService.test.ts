@@ -144,6 +144,98 @@ describe('ProjectMemoryService', () => {
     service.dispose()
   })
 
+  it('uses the bootstrap composer even when the legacy library root is disabled', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => false),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const bootstrapComposer = {
+      composeContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: 'Bootstrap from MemPalace cards.',
+        fileReferences: [],
+        summaryExcerpt: 'MemPalace summary',
+      })),
+    }
+    const transcriptStore = buildTranscriptStore()
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        bootstrapComposer,
+      },
+    )
+
+    const context = await service.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+
+    expect(context.bootstrapMessage).toBe('Bootstrap from MemPalace cards.')
+    expect(bootstrapComposer.composeContext).toHaveBeenCalledTimes(1)
+    expect(manager.assembleContext).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  it('keeps MemPalace as the authoritative bootstrap source when the composer returns no message', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => true),
+      assembleContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: 'Legacy bootstrap should not be used.',
+        fileReferences: ['C:\\memory\\memory.md'],
+        summaryExcerpt: 'Legacy summary',
+      })),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const bootstrapComposer = {
+      composeContext: vi.fn(async () => ({
+        projectId: 'project-1',
+        locationId: 'location-1',
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        bootstrapMessage: null,
+        fileReferences: [],
+        summaryExcerpt: null,
+        architectureExcerpt: null,
+      })),
+    }
+    const transcriptStore = buildTranscriptStore()
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        bootstrapComposer,
+      },
+    )
+
+    const context = await service.assembleContext({
+      project: buildProject(),
+      location: buildLocation(),
+    })
+
+    expect(context.bootstrapMessage).toBeNull()
+    expect(bootstrapComposer.composeContext).toHaveBeenCalledTimes(1)
+    expect(manager.assembleContext).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
   it('deduplicates low-priority backfill when a high-priority capture arrives for the same session', async () => {
     const manager = {
       isEnabled: vi.fn(() => true),
@@ -233,6 +325,61 @@ describe('ProjectMemoryService', () => {
     await vi.runOnlyPendingTimersAsync()
 
     expect(manager.captureSession).toHaveBeenCalledTimes(1)
+    service.dispose()
+  })
+
+  it('indexes transcripts through MemPalace even when legacy project memory is disabled', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => false),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const memoryBackend = {
+      indexSessionTranscript: vi.fn(async () => ({
+        status: 'indexed' as const,
+        sessionId: 'session-1',
+        indexedCount: 1,
+        skippedCount: 0,
+        warning: null,
+      })),
+    }
+    const transcriptStore = buildTranscriptStore({
+      readEvents: vi.fn(async (): Promise<TranscriptEvent[]> => [
+        {
+          id: 'event-1',
+          sessionId: 'session-1',
+          projectId: 'project-1',
+          locationId: 'location-1',
+          timestamp: '2026-03-22T12:00:00.000Z',
+          kind: 'input',
+          source: 'user',
+          chunk: 'Index this transcript',
+        },
+      ]),
+    })
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        memoryBackend,
+      },
+    )
+
+    await service.captureSession({
+      project: buildProject(),
+      location: buildLocation(),
+      session: buildSession(),
+    })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(memoryBackend.indexSessionTranscript).toHaveBeenCalledTimes(1)
+    expect(manager.captureSession).not.toHaveBeenCalled()
     service.dispose()
   })
 
