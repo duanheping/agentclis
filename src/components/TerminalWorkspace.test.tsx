@@ -488,6 +488,27 @@ describe('TerminalWorkspace', () => {
     })
   })
 
+  it('does not request persisted replay for the windows cmd pane', async () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={['session-1']}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+    })
+
+    expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledTimes(1)
+    expect(window.agentCli.getSessionTerminalReplay).not.toHaveBeenCalledWith(
+      'session-1:windows-cmd',
+    )
+  })
+
   it('keeps the xterm overlay scrollbar interactive for pointer dragging', async () => {
     const { container } = render(
       <TerminalWorkspace

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildWindowsCommandPromptTerminalId,
+  isWindowsCommandPromptTerminalId,
   terminalRegistry,
 } from './terminalRegistry'
 
@@ -12,6 +13,16 @@ describe('buildWindowsCommandPromptTerminalId', () => {
 
   it('handles empty session id', () => {
     expect(buildWindowsCommandPromptTerminalId('')).toBe(':windows-cmd')
+  })
+})
+
+describe('isWindowsCommandPromptTerminalId', () => {
+  it('recognizes windows cmd terminal ids', () => {
+    expect(isWindowsCommandPromptTerminalId('abc-123:windows-cmd')).toBe(true)
+  })
+
+  it('ignores regular session ids', () => {
+    expect(isWindowsCommandPromptTerminalId('abc-123')).toBe(false)
   })
 })
 
