@@ -46,6 +46,7 @@ import { ProjectIdentityResolver } from './projectIdentity'
 import { ProjectMemoryService } from './projectMemoryService'
 import { SkillLibraryManager } from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
+import { TerminalSnapshotStore } from './terminalSnapshotStore'
 import { TransientFileStore } from './transientFileStore'
 import { TranscriptStore } from './transcriptStore'
 import { WindowsCommandPromptManager } from './windowsCommandPromptManager'
@@ -82,6 +83,7 @@ const skillLibraryManager = new SkillLibraryManager()
 const transientFileStore = new TransientFileStore()
 const projectIdentityResolver = new ProjectIdentityResolver()
 const transcriptStore = new TranscriptStore()
+const terminalSnapshotStore = new TerminalSnapshotStore()
 const projectMemoryManager = new ProjectMemoryManager(
   () => skillLibraryManager.getSettings().libraryRoot,
   new ProjectMemoryAgentExtractor(
@@ -116,6 +118,7 @@ const sessionManager = new SessionManager({
 }, {
   identityResolver: projectIdentityResolver,
   transcriptStore,
+  terminalSnapshots: terminalSnapshotStore,
   projectMemory: projectMemoryService,
 })
 
@@ -644,6 +647,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.getSessionTerminalReplay, (_event, sessionId) =>
     sessionManager.getSessionTerminalReplay(sessionId),
   )
+  ipcMain.on(IPC_CHANNELS.updateSessionTerminalSnapshot, (_event, input) => {
+    void sessionManager.updateTerminalSnapshot(input)
+  })
   ipcMain.handle(IPC_CHANNELS.createProject, (_event, input) =>
     sessionManager.createProject(input),
   )

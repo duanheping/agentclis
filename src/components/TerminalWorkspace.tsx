@@ -23,6 +23,7 @@ import {
   isPureTerminalClearChunk,
   stripScrollbackClear,
 } from '../lib/terminalEscapeFilter'
+import { captureTerminalSnapshot } from '../lib/terminalSnapshot'
 import type { SessionSnapshot } from '../shared/session'
 
 interface TerminalWorkspaceProps {
@@ -62,6 +63,7 @@ const MIN_TERMINAL_PANE_HEIGHT = 160
 const TERMINAL_SPLIT_RESIZER_SIZE = 12
 const TERMINAL_SPLIT_KEYBOARD_STEP = 32
 const TERMINAL_SCROLLBACK_LINES = 50_000
+const TERMINAL_SNAPSHOT_DEBOUNCE_MS = 1_500
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -451,6 +453,37 @@ function TerminalSurface({
       void onResizeRef.current(terminal.cols, terminal.rows)
     }
     fitTerminalRef.current = fitTerminal
+    let snapshotCaptureTimer: ReturnType<typeof window.setTimeout> | null = null
+    let lastSnapshotText: string | null = null
+
+    const flushSnapshotCapture = () => {
+      if (snapshotCaptureTimer !== null) {
+        window.clearTimeout(snapshotCaptureTimer)
+        snapshotCaptureTimer = null
+      }
+
+      const snapshot = captureTerminalSnapshot(terminal)
+      if (!snapshot || snapshot.text === lastSnapshotText) {
+        return
+      }
+
+      lastSnapshotText = snapshot.text
+      window.agentCli.updateSessionTerminalSnapshot({
+        sessionId: terminalId,
+        ...snapshot,
+      })
+    }
+
+    const queueSnapshotCapture = (delayMs = TERMINAL_SNAPSHOT_DEBOUNCE_MS) => {
+      if (snapshotCaptureTimer !== null) {
+        window.clearTimeout(snapshotCaptureTimer)
+      }
+
+      snapshotCaptureTimer = window.setTimeout(() => {
+        snapshotCaptureTimer = null
+        flushSnapshotCapture()
+      }, Math.max(0, delayMs))
+    }
 
     let suppressRestoreClear = false
 
@@ -461,6 +494,7 @@ function TerminalSurface({
       }
 
       terminal.write(filteredChunk)
+      queueSnapshotCapture()
     }
 
     const writeLiveChunk = (chunk: string) => {
@@ -480,12 +514,24 @@ function TerminalSurface({
       }
 
       terminal.write(filteredChunk)
+      queueSnapshotCapture()
     }
 
     const terminalHandle = {
       write: writeLiveChunk,
       writeReplay: writeReplayChunk,
-      clear: () => terminal.clear(),
+      clear: () => {
+        terminal.clear()
+        lastSnapshotText = null
+        window.agentCli.updateSessionTerminalSnapshot({
+          sessionId: terminalId,
+          text: '',
+          lineCount: 0,
+          cols: terminal.cols,
+          rows: terminal.rows,
+          capturedAt: new Date().toISOString(),
+        })
+      },
       fit: fitTerminal,
       focus: () => terminal.focus(),
     }
@@ -524,6 +570,7 @@ function TerminalSurface({
 
       suppressRestoreClear = replayChunks.length > 0
       terminalRegistry.register(terminalId, terminalHandle, replayChunks)
+      queueSnapshotCapture(0)
     })()
 
     requestAnimationFrame(fitTerminal)
@@ -544,6 +591,7 @@ function TerminalSurface({
 
     return () => {
       disposed = true
+      flushSnapshotCapture()
       container.removeEventListener(
         'pointerdown',
         handlePointerDownCapture,
@@ -554,6 +602,9 @@ function TerminalSurface({
       detachPasteHandler()
       resizeObserver.disconnect()
       disposable.dispose()
+      if (snapshotCaptureTimer !== null) {
+        window.clearTimeout(snapshotCaptureTimer)
+      }
       terminalRegistry.unregister(terminalId)
       terminal.dispose()
       terminalRef.current = null

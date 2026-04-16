@@ -183,6 +183,7 @@ describe('TerminalWorkspace', () => {
         writeToSession: vi.fn().mockResolvedValue(undefined),
         resizeSession: vi.fn().mockResolvedValue(undefined),
         getSessionTerminalReplay: vi.fn().mockResolvedValue({ chunks: [] }),
+        updateSessionTerminalSnapshot: vi.fn(),
         writeToWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
         resizeWindowsCommandPrompt: vi.fn().mockResolvedValue(undefined),
         openFileReference: vi.fn().mockResolvedValue(undefined),
