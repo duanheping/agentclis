@@ -3870,6 +3870,10 @@ describe('SessionManager logical project identity and project context', () => {
       capturedAt: '2026-04-15T20:30:00.000Z',
     })
 
+    expect(manager.listSessions().projects[0]?.sessions[0]?.restore).toMatchObject({
+      hasTerminalReplay: true,
+    })
+
     expect(terminalSnapshots.write).toHaveBeenCalledWith({
       sessionId: 'session-a',
       text: 'snapshot',
@@ -3878,6 +3882,145 @@ describe('SessionManager logical project identity and project context', () => {
       cols: 120,
       rows: 36,
       capturedAt: '2026-04-15T20:30:00.000Z',
+    })
+  })
+
+  it('hydrates default restore snapshots for older persisted sessions', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:10:00.000Z',
+        },
+      ],
+      runtimes: [
+        {
+          sessionId: 'session-a',
+          lastActiveAt: '2026-03-22T12:15:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    expect(manager.listSessions().projects[0]?.sessions[0]?.restore).toEqual({
+      statusSummary: 'Session finished.',
+      lastMeaningfulReply: null,
+      resultSummary: null,
+      blockedReason: null,
+      lastError: null,
+      updatedAt: '2026-03-22T12:15:00.000Z',
+      hasTranscript: false,
+      hasTerminalReplay: false,
+    })
+    expect(
+      (
+        mocks.getPersistedState() as {
+          restoreSnapshots: Record<string, unknown>
+        }
+      ).restoreSnapshots,
+    ).toMatchObject({
+      'session-a': {
+        statusSummary: 'Session finished.',
+        lastMeaningfulReply: null,
+        resultSummary: null,
+        blockedReason: null,
+        lastError: null,
+        updatedAt: '2026-03-22T12:15:00.000Z',
+        hasTranscript: false,
+        hasTerminalReplay: false,
+      },
+    })
+  })
+
+  it('persists restore snapshots with reply and result summaries', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+    })
+
+    const terminalDataListener = mocks.terminals[0]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+    const terminalExitListener = mocks.terminals[0]?.onExit.mock.calls[0]?.[0] as
+      | ((event: { exitCode: number }) => void)
+      | undefined
+
+    terminalDataListener?.(
+      '\r\nUpdated the restore snapshot path so review state can survive restart.\r\n',
+    )
+    await manager.updateTerminalSnapshot({
+      sessionId: session.config.id,
+      text: 'snapshot',
+      serialized: '\u001b[2Jsnapshot',
+      lineCount: 1,
+      cols: 120,
+      rows: 36,
+      capturedAt: '2026-04-16T12:00:00.000Z',
+    })
+    terminalExitListener?.({ exitCode: 0 })
+
+    const persistedState = mocks.getPersistedState() as {
+      restoreSnapshots: Record<string, {
+        lastMeaningfulReply: string | null
+        resultSummary: string | null
+        hasTranscript: boolean
+        hasTerminalReplay: boolean
+      }>
+    }
+
+    expect(persistedState.restoreSnapshots[session.config.id]).toMatchObject({
+      lastMeaningfulReply:
+        'Updated the restore snapshot path so review state can survive restart.',
+      resultSummary: 'Session exited successfully.',
+      hasTranscript: true,
+      hasTerminalReplay: true,
+    })
+
+    const restoredManager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    expect(
+      restoredManager.listSessions().projects[0]?.sessions[0]?.restore,
+    ).toMatchObject({
+      lastMeaningfulReply:
+        'Updated the restore snapshot path so review state can survive restart.',
+      resultSummary: 'Session exited successfully.',
+      hasTranscript: true,
+      hasTerminalReplay: true,
     })
   })
 

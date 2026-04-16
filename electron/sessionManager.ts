@@ -30,6 +30,7 @@ import {
   type SessionDataEvent,
   type SessionAttentionKind,
   type SessionExitMeta,
+  type SessionRestoreSnapshot,
   type SessionRuntime,
   type SessionRuntimeEvent,
   type SessionSnapshot,
@@ -77,6 +78,14 @@ import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
 import { resolveProjectMemoryCapability } from './providerCapabilityResolver'
 import { createProjectSessionWorktree } from './projectWorktree'
+import {
+  applyRuntimeToSessionRestoreSnapshot,
+  applyTerminalReplayToSessionRestoreSnapshot,
+  applyTranscriptEventToSessionRestoreSnapshot,
+  buildSessionRestoreSnapshot,
+  normalizeSessionRestoreSnapshot,
+  sessionRestoreSnapshotsEqual,
+} from './sessionRestoreSnapshot'
 import type { TranscriptStore } from './transcriptStore'
 import type { TerminalSnapshotStore } from './terminalSnapshotStore'
 import {
@@ -265,6 +274,7 @@ interface PersistedSessionState {
   locations: ProjectLocation[]
   sessions: StoredSessionConfig[]
   runtimes: Array<Pick<SessionRuntime, 'sessionId' | 'lastActiveAt'>>
+  restoreSnapshots?: Record<string, SessionRestoreSnapshot>
   copilotInstructionSnapshots?: Record<string, string>
   activeSessionId: string | null
 }
@@ -369,6 +379,7 @@ export class SessionManager {
   private readonly locations = new Map<string, ProjectLocation>()
   private readonly configs = new Map<string, SessionConfig>()
   private readonly runtimes = new Map<string, SessionRuntime>()
+  private readonly restoreSnapshots = new Map<string, SessionRestoreSnapshot>()
   private readonly terminals = new Map<string, IPty>()
   private readonly pendingFirstPromptBuffers = new Map<string, string>()
   private readonly liveAttentionBuffers = new Map<string, string>()
@@ -467,14 +478,25 @@ export class SessionManager {
         hydratedConfig.updatedAt ||
         hydratedConfig.createdAt
       this.configs.set(hydratedConfig.id, hydratedConfig)
-      this.runtimes.set(
+      const hydratedRuntime = buildRuntime(
         hydratedConfig.id,
-        buildRuntime(hydratedConfig.id, 'exited', restoredLastActiveAt),
+        'exited',
+        restoredLastActiveAt,
       )
+      this.runtimes.set(hydratedConfig.id, hydratedRuntime)
+      const normalizedRestoreSnapshot = normalizeSessionRestoreSnapshot(
+        persisted.restoreSnapshots?.[hydratedConfig.id],
+        hydratedRuntime,
+      )
+      this.restoreSnapshots.set(hydratedConfig.id, normalizedRestoreSnapshot)
       this.claimExternalSession(hydratedConfig)
       this.trackHistoricalExternalSessionRecovery(hydratedConfig)
 
       if (
+        !sessionRestoreSnapshotsEqual(
+          persisted.restoreSnapshots?.[hydratedConfig.id],
+          normalizedRestoreSnapshot,
+        ) ||
         persistedRuntime?.lastActiveAt !== restoredLastActiveAt ||
         config.projectId !== hydratedConfig.projectId ||
         config.title !== hydratedConfig.title ||
@@ -581,6 +603,11 @@ export class SessionManager {
     }
 
     await this.terminalSnapshots.write(input)
+    this.updateRestoreSnapshot(
+      input.sessionId,
+      (current) =>
+        applyTerminalReplayToSessionRestoreSnapshot(current, input.capturedAt),
+    )
   }
 
   getProjectConfigs(): ProjectConfig[] {
@@ -714,7 +741,9 @@ export class SessionManager {
     }
 
     this.configs.set(id, config)
-    this.runtimes.set(id, buildRuntime(id))
+    const initialRuntime = buildRuntime(id)
+    this.runtimes.set(id, initialRuntime)
+    this.restoreSnapshots.set(id, buildSessionRestoreSnapshot(initialRuntime))
     this.touchProject(project.id, now)
     this.activeSessionId = id
     this.persist()
@@ -795,6 +824,7 @@ export class SessionManager {
     this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
+    this.restoreSnapshots.delete(id)
     this.configs.delete(id)
     this.runtimes.delete(id)
     await this.terminalSnapshots.delete(id)
@@ -3078,6 +3108,10 @@ export class SessionManager {
     }
 
     this.runtimes.set(id, nextRuntime)
+    this.updateRestoreSnapshot(
+      id,
+      (current) => applyRuntimeToSessionRestoreSnapshot(current, nextRuntime),
+    )
     if (Object.keys(patch).length > 0) {
       this.appendTranscriptEvent({
         sessionId: id,
@@ -3239,7 +3273,7 @@ export class SessionManager {
     }
 
     const locationId = input.locationId ?? config?.locationId ?? null
-    return this.transcriptStore.append({
+    const event: TranscriptEvent = {
       id: crypto.randomUUID(),
       sessionId: input.sessionId,
       projectId,
@@ -3249,6 +3283,12 @@ export class SessionManager {
       source: input.source,
       chunk: input.chunk,
       metadata: input.metadata,
+    }
+    return this.transcriptStore.append(event).then(() => {
+      this.updateRestoreSnapshot(
+        input.sessionId,
+        (current) => applyTranscriptEventToSessionRestoreSnapshot(current, event),
+      )
     })
   }
 
@@ -3418,6 +3458,7 @@ export class SessionManager {
     return {
       config: this.requireConfig(id),
       runtime: this.runtimes.get(id) ?? buildRuntime(id),
+      restore: this.restoreSnapshots.get(id),
     }
   }
 
@@ -3710,6 +3751,11 @@ export class SessionManager {
         sessionId: runtime.sessionId,
         lastActiveAt: runtime.lastActiveAt,
       })),
+      restoreSnapshots: Object.fromEntries(
+        Array.from(this.restoreSnapshots.entries()).filter(([sessionId]) =>
+          this.configs.has(sessionId),
+        ),
+      ),
       copilotInstructionSnapshots: Object.fromEntries(
         Array.from(this.copilotInstructionSnapshots.entries()).filter(
           ([sessionId, snapshot]) =>
@@ -3722,6 +3768,29 @@ export class SessionManager {
 
   private normalizePath(value: string): string {
     return value.trim().replace(/[\\/]+$/, '').toLowerCase()
+  }
+
+  private updateRestoreSnapshot(
+    id: string,
+    updater: (current: SessionRestoreSnapshot) => SessionRestoreSnapshot,
+    persist = true,
+  ): void {
+    const runtime = this.runtimes.get(id)
+    if (!runtime) {
+      return
+    }
+
+    const current =
+      this.restoreSnapshots.get(id) ?? buildSessionRestoreSnapshot(runtime)
+    const next = normalizeSessionRestoreSnapshot(updater(current), runtime)
+    if (sessionRestoreSnapshotsEqual(current, next)) {
+      return
+    }
+
+    this.restoreSnapshots.set(id, next)
+    if (persist && this.configs.has(id)) {
+      this.persist()
+    }
   }
 
   private getErrorMessage(error: unknown): string {
