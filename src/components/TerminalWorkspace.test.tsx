@@ -171,6 +171,11 @@ function mockElementRect(
   })
 }
 
+async function flushEffects(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 describe('TerminalWorkspace', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -490,12 +495,6 @@ describe('TerminalWorkspace', () => {
       expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(3)
     })
 
-    expect(mockTerminalConstructor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cols: 120,
-        rows: 36,
-      }),
-    )
     expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
       '\u001b[2Jrestored snapshot',
       expect.any(Function),
@@ -561,7 +560,76 @@ describe('TerminalWorkspace', () => {
     })
   })
 
-  it('falls back to an empty replay when replay fetch never resolves', async () => {
+  it('opens the terminal immediately while replay fetch is still pending', async () => {
+    let resolveReplay:
+      | ((value: { chunks: string[] }) => void)
+      | null = null
+    window.agentCli.getSessionTerminalReplay = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveReplay = resolve
+        }),
+    )
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+      expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+      expect(terminalInstances[0]?.open).toHaveBeenCalledTimes(1)
+    })
+
+    expect(terminalInstances[0]?.write).not.toHaveBeenCalled()
+
+    resolveReplay?.({
+      chunks: ['history'],
+    })
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith('history')
+    })
+  })
+
+  it('makes the terminal live after a short replay budget instead of waiting for the full replay timeout', async () => {
+    vi.useFakeTimers()
+    window.agentCli.getSessionTerminalReplay = vi.fn(
+      () => new Promise(() => undefined),
+    )
+    terminalRegistry.write('session-1', 'live-1')
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await flushEffects()
+
+    expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+      'session-1',
+    )
+    expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+    expect(terminalInstances[0]?.open).toHaveBeenCalledTimes(1)
+
+    expect(terminalInstances[0]?.write).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(120)
+    await flushEffects()
+
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith('live-1')
+  })
+
+  it('does not overwrite the persisted snapshot with a blank capture when slow replay is skipped', async () => {
     vi.useFakeTimers()
     window.agentCli.getSessionTerminalReplay = vi.fn(
       () => new Promise(() => undefined),
@@ -575,15 +643,16 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    await vi.advanceTimersByTimeAsync(1_500)
-    await Promise.resolve()
-    await Promise.resolve()
+    await flushEffects()
 
-    expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
-      'session-1',
-    )
     expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
     expect(terminalInstances[0]?.open).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(120)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushEffects()
+
+    expect(window.agentCli.updateSessionTerminalSnapshot).not.toHaveBeenCalled()
   })
 
   it('focuses the windows cmd terminal when a focus request targets it', async () => {
