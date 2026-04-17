@@ -4,7 +4,7 @@ import { sanitizeTerminalTextContent } from '../lib/terminalEscapeFilter'
 import type { TranscriptEvent } from '../shared/projectMemory'
 import type { SessionSnapshot } from '../shared/session'
 
-type SessionReviewTab = 'summary' | 'transcript' | 'search' | 'raw'
+type SessionReviewTab = 'transcript' | 'search'
 
 interface SessionReviewPanelProps {
   session: SessionSnapshot | null
@@ -22,10 +22,8 @@ interface TranscriptSectionState {
 const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 40
 const DEFAULT_SEARCH_PAGE_LIMIT = 25
 const REVIEW_TABS: Array<{ id: SessionReviewTab; label: string }> = [
-  { id: 'summary', label: 'Summary' },
   { id: 'transcript', label: 'Transcript' },
   { id: 'search', label: 'Search' },
-  { id: 'raw', label: 'Raw' },
 ]
 
 function buildEmptySectionState(): TranscriptSectionState {
@@ -147,7 +145,7 @@ export function SessionReviewPanel({
   onClose,
 }: SessionReviewPanelProps) {
   const sessionId = session?.config.id ?? null
-  const [activeTab, setActiveTab] = useState<SessionReviewTab>('summary')
+  const [activeTab, setActiveTab] = useState<SessionReviewTab>('transcript')
   const [transcript, setTranscript] = useState<TranscriptSectionState>(() =>
     buildEmptySectionState(),
   )
@@ -169,7 +167,7 @@ export function SessionReviewPanel({
       return
     }
 
-    setActiveTab('summary')
+    setActiveTab('transcript')
     setTranscript(buildEmptySectionState())
     setSearchState(buildEmptySectionState())
     setSearchQuery('')
@@ -297,7 +295,7 @@ export function SessionReviewPanel({
     }
 
     if (
-      (activeTab === 'transcript' || activeTab === 'raw') &&
+      activeTab === 'transcript' &&
       transcript.events.length === 0 &&
       !transcript.loading &&
       !transcript.errorMessage
@@ -319,10 +317,6 @@ export function SessionReviewPanel({
   }
 
   const restore = session.restore
-  const transcriptReady = transcript.events.length > 0
-  const rawContent = transcript.events
-    .map((event) => JSON.stringify(event, null, 2))
-    .join('\n\n')
 
   return (
     <aside className="session-review-panel">
@@ -361,56 +355,6 @@ export function SessionReviewPanel({
       </div>
 
       <div className="session-review-panel__body">
-        {activeTab === 'summary' ? (
-          <div className="session-review-panel__summary">
-            <div className="session-review-panel__summary-grid">
-              <div className="session-review-panel__summary-card">
-                <span className="session-review-panel__summary-label">Status</span>
-                <strong>{restore?.statusSummary ?? 'Unavailable'}</strong>
-              </div>
-              <div className="session-review-panel__summary-card">
-                <span className="session-review-panel__summary-label">Updated</span>
-                <strong>{formatTimestamp(restore?.updatedAt ?? session.runtime.lastActiveAt)}</strong>
-              </div>
-              <div className="session-review-panel__summary-card">
-                <span className="session-review-panel__summary-label">Transcript</span>
-                <strong>{restore?.hasTranscript ? 'Available' : 'Unavailable'}</strong>
-              </div>
-              <div className="session-review-panel__summary-card">
-                <span className="session-review-panel__summary-label">Replay</span>
-                <strong>{restore?.hasTerminalReplay ? 'Ready' : 'Unavailable'}</strong>
-              </div>
-            </div>
-
-            <div className="session-review-panel__summary-list">
-              {restore?.blockedReason ? (
-                <div className="session-review-panel__summary-item">
-                  <span>Attention</span>
-                  <p>{restore.blockedReason}</p>
-                </div>
-              ) : null}
-              {restore?.resultSummary ? (
-                <div className="session-review-panel__summary-item">
-                  <span>Result</span>
-                  <p>{restore.resultSummary}</p>
-                </div>
-              ) : null}
-              {restore?.lastError ? (
-                <div className="session-review-panel__summary-item">
-                  <span>Last error</span>
-                  <p>{restore.lastError}</p>
-                </div>
-              ) : null}
-              {restore?.lastMeaningfulReply ? (
-                <div className="session-review-panel__summary-item">
-                  <span>Latest reply</span>
-                  <p>{restore.lastMeaningfulReply}</p>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
         {activeTab === 'transcript' ? (
           <div className="session-review-panel__section">
             {transcript.errorMessage ? (
@@ -504,25 +448,6 @@ export function SessionReviewPanel({
                 ) : null}
               </>
             ) : null}
-          </div>
-        ) : null}
-
-        {activeTab === 'raw' ? (
-          <div className="session-review-panel__section">
-            {transcript.errorMessage ? (
-              <p className="session-review-panel__error">{transcript.errorMessage}</p>
-            ) : null}
-            {transcript.loading && !transcriptReady ? (
-              <div className="session-review-panel__state">
-                <p>Loading raw transcript…</p>
-              </div>
-            ) : transcriptReady ? (
-              <pre className="session-review-panel__raw">{rawContent}</pre>
-            ) : (
-              <div className="session-review-panel__state">
-                <p>No raw transcript data is available yet.</p>
-              </div>
-            )}
           </div>
         ) : null}
       </div>

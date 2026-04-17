@@ -116,7 +116,7 @@ describe('SessionReviewPanel', () => {
     cleanup()
   })
 
-  it('renders the summary tab from the restore snapshot', () => {
+  it('shows only transcript and search tabs', async () => {
     render(
       <SessionReviewPanel
         open
@@ -125,11 +125,14 @@ describe('SessionReviewPanel', () => {
     )
 
     expect(screen.getByText('Session info')).toBeInTheDocument()
-    expect(screen.getAllByText('Session finished.')).toHaveLength(2)
-    expect(screen.getByText('Session exited successfully.')).toBeInTheDocument()
-    expect(
-      screen.getByText('The restore flow now falls back without blocking xterm.'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Transcript' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Summary' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Raw' })).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByText('Latest transcript reply')).toBeInTheDocument()
+    })
   })
 
   it('loads transcript pages and older entries', async () => {
@@ -141,8 +144,6 @@ describe('SessionReviewPanel', () => {
         session={buildSession()}
       />,
     )
-
-    await user.click(screen.getByRole('tab', { name: 'Transcript' }))
 
     await waitFor(() => {
       expect(screen.getByText('Latest transcript reply')).toBeInTheDocument()
@@ -175,20 +176,4 @@ describe('SessionReviewPanel', () => {
     })
   })
 
-  it('shows raw transcript JSON in the raw tab', async () => {
-    const user = userEvent.setup()
-
-    render(
-      <SessionReviewPanel
-        open
-        session={buildSession()}
-      />,
-    )
-
-    await user.click(screen.getByRole('tab', { name: 'Raw' }))
-
-    await waitFor(() => {
-      expect(screen.getByText(/"id": "event-2"/)).toBeInTheDocument()
-    })
-  })
 })
