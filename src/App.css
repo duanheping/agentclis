@@ -2527,6 +2527,7 @@
 .sidebar-settings__merge-files {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .sidebar-settings__section-header,
@@ -2536,7 +2537,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
+  min-width: 0;
 }
 
 .sidebar-settings__field-label,
@@ -2574,6 +2577,7 @@
   color: #8ea7c7;
   font-size: 0.78rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .sidebar-settings__path-card {
