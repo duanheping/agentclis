@@ -1,4 +1,4 @@
-import { appendFile, mkdir, open, readFile, truncate } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, stat, truncate } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -34,6 +34,14 @@ interface ReadTailEventsOptions {
   maxEvents?: number
   requireChunk?: boolean
   afterTimestamp?: string
+}
+
+interface ReadSampledEventsOptions {
+  maxFullBytes?: number
+  headMaxBytes?: number
+  headMaxEvents?: number
+  tailMaxBytes?: number
+  tailMaxEvents?: number
 }
 
 interface TailSelectionState {
@@ -93,6 +101,15 @@ function normalizeTranscriptPageCursor(
 
   return Math.min(maxValue, Math.max(0, parsed))
 }
+
+interface HeadSelectionState {
+  maxBytes: number
+  maxEvents: number
+  byteCount: number
+  events: TranscriptEvent[]
+}
+
+const SAMPLE_READ_CHUNK_BYTES = 256 * 1024
 
 function parseTranscriptEvents(content: string): ParseResult {
   const events: TranscriptEvent[] = []
@@ -245,6 +262,33 @@ function collectTailEventFromLine(
   }
 
   state.tailReversed.push(event)
+  state.byteCount += chunkSize
+  return false
+}
+
+function collectHeadEventFromLine(
+  lineBuffer: Buffer,
+  state: HeadSelectionState,
+): boolean {
+  const line = trimTranscriptLine(lineBuffer)
+  if (!line) {
+    return false
+  }
+
+  const event = JSON.parse(line) as TranscriptEvent
+  const chunkSize = Buffer.byteLength(event.chunk ?? '', 'utf8')
+  const exceedsEventLimit =
+    state.maxEvents > 0 && state.events.length >= state.maxEvents
+  const exceedsByteLimit =
+    state.maxBytes > 0 && state.byteCount + chunkSize > state.maxBytes
+  if (
+    state.events.length > 0 &&
+    (exceedsEventLimit || exceedsByteLimit)
+  ) {
+    return true
+  }
+
+  state.events.push(event)
   state.byteCount += chunkSize
   return false
 }
@@ -440,6 +484,62 @@ export class TranscriptStore {
     }
   }
 
+  async readSampledEvents(
+    sessionId: string,
+    options: ReadSampledEventsOptions = {},
+  ): Promise<TranscriptEvent[]> {
+    await this.pendingWrites.get(sessionId)
+
+    const maxFullBytes = Math.max(0, options.maxFullBytes ?? 0)
+    const headMaxBytes = Math.max(0, options.headMaxBytes ?? 0)
+    const headMaxEvents = Math.max(0, options.headMaxEvents ?? 0)
+    const tailMaxBytes = Math.max(0, options.tailMaxBytes ?? 0)
+    const tailMaxEvents = Math.max(0, options.tailMaxEvents ?? 0)
+
+    try {
+      const transcriptPath = this.getTranscriptPath(sessionId)
+      const transcriptStats = await stat(transcriptPath)
+      if (maxFullBytes > 0 && transcriptStats.size <= maxFullBytes) {
+        return await this.readEvents(sessionId)
+      }
+
+      const [headEvents, tailEvents] = await Promise.all([
+        headMaxBytes > 0 || headMaxEvents > 0
+          ? this.readHeadEvents(sessionId, {
+              maxBytes: headMaxBytes,
+              maxEvents: headMaxEvents,
+            })
+          : Promise.resolve([]),
+        tailMaxBytes > 0 || tailMaxEvents > 0
+          ? this.readTailEvents(sessionId, {
+              maxBytes: tailMaxBytes,
+              maxEvents: tailMaxEvents,
+            })
+          : Promise.resolve([]),
+      ])
+
+      const seen = new Set<string>()
+      const sampledEvents: TranscriptEvent[] = []
+
+      for (const event of [...headEvents, ...tailEvents]) {
+        if (seen.has(event.id)) {
+          continue
+        }
+
+        seen.add(event.id)
+        sampledEvents.push(event)
+      }
+
+      return sampledEvents
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+
+      return []
+    }
+  }
+
   async readIndex(sessionId: string): Promise<TranscriptIndex> {
     await this.pendingWrites.get(sessionId)
     return await this.readIndexFile(sessionId)
@@ -465,6 +565,92 @@ export class TranscriptStore {
         projectId: null,
         locationId: null,
       }
+    }
+  }
+
+  private async readHeadEvents(
+    sessionId: string,
+    options: {
+      maxBytes?: number
+      maxEvents?: number
+    } = {},
+  ): Promise<TranscriptEvent[]> {
+    await this.pendingWrites.get(sessionId)
+
+    const state: HeadSelectionState = {
+      maxBytes: Math.max(0, options.maxBytes ?? 0),
+      maxEvents: Math.max(0, options.maxEvents ?? 0),
+      byteCount: 0,
+      events: [],
+    }
+
+    let handle: Awaited<ReturnType<typeof open>> | null = null
+
+    try {
+      const transcriptPath = this.getTranscriptPath(sessionId)
+      handle = await open(transcriptPath, 'r')
+      const stats = await handle.stat()
+      if (stats.size === 0) {
+        return []
+      }
+
+      let carry = Buffer.alloc(0)
+      let position = 0
+      let reachedLimit = false
+
+      while (position < stats.size && !reachedLimit) {
+        const bytesToRead = Math.min(SAMPLE_READ_CHUNK_BYTES, stats.size - position)
+        const buffer = Buffer.alloc(bytesToRead)
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, position)
+        if (bytesRead <= 0) {
+          break
+        }
+
+        position += bytesRead
+        const chunk = buffer.subarray(0, bytesRead)
+        const combined = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk
+        let lineStart = 0
+
+        for (
+          let newlineIndex = combined.indexOf(0x0a, lineStart);
+          newlineIndex !== -1;
+          newlineIndex = combined.indexOf(0x0a, lineStart)
+        ) {
+          const lineBuffer = combined.subarray(lineStart, newlineIndex)
+          if (collectHeadEventFromLine(lineBuffer, state)) {
+            reachedLimit = true
+            break
+          }
+
+          lineStart = newlineIndex + 1
+        }
+
+        carry = Buffer.from(combined.subarray(lineStart))
+      }
+
+      if (!reachedLimit && carry.length > 0) {
+        const line = trimTranscriptLine(carry)
+        if (line) {
+          try {
+            void collectHeadEventFromLine(carry, state)
+          } catch (error) {
+            const hasMoreData = position < stats.size
+            if (hasMoreData) {
+              throw error
+            }
+          }
+        }
+      }
+
+      return state.events
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+
+      return []
+    } finally {
+      await handle?.close().catch(() => undefined)
     }
   }
 }

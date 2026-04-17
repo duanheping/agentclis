@@ -502,14 +502,14 @@ describe('MempalaceService', () => {
         results: [
           {
             text: 'Old summary content.',
-            wing: 'github.com/openai/agenclis',
+            wing: 'remote-github.com-openai-agenclis',
             room: 'session-summary',
             source_file: 'mempalace://summary/session-1',
             similarity: 0.95,
           },
           {
             text: 'New summary content.',
-            wing: 'github.com/openai/agenclis',
+            wing: 'remote-github.com-openai-agenclis',
             room: 'session-summary',
             source_file: 'mempalace://summary/session-1',
             similarity: 0.91,
@@ -604,7 +604,7 @@ describe('MempalaceService', () => {
 
     const searchResult = await service.search({
       query: 'summary content',
-      wing: 'github.com/openai/agenclis',
+      wing: 'remote-github.com-openai-agenclis',
     })
 
     expect(searchResult.hitCount).toBe(1)
@@ -621,7 +621,8 @@ describe('MempalaceService', () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agentclis-mempalace-service-'))
     tempRoots.push(tempRoot)
 
-    const wing = 'github.com/openai/agenclis'
+    const wing = 'remote-github.com-openai-agenclis'
+    const remoteFingerprint = 'github.com/openai/agenclis'
     const content = 'Keep using provider-native instructions for bootstrap injection.'
     const legacySourceFile =
       'mempalace://candidate/session-1/project-convention/candidate-legacy'
@@ -683,7 +684,7 @@ describe('MempalaceService', () => {
         identity: {
           repoRoot: null,
           gitCommonDir: null,
-          remoteFingerprint: wing,
+          remoteFingerprint,
         },
       },
       location: {
@@ -692,7 +693,7 @@ describe('MempalaceService', () => {
         rootPath: 'C:\\repo\\agentclis',
         repoRoot: null,
         gitCommonDir: null,
-        remoteFingerprint: wing,
+        remoteFingerprint,
         label: 'agentclis',
         createdAt: '2026-04-15T12:00:00.000Z',
         updatedAt: '2026-04-15T12:00:00.000Z',
@@ -776,14 +777,14 @@ describe('MempalaceService', () => {
         results: [
           {
             text: 'Captured durable memory from the session.',
-            wing: 'github.com/openai/agenclis',
+            wing: 'remote-github.com-openai-agenclis',
             room: 'session-summary',
             source_file: 'mempalace://summary/session-1',
             similarity: 0.96,
           },
           {
             text: 'Keep using provider-native instructions for bootstrap injection.',
-            wing: 'github.com/openai/agenclis',
+            wing: 'remote-github.com-openai-agenclis',
             room: 'preference',
             source_file: 'mempalace://candidate/session-1/project-convention/candidate-2',
             similarity: 0.9,
@@ -933,7 +934,7 @@ describe('MempalaceService', () => {
         results: [
           {
             text: 'Legacy summary imported from disk.',
-            wing: 'github.com/openai/agenclis',
+            wing: 'remote-github.com-openai-agenclis',
             room: 'session-summary',
             source_file:
               'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\summaries\\session-1.json#summary',
@@ -941,7 +942,7 @@ describe('MempalaceService', () => {
           },
           {
             text: 'Legacy architecture overview.',
-            wing: 'github.com/openai/agenclis',
+            wing: 'remote-github.com-openai-agenclis',
             room: 'architecture',
             source_file:
               'C:\\memory\\.agenclis-memory\\projects\\remote-github.com-openai-agenclis\\architecture.json#overview',
@@ -955,7 +956,7 @@ describe('MempalaceService', () => {
     })
     const bundle: MempalaceLegacyImportBundle = {
       projectId: 'project-1',
-      wing: 'github.com/openai/agenclis',
+      wing: 'remote-github.com-openai-agenclis',
       records: [
         {
           drawerId: 'legacy-summary:session-1',
@@ -972,7 +973,7 @@ describe('MempalaceService', () => {
           timestampEnd: '2026-04-10T12:00:00.000Z',
           sourceKind: 'session-summary',
           room: 'session-summary',
-          wing: 'github.com/openai/agenclis',
+          wing: 'remote-github.com-openai-agenclis',
         },
         {
           drawerId: 'legacy-architecture:project-1',
@@ -989,7 +990,7 @@ describe('MempalaceService', () => {
           timestampEnd: '2026-04-10T12:00:00.000Z',
           sourceKind: 'architecture',
           room: 'architecture',
-          wing: 'github.com/openai/agenclis',
+          wing: 'remote-github.com-openai-agenclis',
         },
       ],
     }
@@ -1005,7 +1006,7 @@ describe('MempalaceService', () => {
 
     const searchResult = await service.search({
       query: 'legacy',
-      wing: 'github.com/openai/agenclis',
+      wing: 'remote-github.com-openai-agenclis',
     })
 
     expect(searchResult.hits[0]).toEqual(

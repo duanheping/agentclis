@@ -90,6 +90,13 @@ function buildSession(): SessionConfig {
 function buildTranscriptStore(
   overrides: Record<string, unknown> = {},
 ) {
+  const readEvents =
+    (overrides.readEvents as ((sessionId: string) => Promise<TranscriptEvent[]>) | undefined) ??
+    vi.fn(async () => [])
+  const readSampledEvents =
+    (overrides.readSampledEvents as ((sessionId: string) => Promise<TranscriptEvent[]>) | undefined) ??
+    readEvents
+
   return {
     getBaseRoot: vi.fn(() => 'C:\\transcripts'),
     getIndexPath: vi.fn((sessionId: string) => `C:\\transcripts\\${sessionId}.index.json`),
@@ -100,7 +107,8 @@ function buildTranscriptStore(
       projectId: 'project-1',
       locationId: 'location-1',
     })),
-    readEvents: vi.fn(async () => []),
+    readEvents,
+    readSampledEvents,
     ...overrides,
   }
 }
@@ -400,7 +408,7 @@ describe('ProjectMemoryService', () => {
     await service.captureSession(input)
     await vi.runOnlyPendingTimersAsync()
 
-    expect(transcriptStore.readEvents).toHaveBeenCalledTimes(1)
+    expect(transcriptStore.readSampledEvents).toHaveBeenCalledTimes(1)
     expect(manager.captureSession).toHaveBeenCalledTimes(1)
     expect(manager.captureSession).toHaveBeenCalledWith({
       ...input,
@@ -498,6 +506,92 @@ describe('ProjectMemoryService', () => {
 
     expect(memoryBackend.indexSessionTranscript).toHaveBeenCalledTimes(1)
     expect(manager.captureSession).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  it('uses sampled transcript reads for MemPalace reindexing', async () => {
+    const manager = {
+      isEnabled: vi.fn(() => false),
+      assembleContext: vi.fn(),
+      setDiagnosticReporter: vi.fn(),
+      hasSessionSummary: vi.fn(),
+      captureSession: vi.fn(),
+    }
+    const memoryBackend = {
+      indexSessionTranscript: vi.fn(async () => ({
+        status: 'indexed' as const,
+        sessionId: 'session-1',
+        indexedCount: 2,
+        skippedCount: 0,
+        warning: null,
+      })),
+    }
+    const readSampledEvents = vi.fn(async (): Promise<TranscriptEvent[]> => [
+      {
+        id: 'event-1',
+        sessionId: 'session-1',
+        projectId: 'project-1',
+        locationId: 'location-1',
+        timestamp: '2026-03-22T12:00:00.000Z',
+        kind: 'input',
+        source: 'user',
+        chunk: 'Sample the head',
+      },
+      {
+        id: 'event-2',
+        sessionId: 'session-1',
+        projectId: 'project-1',
+        locationId: 'location-1',
+        timestamp: '2026-03-22T12:05:00.000Z',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'Sample the tail',
+      },
+    ])
+    const transcriptStore = buildTranscriptStore({
+      readSampledEvents,
+    })
+    const service = new ProjectMemoryService(
+      manager as never,
+      transcriptStore,
+      {
+        lowPriorityDelayMs: 0,
+        retryDelayMs: 0,
+      },
+      {
+        memoryBackend,
+      },
+    )
+
+    const result = await service.reindexTranscriptMemory([
+      {
+        project: buildProject(),
+        location: buildLocation(),
+        session: buildSession(),
+      },
+    ])
+
+    expect(result).toEqual({
+      backend: 'mempalace',
+      projectId: 'project-1',
+      sessionsScanned: 1,
+      sessionsIndexed: 1,
+      sessionsDeferred: 0,
+      sessionsSkipped: 0,
+      errorCount: 0,
+      warning: null,
+    })
+    expect(readSampledEvents).toHaveBeenCalledTimes(1)
+    expect(memoryBackend.indexSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ id: 'session-1' }),
+        transcript: expect.arrayContaining([
+          expect.objectContaining({ id: 'event-1' }),
+          expect.objectContaining({ id: 'event-2' }),
+        ]),
+      }),
+    )
+
     service.dispose()
   })
 

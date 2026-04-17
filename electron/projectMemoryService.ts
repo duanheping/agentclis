@@ -82,6 +82,11 @@ interface ProjectMemoryServiceDependencies {
 
 const MAX_DIAGNOSTICS = 80
 const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 4_000
+const PROJECT_MEMORY_TRANSCRIPT_MAX_FULL_BYTES = 512 * 1024
+const PROJECT_MEMORY_TRANSCRIPT_HEAD_MAX_BYTES = 192 * 1024
+const PROJECT_MEMORY_TRANSCRIPT_HEAD_MAX_EVENTS = 64
+const PROJECT_MEMORY_TRANSCRIPT_TAIL_MAX_BYTES = 768 * 1024
+const PROJECT_MEMORY_TRANSCRIPT_TAIL_MAX_EVENTS = 480
 
 function truncateDiagnosticText(
   value: string,
@@ -237,7 +242,12 @@ export class ProjectMemoryService {
   private readonly manager: ProjectMemoryManager
   private readonly transcriptStore: Pick<
     TranscriptStore,
-    'getBaseRoot' | 'getIndexPath' | 'getTranscriptPath' | 'readEvents' | 'readIndex'
+    | 'getBaseRoot'
+    | 'getIndexPath'
+    | 'getTranscriptPath'
+    | 'readEvents'
+    | 'readIndex'
+    | 'readSampledEvents'
   >
   private readonly lowPriorityDelayMs: number
   private readonly retryDelayMs: number
@@ -255,7 +265,12 @@ export class ProjectMemoryService {
     manager: ProjectMemoryManager,
     transcriptStore: Pick<
       TranscriptStore,
-      'getBaseRoot' | 'getIndexPath' | 'getTranscriptPath' | 'readEvents' | 'readIndex'
+      | 'getBaseRoot'
+      | 'getIndexPath'
+      | 'getTranscriptPath'
+      | 'readEvents'
+      | 'readIndex'
+      | 'readSampledEvents'
     >,
     options: ProjectMemoryServiceOptions = {},
     dependencies: ProjectMemoryServiceDependencies = {},
@@ -676,7 +691,7 @@ export class ProjectMemoryService {
         }
       }
 
-      const transcript = await this.transcriptStore.readEvents(job.payload.session.id)
+      const transcript = await this.readTranscriptForMemoryJob(job.payload.session.id)
       const transcriptPath = this.transcriptStore.getTranscriptPath(job.payload.session.id)
 
       let memoryBackendResult: MempalaceSessionIndexResult | null = null
@@ -794,7 +809,7 @@ export class ProjectMemoryService {
           continue
         }
 
-        const transcript = await this.transcriptStore.readEvents(input.session.id)
+        const transcript = await this.readTranscriptForMemoryJob(input.session.id)
         const indexResult = await this.memoryBackend.indexSessionTranscript({
           ...input,
           transcript,
@@ -816,5 +831,17 @@ export class ProjectMemoryService {
     }
 
     return result
+  }
+
+  private async readTranscriptForMemoryJob(
+    sessionId: string,
+  ): Promise<TranscriptEvent[]> {
+    return await this.transcriptStore.readSampledEvents(sessionId, {
+      maxFullBytes: PROJECT_MEMORY_TRANSCRIPT_MAX_FULL_BYTES,
+      headMaxBytes: PROJECT_MEMORY_TRANSCRIPT_HEAD_MAX_BYTES,
+      headMaxEvents: PROJECT_MEMORY_TRANSCRIPT_HEAD_MAX_EVENTS,
+      tailMaxBytes: PROJECT_MEMORY_TRANSCRIPT_TAIL_MAX_BYTES,
+      tailMaxEvents: PROJECT_MEMORY_TRANSCRIPT_TAIL_MAX_EVENTS,
+    })
   }
 }
