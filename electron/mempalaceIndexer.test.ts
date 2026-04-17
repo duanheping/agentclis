@@ -61,7 +61,7 @@ describe('MempalaceIndexer', () => {
   it('derives the wing from remote fingerprint before falling back to project id', () => {
     expect(
       deriveMempalaceWing(buildProject(), null),
-    ).toBe('github.com/duanheping/agentclis')
+    ).toBe('remote-github.com-duanheping-agentclis')
 
     expect(
       deriveMempalaceWing(
@@ -113,7 +113,7 @@ describe('MempalaceIndexer', () => {
           sessionId: 'session-1',
           room: 'transcript-raw',
           sourceKind: 'transcript-raw',
-          wing: 'github.com/duanheping/agentclis',
+          wing: 'remote-github.com-duanheping-agentclis',
           eventIds: ['event-1', 'event-2'],
           timestampStart: '2026-04-15T12:00:01.000Z',
           timestampEnd: '2026-04-15T12:00:02.000Z',

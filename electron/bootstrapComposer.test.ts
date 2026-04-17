@@ -219,14 +219,14 @@ describe('BootstrapComposer', () => {
     expect(memorySearch.search).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        wing: 'github.com/openai/agenclis',
+        wing: 'remote-github.com-openai-agenclis',
         room: 'session-summary',
       }),
     )
     expect(memorySearch.search).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        wing: 'github.com/openai/agenclis',
+        wing: 'remote-github.com-openai-agenclis',
         room: 'architecture',
       }),
     )

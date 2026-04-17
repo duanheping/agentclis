@@ -456,6 +456,52 @@ describe('TranscriptStore', () => {
     ])
   })
 
+  it('returns the full transcript when sampled reads stay under the full-read threshold', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent({ id: 'event-1', chunk: 'first' }))
+    await store.append(
+      buildEvent({
+        id: 'event-2',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'second',
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-3',
+        chunk: 'third',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    )
+
+    await expect(
+      store.readSampledEvents('session-1', {
+        maxFullBytes: 64 * 1024,
+        headMaxEvents: 1,
+        tailMaxEvents: 1,
+      }),
+    ).resolves.toEqual([
+      buildEvent({ id: 'event-1', chunk: 'first' }),
+      buildEvent({
+        id: 'event-2',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'second',
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+      buildEvent({
+        id: 'event-3',
+        chunk: 'third',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    ])
+  })
+
   it('reads paged transcript events from newest to oldest pages', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
     tempRoots.push(tempRoot)
@@ -585,6 +631,86 @@ describe('TranscriptStore', () => {
       ],
       nextCursor: null,
     })
+  })
+
+  it('samples transcript head and tail without duplicating overlapping events', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    const largeChunkA = 'a'.repeat(180_000)
+    const largeChunkB = 'b'.repeat(180_000)
+
+    await store.append(
+      buildEvent({
+        id: 'event-1',
+        chunk: largeChunkA,
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-2',
+        kind: 'output',
+        source: 'pty',
+        chunk: largeChunkB,
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-3',
+        chunk: 'middle',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-4',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'tail-a',
+        timestamp: '2026-03-22T12:00:03.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-5',
+        chunk: 'tail-b',
+        timestamp: '2026-03-22T12:00:04.000Z',
+      }),
+    )
+
+    await expect(
+      store.readSampledEvents('session-1', {
+        maxFullBytes: 1,
+        headMaxEvents: 2,
+        tailMaxEvents: 2,
+      }),
+    ).resolves.toEqual([
+      buildEvent({
+        id: 'event-1',
+        chunk: largeChunkA,
+      }),
+      buildEvent({
+        id: 'event-2',
+        kind: 'output',
+        source: 'pty',
+        chunk: largeChunkB,
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+      buildEvent({
+        id: 'event-4',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'tail-a',
+        timestamp: '2026-03-22T12:00:03.000Z',
+      }),
+      buildEvent({
+        id: 'event-5',
+        chunk: 'tail-b',
+        timestamp: '2026-03-22T12:00:04.000Z',
+      }),
+    ])
   })
 
   it('writes the transcript index without leaving temp files behind', async () => {

@@ -161,6 +161,16 @@ export interface MempalaceLegacyImportResult {
   warning: string | null
 }
 
+function normalizeMempalaceWingSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 export function deriveMempalaceWing(
   project: Pick<ProjectConfig, 'id' | 'identity'>,
   location?: Pick<ProjectLocation, 'projectId' | 'remoteFingerprint'> | null,
@@ -169,7 +179,14 @@ export function deriveMempalaceWing(
   const remoteFingerprint = location?.remoteFingerprint ??
     projectIdentity?.remoteFingerprint ??
     null
-  return remoteFingerprint?.trim() || project.id
+  if (remoteFingerprint?.trim()) {
+    const normalizedRemote = normalizeMempalaceWingSegment(remoteFingerprint)
+    if (normalizedRemote) {
+      return `remote-${normalizedRemote}`
+    }
+  }
+
+  return normalizeMempalaceWingSegment(project.id) || 'project'
 }
 
 export function deriveMempalaceRoomForCandidateKind(
