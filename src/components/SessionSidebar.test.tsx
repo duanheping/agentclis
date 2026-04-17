@@ -259,7 +259,7 @@ describe('SessionSidebar', () => {
     cleanup()
   })
 
-  it('shows restore summaries before the raw startup command in session rows', () => {
+  it('shows only the session title in session rows', () => {
     const project = buildProject()
     project.sessions[0] = {
       ...project.sessions[0],
@@ -280,9 +280,10 @@ describe('SessionSidebar', () => {
       showProjectPaths: false,
     })
 
+    expect(screen.getByText("why you don't show session title")).toBeInTheDocument()
     expect(
-      screen.getByText('Review ready with the latest result summary.'),
-    ).toBeInTheDocument()
+      screen.queryByText('Review ready with the latest result summary.'),
+    ).not.toBeInTheDocument()
     expect(screen.queryByText(/^codex$/i)).not.toBeInTheDocument()
   })
 

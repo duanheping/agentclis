@@ -16,7 +16,6 @@ import {
   type SkillSyncStatus,
 } from '../shared/skills'
 import {
-  summarizeCommand,
   type ProjectSnapshot,
   type SessionSnapshot,
 } from '../shared/session'
@@ -129,76 +128,6 @@ function findActiveProjectId(
       project.sessions.some((session) => session.config.id === activeSessionId),
     )?.config.id ?? null
   )
-}
-
-function findSessionLocationLabel(
-  project: ProjectSnapshot,
-  session: SessionSnapshot,
-): string | null {
-  const locations = project.locations ?? []
-  if (locations.length <= 1 || !session.config.locationId) {
-    return null
-  }
-
-  return (
-    locations.find((location) => location.id === session.config.locationId)?.label ?? null
-  )
-}
-
-function summarizeSessionRestoreText(session: SessionSnapshot): string | null {
-  const restore = session.restore
-  if (!restore) {
-    return null
-  }
-
-  if (restore.blockedReason) {
-    return restore.blockedReason
-  }
-
-  if (restore.lastError) {
-    return restore.lastError
-  }
-
-  if (restore.resultSummary) {
-    return restore.resultSummary
-  }
-
-  if (restore.lastMeaningfulReply) {
-    return restore.lastMeaningfulReply
-  }
-
-  if (
-    session.runtime.status !== 'running' ||
-    session.runtime.awaitingResponse === true ||
-    session.runtime.attention
-  ) {
-    return restore.statusSummary
-  }
-
-  return null
-}
-
-function buildSessionSecondaryLabel(
-  project: ProjectSnapshot,
-  session: SessionSnapshot,
-  showProjectPaths: boolean,
-): string | null {
-  const sessionLocationLabel = findSessionLocationLabel(project, session)
-  const restoreSummary = summarizeSessionRestoreText(session)
-
-  if (restoreSummary) {
-    return sessionLocationLabel
-      ? `${sessionLocationLabel} · ${restoreSummary}`
-      : restoreSummary
-  }
-
-  if (!sessionLocationLabel && !showProjectPaths) {
-    return null
-  }
-
-  return sessionLocationLabel
-    ? `${sessionLocationLabel} · ${summarizeCommand(session.config.startupCommand, 28)}`
-    : summarizeCommand(session.config.startupCommand, 36)
 }
 
 function formatMergeAgentLabel(agent: SkillAiMergeAgent): string {
@@ -727,11 +656,6 @@ export function SessionSidebar({
                       const editing = session.config.id === editingId
                       const attention = session.runtime.attention ?? null
                       const awaitingResponse = session.runtime.awaitingResponse === true
-                      const secondaryLabel = buildSessionSecondaryLabel(
-                        project,
-                        session,
-                        showProjectPaths,
-                      )
                       const reminderClassName = awaitingResponse
                         ? ' is-awaiting-response'
                         : attention
@@ -810,11 +734,6 @@ export function SessionSidebar({
                                     {session.config.title}
                                   </span>
                                 </div>
-                                {secondaryLabel ? (
-                                  <div className="session-item__command">
-                                    {secondaryLabel}
-                                  </div>
-                                ) : null}
                               </div>
                             </div>
                           )}
