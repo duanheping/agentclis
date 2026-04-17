@@ -4,18 +4,27 @@ import type {
   SessionRuntime,
 } from '../src/shared/session'
 
-const ANSI_ESCAPE_REGEX = new RegExp(
+const CSI_ESCAPE_REGEX = new RegExp(
   `${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`,
   'gu',
 )
+const OSC_ESCAPE_REGEX = new RegExp(
+  `${String.fromCharCode(27)}\\][^${String.fromCharCode(7)}${String.fromCharCode(27)}]*(?:${String.fromCharCode(7)}|${String.fromCharCode(27)}\\\\|$)`,
+  'gu',
+)
+// eslint-disable-next-line no-control-regex
+const NON_PRINTABLE_REGEX = /[\u0000-\u0008\u000b-\u001f\u007f]/gu
 const MAX_RESTORE_SUMMARY_CHARS = 200
 const LOW_SIGNAL_LINE_REGEX =
   /^(?:[>#$%|\\/=_-]+|[0-9]+%?|yes|no|ok|done|continue|enter|press enter)$/iu
 const SESSION_EXIT_MESSAGE_REGEX = /^Session exited with code (-?\d+)\.?$/iu
 const SESSION_START_FAILURE_REGEX = /^Failed to start session: (.+)$/iu
 
-function stripAnsi(value: string): string {
-  return value.replace(ANSI_ESCAPE_REGEX, '')
+function stripTerminalControlSequences(value: string): string {
+  return value
+    .replace(OSC_ESCAPE_REGEX, '')
+    .replace(CSI_ESCAPE_REGEX, '')
+    .replace(NON_PRINTABLE_REGEX, '')
 }
 
 function normalizeWhitespace(value: string): string {
@@ -23,7 +32,7 @@ function normalizeWhitespace(value: string): string {
 }
 
 function clampSummary(value: string | null): string | null {
-  const normalized = normalizeWhitespace(value ?? '')
+  const normalized = normalizeWhitespace(stripTerminalControlSequences(value ?? ''))
   if (!normalized) {
     return null
   }
@@ -88,7 +97,7 @@ function deriveBlockedReason(runtime: SessionRuntime): string | null {
 }
 
 function extractReplySummary(chunk: string | undefined): string | null {
-  const normalized = stripAnsi(chunk ?? '')
+  const normalized = stripTerminalControlSequences(chunk ?? '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
 

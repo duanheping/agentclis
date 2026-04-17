@@ -4264,6 +4264,93 @@ describe('SessionManager logical project identity and project context', () => {
     })
   })
 
+  it('does not let control-only output overwrite the last meaningful restore reply', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+    })
+
+    const terminalDataListener = mocks.terminals[0]?.onData.mock.calls[0]?.[0] as
+      | ((chunk: string) => void)
+      | undefined
+
+    terminalDataListener?.('First meaningful reply from the agent.\r\n')
+    await vi.waitFor(() => {
+      expect(manager.listSessions().projects[0]?.sessions[0]?.restore).toMatchObject({
+        lastMeaningfulReply: 'First meaningful reply from the agent.',
+      })
+    })
+
+    terminalDataListener?.('\u001b]0;agentclis_20')
+
+    await vi.waitFor(() => {
+      expect(manager.listSessions().projects[0]?.sessions[0]?.restore).toMatchObject({
+        lastMeaningfulReply: 'First meaningful reply from the agent.',
+      })
+    })
+  })
+
+  it('sanitizes persisted restore replies that only contain terminal control text', () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'restored session',
+          startupCommand: 'codex',
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-22T12:00:00.000Z',
+          updatedAt: '2026-03-22T12:10:00.000Z',
+        },
+      ],
+      activeSessionId: null,
+      restoreSnapshots: {
+        'session-a': {
+          statusSummary: 'Session finished.',
+          lastMeaningfulReply: '\u001b]0;agentclis_20',
+          resultSummary: 'Session exited successfully.',
+          blockedReason: null,
+          lastError: null,
+          updatedAt: '2026-03-22T12:10:00.000Z',
+          hasTranscript: true,
+          hasTerminalReplay: true,
+        },
+      },
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    expect(manager.listSessions().projects[0]?.sessions[0]?.restore).toMatchObject({
+      lastMeaningfulReply: null,
+      resultSummary: 'Session exited successfully.',
+      hasTranscript: true,
+      hasTerminalReplay: true,
+    })
+  })
+
   it('queues project memory capture when a session is closed', async () => {
     const transcriptEvents: TranscriptEvent[] = []
     const transcriptStore = {
