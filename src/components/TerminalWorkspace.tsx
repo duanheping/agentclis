@@ -68,6 +68,7 @@ const TERMINAL_SPLIT_KEYBOARD_STEP = 32
 const TERMINAL_SCROLLBACK_LINES = 50_000
 const TERMINAL_SNAPSHOT_DEBOUNCE_MS = 1_500
 const TERMINAL_RESTORE_CHUNK_SIZE = 64 * 1024
+const TERMINAL_REPLAY_BLOCKING_BUDGET_MS = 120
 const TERMINAL_REPLAY_FETCH_TIMEOUT_MS = 1_500
 
 function buildEmptyTerminalReplay(): SessionTerminalReplay {
@@ -140,6 +141,30 @@ async function getTerminalReplayWithTimeout(
     return await Promise.race([
       window.agentCli.getSessionTerminalReplay(terminalId),
       timeoutReplay,
+    ])
+  } catch {
+    return buildEmptyTerminalReplay()
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId)
+    }
+  }
+}
+
+async function awaitTerminalReplayWithinBudget(
+  replayPromise: Promise<SessionTerminalReplay>,
+): Promise<SessionTerminalReplay | null> {
+  let timeoutId: ReturnType<typeof window.setTimeout> | null = null
+  const timeoutResult = new Promise<null>((resolve) => {
+    timeoutId = window.setTimeout(() => {
+      resolve(null)
+    }, TERMINAL_REPLAY_BLOCKING_BUDGET_MS)
+  })
+
+  try {
+    return await Promise.race([
+      replayPromise,
+      timeoutResult,
     ])
   } catch {
     return buildEmptyTerminalReplay()
@@ -606,6 +631,9 @@ function TerminalSurface({
     fitTerminalRef.current = fitTerminal
 
     void (async () => {
+      const replayPromise = shouldPersistTerminalState
+        ? getTerminalReplayWithTimeout(terminalId)
+        : Promise.resolve(buildEmptyTerminalReplay())
       let replayChunks: string[] = []
       let replaySource: 'transcript' | 'snapshot' = 'transcript'
       let replaySnapshot:
@@ -616,23 +644,6 @@ function TerminalSurface({
             content: string
           }
         | undefined
-
-      try {
-        if (shouldPersistTerminalState) {
-          const replay = await getTerminalReplayWithTimeout(terminalId)
-          replayChunks = replay.chunks
-          replaySource = replay.source ?? 'transcript'
-          replaySnapshot = replay.snapshot
-        }
-      } catch {
-        replayChunks = []
-        replaySource = 'transcript'
-        replaySnapshot = undefined
-      }
-
-      if (disposed) {
-        return
-      }
 
       terminal = new Terminal({
         cursorBlink: true,
@@ -737,6 +748,30 @@ function TerminalSurface({
       terminalRef.current = terminal
       fitAddonRef.current = fitAddon
 
+      requestAnimationFrame(() => {
+        fitTerminal()
+
+        if (activeRef.current && autoFocusRef.current) {
+          terminal?.focus()
+        }
+
+        if (activeRef.current && focusRequestSequenceRef.current > 0) {
+          terminal?.focus()
+          onFocusRequestHandledRef.current?.(focusRequestSequenceRef.current)
+        }
+      })
+
+      const replay = await awaitTerminalReplayWithinBudget(replayPromise)
+      if (replay) {
+        replayChunks = replay.chunks
+        replaySource = replay.source ?? 'transcript'
+        replaySnapshot = replay.snapshot
+      }
+
+      if (disposed) {
+        return
+      }
+
       if (replaySource === 'snapshot' && replaySnapshot?.content) {
         await writeTerminalData(terminal, replaySnapshot.content)
       }
@@ -752,19 +787,9 @@ function TerminalSurface({
         terminalHandle,
         replayChunks,
       )
-      queueSnapshotCapture(0)
-      requestAnimationFrame(() => {
-        fitTerminal()
-
-        if (activeRef.current && autoFocusRef.current) {
-          terminal?.focus()
-        }
-
-        if (activeRef.current && focusRequestSequenceRef.current > 0) {
-          terminal?.focus()
-          onFocusRequestHandledRef.current?.(focusRequestSequenceRef.current)
-        }
-      })
+      if (replaySource === 'snapshot' && replaySnapshot?.content) {
+        queueSnapshotCapture(0)
+      }
     })().catch(() => undefined)
 
     const handlePointerDownCapture = (event: PointerEvent) => {
