@@ -15,7 +15,7 @@ const ERASE_SCROLLBACK_RE = /\x1b\[3J/g
 // eslint-disable-next-line no-control-regex
 const CSI_ESCAPE_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g
 // eslint-disable-next-line no-control-regex
-const OSC_ESCAPE_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+const OSC_ESCAPE_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)/g
 // eslint-disable-next-line no-control-regex
 const CLEAR_ONLY_ESCAPE_RE = /\x1b\[(?:2J|K)/
 // eslint-disable-next-line no-control-regex
