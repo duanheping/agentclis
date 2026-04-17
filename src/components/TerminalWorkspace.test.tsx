@@ -225,7 +225,7 @@ describe('TerminalWorkspace', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows a restore summary card for the active session', () => {
+  it('does not block the terminal surface with a restore summary overlay', () => {
     const session = buildSession()
     session.restore = {
       statusSummary: 'Session finished.',
@@ -247,16 +247,8 @@ describe('TerminalWorkspace', () => {
       />,
     )
 
-    expect(
-      screen.getByRole('heading', { name: 'Session 1' }),
-    ).toBeInTheDocument()
-    expect(screen.getByText('Restored state')).toBeInTheDocument()
-    expect(screen.getByText('Session exited successfully.')).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        'Updated the restore snapshot path so review state can survive restart.',
-      ),
-    ).toBeInTheDocument()
+    expect(screen.queryByText('Restored state')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session exited successfully.')).not.toBeInTheDocument()
   })
 
   it('defaults the agent terminal to roughly two thirds of the split height', async () => {

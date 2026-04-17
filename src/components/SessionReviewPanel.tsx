@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { sanitizeTerminalTextContent } from '../lib/terminalEscapeFilter'
 import type { TranscriptEvent } from '../shared/projectMemory'
 import type { SessionSnapshot } from '../shared/session'
 
@@ -68,17 +69,21 @@ function formatEventLabel(event: TranscriptEvent): string {
   return 'System'
 }
 
-function summarizeEvent(event: TranscriptEvent): string {
-  const chunk = event.chunk?.trim()
+function getEventDisplayText(event: TranscriptEvent): string | null {
+  const chunk = sanitizeTerminalTextContent(event.chunk ?? '')
   if (chunk) {
     return chunk
   }
 
   if (event.metadata && Object.keys(event.metadata).length > 0) {
-    return JSON.stringify(event.metadata)
+    return JSON.stringify(event.metadata, null, 2)
   }
 
-  return `${formatEventLabel(event)} event`
+  if (event.kind === 'runtime' || event.kind === 'system') {
+    return `${formatEventLabel(event)} event`
+  }
+
+  return null
 }
 
 function SessionTranscriptList({
@@ -96,9 +101,27 @@ function SessionTranscriptList({
     )
   }
 
+  const displayEvents = events
+    .map((event) => ({
+      event,
+      text: getEventDisplayText(event),
+    }))
+    .filter(
+      (entry): entry is { event: TranscriptEvent; text: string } =>
+        typeof entry.text === 'string' && entry.text.length > 0,
+    )
+
+  if (displayEvents.length === 0) {
+    return (
+      <div className="session-review-panel__state">
+        <p>{emptyLabel}</p>
+      </div>
+    )
+  }
+
   return (
     <div className="session-review-panel__events">
-      {events.map((event) => (
+      {displayEvents.map(({ event, text }) => (
         <article
           key={event.id}
           className={`session-review-panel__event is-${event.kind}`}
@@ -111,7 +134,7 @@ function SessionTranscriptList({
               {formatTimestamp(event.timestamp)}
             </span>
           </div>
-          <p className="session-review-panel__event-text">{summarizeEvent(event)}</p>
+          <pre className="session-review-panel__event-text">{text}</pre>
         </article>
       ))}
     </div>
@@ -305,7 +328,7 @@ export function SessionReviewPanel({
     <aside className="session-review-panel">
       <header className="session-review-panel__header">
         <div>
-          <p className="session-review-panel__eyebrow">Review full content</p>
+          <p className="session-review-panel__eyebrow">Session info</p>
           <h2>{session.config.title}</h2>
           <p className="session-review-panel__subhead">
             {restore?.statusSummary ?? 'Session history'}

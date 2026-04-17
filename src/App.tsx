@@ -1983,11 +1983,11 @@ function App() {
           <button
             type="button"
             className={`titlebar-action${showReviewPanel ? ' is-active' : ''}`}
-            aria-label="Toggle review panel"
+            aria-label="Toggle session info panel"
             disabled={!activeSession}
             onClick={handleToggleReviewPanel}
           >
-            <span className="titlebar-action__label">Review</span>
+            <span className="titlebar-action__label">SessionInfo</span>
           </button>
 
           <button
