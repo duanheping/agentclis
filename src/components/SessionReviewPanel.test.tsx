@@ -10,7 +10,7 @@ function buildSession(): SessionSnapshot {
     config: {
       id: 'session-1',
       projectId: 'project-1',
-      title: 'Review restore behavior',
+      title: 'Session info behavior',
       startupCommand: 'codex',
       pendingFirstPromptTitle: false,
       cwd: 'C:\\repo\\agentclis',
@@ -85,6 +85,16 @@ describe('SessionReviewPanel', () => {
           return {
             events: [
               {
+                id: 'event-control',
+                sessionId: 'session-1',
+                projectId: 'project-1',
+                locationId: null,
+                timestamp: '2026-04-16T12:01:30.000Z',
+                kind: 'output',
+                source: 'pty',
+                chunk: '\u001b[?2026h\u001b[?25l',
+              },
+              {
                 id: 'event-2',
                 sessionId: 'session-1',
                 projectId: 'project-1',
@@ -92,7 +102,7 @@ describe('SessionReviewPanel', () => {
                 timestamp: '2026-04-16T12:02:00.000Z',
                 kind: 'output',
                 source: 'pty',
-                chunk: 'Latest transcript reply',
+                chunk: '\u001b[32mLatest transcript reply\u001b[0m',
               },
             ],
             nextCursor: '1',
@@ -114,7 +124,7 @@ describe('SessionReviewPanel', () => {
       />,
     )
 
-    expect(screen.getByText('Review full content')).toBeInTheDocument()
+    expect(screen.getByText('Session info')).toBeInTheDocument()
     expect(screen.getAllByText('Session finished.')).toHaveLength(2)
     expect(screen.getByText('Session exited successfully.')).toBeInTheDocument()
     expect(
@@ -136,6 +146,7 @@ describe('SessionReviewPanel', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Latest transcript reply')).toBeInTheDocument()
+      expect(screen.queryByText(/\?2026h/)).not.toBeInTheDocument()
     })
 
     await user.click(screen.getByRole('button', { name: 'Load older entries' }))
@@ -177,7 +188,7 @@ describe('SessionReviewPanel', () => {
     await user.click(screen.getByRole('tab', { name: 'Raw' }))
 
     await waitFor(() => {
-      expect(screen.getByText(/"chunk": "Latest transcript reply"/)).toBeInTheDocument()
+      expect(screen.getByText(/"id": "event-2"/)).toBeInTheDocument()
     })
   })
 })

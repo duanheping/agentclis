@@ -1097,7 +1097,7 @@ describe('App skills settings', () => {
 
     render(<App />)
 
-    await screen.findByRole('button', { name: 'Toggle review panel' })
+    await screen.findByRole('button', { name: 'Toggle session info panel' })
 
     await user.click(screen.getByRole('button', { name: 'Toggle diff panel' }))
 
@@ -1105,7 +1105,7 @@ describe('App skills settings', () => {
       expect(screen.getByText('Changes')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Toggle review panel' }))
+    await user.click(screen.getByRole('button', { name: 'Toggle session info panel' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('session-review-panel')).toBeInTheDocument()
