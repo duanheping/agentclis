@@ -295,7 +295,9 @@ function collectHeadEventFromLine(
 
 export class TranscriptStore {
   private readonly pendingWrites = new Map<string, Promise<void>>()
+  private readonly indexCache = new Map<string, TranscriptIndex>()
   private readonly baseRoot: string
+  private appendDirectoryReady: Promise<void> | null = null
 
   constructor(baseRoot = DEFAULT_BASE_ROOT) {
     this.baseRoot = baseRoot
@@ -318,18 +320,18 @@ export class TranscriptStore {
     const nextWrite = pendingWrite.then(async () => {
       const transcriptPath = this.getTranscriptPath(event.sessionId)
       const indexPath = this.getIndexPath(event.sessionId)
-      await mkdir(path.dirname(transcriptPath), { recursive: true })
-      await mkdir(path.dirname(indexPath), { recursive: true })
+      await this.ensureAppendDirectories()
       await repairMalformedTailForAppend(transcriptPath)
       await appendFile(transcriptPath, `${JSON.stringify(event)}\n`, 'utf8')
 
-      const currentIndex = await this.readIndexFile(event.sessionId)
+      const currentIndex = await this.readCachedIndex(event.sessionId)
       const nextIndex: TranscriptIndex = {
         eventCount: currentIndex.eventCount + 1,
         lastEventAt: event.timestamp,
         projectId: event.projectId,
         locationId: event.locationId,
       }
+      this.indexCache.set(event.sessionId, nextIndex)
       await writeUtf8FileAtomic(
         indexPath,
         `${JSON.stringify(nextIndex, null, 2)}\n`,
@@ -542,7 +544,27 @@ export class TranscriptStore {
 
   async readIndex(sessionId: string): Promise<TranscriptIndex> {
     await this.pendingWrites.get(sessionId)
-    return await this.readIndexFile(sessionId)
+    return await this.readCachedIndex(sessionId)
+  }
+
+  private async ensureAppendDirectories(): Promise<void> {
+    this.appendDirectoryReady ??= Promise.all([
+      mkdir(path.join(this.baseRoot, 'transcripts'), { recursive: true }),
+      mkdir(path.join(this.baseRoot, 'transcript-index'), { recursive: true }),
+    ]).then(() => undefined)
+
+    await this.appendDirectoryReady
+  }
+
+  private async readCachedIndex(sessionId: string): Promise<TranscriptIndex> {
+    const cached = this.indexCache.get(sessionId)
+    if (cached) {
+      return cached
+    }
+
+    const index = await this.readIndexFile(sessionId)
+    this.indexCache.set(sessionId, index)
+    return index
   }
 
   private async readIndexFile(sessionId: string): Promise<TranscriptIndex> {

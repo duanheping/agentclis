@@ -506,6 +506,39 @@ describe('TerminalWorkspace', () => {
     )
   })
 
+  it('does not recapture a restored snapshot immediately on mount', async () => {
+    window.agentCli.getSessionTerminalReplay = vi.fn().mockResolvedValue({
+      chunks: [],
+      source: 'snapshot',
+      snapshot: {
+        format: 'serialized',
+        cols: 120,
+        rows: 36,
+        content: '\u001b[2Jrestored snapshot',
+      },
+    })
+
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(window.agentCli.getSessionTerminalReplay).toHaveBeenCalledWith(
+        'session-1',
+      )
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
+        '\u001b[2Jrestored snapshot',
+        expect.any(Function),
+      )
+    })
+
+    expect(window.agentCli.updateSessionTerminalSnapshot).not.toHaveBeenCalled()
+  })
+
   it('opens the terminal before awaiting a large snapshot replay', async () => {
     let releaseSnapshotWrite: (() => void) | null = null
     mockTerminalWriteHandler.mockImplementation((data: string, callback?: () => void) => {
