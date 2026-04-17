@@ -787,8 +787,8 @@ function TerminalSurface({
         terminalHandle,
         replayChunks,
       )
-      if (replaySource === 'snapshot' && replaySnapshot?.content) {
-        queueSnapshotCapture(0)
+      if (replaySource !== 'snapshot') {
+        queueSnapshotCapture()
       }
     })().catch(() => undefined)
 
