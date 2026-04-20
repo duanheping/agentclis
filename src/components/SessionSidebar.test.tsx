@@ -5,9 +5,6 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SessionSidebar } from './SessionSidebar'
-import type { MemoryBackendStatus } from '../shared/memorySearch'
-import type { MemoryReindexResult } from '../shared/memorySearch'
-import type { MemorySearchResult } from '../shared/memorySearch'
 import type {
   SkillAiMergeProposal,
   SkillLibrarySettings,
@@ -134,63 +131,6 @@ function buildSkillAiMergeProposal(): SkillAiMergeProposal {
   }
 }
 
-function buildMemoryBackendStatus(): MemoryBackendStatus {
-  return {
-    backend: 'mempalace',
-    repo: 'https://github.com/duanheping/mempalace.git',
-    commit: '74e5bf6090cb239b1b48b5a015670842a99a2c8c',
-    installState: 'installed',
-    runtimeState: 'running',
-    installRoot:
-      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c',
-    palacePath: 'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\mempalace\\palace',
-    pythonPath:
-      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\tools\\mempalace\\74e5bf6090cb239b1b48b5a015670842a99a2c8c\\venv\\Scripts\\python.exe',
-    module: 'mempalace.mcp_server',
-    message: 'MemPalace runtime is running.',
-    lastError: null,
-  }
-}
-
-function buildMemoryReindexResult(): MemoryReindexResult {
-  return {
-    backend: 'mempalace',
-    projectId: 'project-1',
-    sessionsScanned: 2,
-    sessionsIndexed: 2,
-    sessionsDeferred: 0,
-    sessionsSkipped: 0,
-    errorCount: 0,
-    warning: null,
-  }
-}
-
-function buildMemorySearchResult(): MemorySearchResult {
-  return {
-    backend: 'mempalace',
-    query: 'transcript memory',
-    hitCount: 1,
-    hits: [
-      {
-        id: 'hit-1',
-        backend: 'mempalace',
-        textPreview: 'Remembered transcript memory about the prior debugging session.',
-        similarity: 0.87,
-        distance: null,
-        projectId: 'project-1',
-        locationId: null,
-        sessionId: 'session-1',
-        wing: 'project-1',
-        room: 'transcript-raw',
-        timestampStart: '2026-03-11T00:00:00.000Z',
-        timestampEnd: '2026-03-11T00:05:00.000Z',
-        sourceLabel: 'C:\\transcripts\\session-1.jsonl',
-      },
-    ],
-    warning: null,
-  }
-}
-
 function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>>) {
   return render(
     <SessionSidebar
@@ -219,24 +159,8 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       projectSessionsAnalyzing={false}
       projectArchitectureAnalysisStatus={null}
       projectSessionsAnalysisStatus={null}
-      memoryBackendStatus={buildMemoryBackendStatus()}
-      memoryBackendLoading={false}
-      memoryBackendInstalling={false}
-      memoryBackendReindexing={false}
-      memoryBackendErrorMessage={null}
-      memoryBackendReindexResult={null}
-      memorySearchLoading={false}
-      memorySearchErrorMessage={null}
-      memorySearchResult={null}
       skillAiMergeProposal={null}
       skillsErrorMessage={null}
-      onInstallMemoryBackend={vi.fn().mockResolvedValue(undefined)}
-      onRefreshMemoryBackendStatus={vi.fn().mockResolvedValue(undefined)}
-      onReindexMemoryBackend={vi.fn().mockResolvedValue(undefined)}
-      onSearchMemory={vi.fn().mockResolvedValue(undefined)}
-      onOpenMemorySearchSession={vi.fn().mockResolvedValue(undefined)}
-      onOpenMemoryBackendInstallRoot={vi.fn().mockResolvedValue(undefined)}
-      onOpenMemoryBackendPalacePath={vi.fn().mockResolvedValue(undefined)}
       onPickSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onClearSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
       onOpenSkillLibraryRoot={vi.fn().mockResolvedValue(undefined)}
@@ -338,61 +262,6 @@ describe('SessionSidebar', () => {
       'document-topic-search',
       'discovered',
     )
-  })
-
-  it('shows memory backend status and install controls in settings', async () => {
-    const user = userEvent.setup()
-    const onOpenMemoryBackendPalacePath = vi.fn().mockResolvedValue(undefined)
-    const onReindexMemoryBackend = vi.fn().mockResolvedValue(undefined)
-
-    renderSidebar({
-      onOpenMemoryBackendPalacePath,
-      onReindexMemoryBackend,
-      memoryBackendReindexResult: buildMemoryReindexResult(),
-    })
-
-    await user.click(screen.getByRole('button', { name: /settings/i }))
-
-    expect(screen.getByText('Memory backend')).toBeInTheDocument()
-    expect(screen.getByText(/Pinned commit 74e5bf6090cb/i)).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /open palace/i }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(/2 indexed, 0 skipped, 0 deferred, 0 errors/i),
-    ).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /open palace/i }))
-    await user.click(screen.getByRole('button', { name: /reindex transcripts/i }))
-
-    expect(onOpenMemoryBackendPalacePath).toHaveBeenCalledTimes(1)
-    expect(onReindexMemoryBackend).toHaveBeenCalledTimes(1)
-  })
-
-  it('searches indexed memory and opens the linked session from settings', async () => {
-    const user = userEvent.setup()
-    const onSearchMemory = vi.fn().mockResolvedValue(undefined)
-    const onOpenMemorySearchSession = vi.fn().mockResolvedValue(undefined)
-
-    renderSidebar({
-      onSearchMemory,
-      onOpenMemorySearchSession,
-      memorySearchResult: buildMemorySearchResult(),
-    })
-
-    await user.click(screen.getByRole('button', { name: /settings/i }))
-    await user.type(
-      screen.getByLabelText(/search transcript memory/i),
-      'transcript memory',
-    )
-    await user.click(screen.getByRole('button', { name: /search memory/i }))
-
-    expect(onSearchMemory).toHaveBeenCalledWith('transcript memory')
-    expect(screen.getByText(/remembered transcript memory/i)).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /open session/i }))
-
-    expect(onOpenMemorySearchSession).toHaveBeenCalledWith('session-1')
   })
 
   it('forwards the dedicated project architecture analysis action', async () => {
