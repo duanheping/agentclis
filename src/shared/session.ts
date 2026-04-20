@@ -42,7 +42,6 @@ export const PERMISSION_LEVEL_DESCRIPTIONS: Record<PermissionLevel, string> = {
 export interface ManagedCliSessionRef {
   provider: ManagedCliProvider
   sessionId: string
-  detectedAt: string
 }
 
 export interface ProjectConfig {
