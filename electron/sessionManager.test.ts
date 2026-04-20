@@ -1054,7 +1054,7 @@ describe('SessionManager restore policy', () => {
     ).toBe('error')
   })
 
-  it('keeps a saved ineligible Codex session id and fails restore without launching a fresh session', async () => {
+  it('restores a saved Codex Desktop session id', async () => {
     mocks.setPersistedState({
       projects: [
         {
@@ -1110,24 +1110,11 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
-    await vi.runOnlyPendingTimersAsync()
-    expect(mocks.spawn).not.toHaveBeenCalled()
-
-    expect(
-      (
-        mocks.getPersistedState() as {
-          sessions: Array<{
-            externalSession?: { sessionId: string }
-          }>
-        }
-      ).sessions[0]?.externalSession,
-    ).toEqual({
-      provider: 'codex',
-      sessionId: '019desktop-session',
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
     })
-    expect(
-      manager.listSessions().projects[0]?.sessions[0]?.runtime.status,
-    ).toBe('error')
+
+    expectSpawnedPowerShellCommand(0, 'codex resume 019desktop-session')
   })
 
   it('fails restoring a Copilot session when the stored session id is stale', async () => {
@@ -1753,6 +1740,112 @@ describe('SessionManager project lifecycle', () => {
       0,
       `copilot --allow-all --no-ask-user --resume ${externalSessionId}`,
     )
+  })
+
+  it('creates an existing-project managed session without blocking on delayed binding', async () => {
+    mocks.setAutoProvisionManagedSessions(false)
+    vi.setSystemTime(new Date('2026-04-20T19:10:20.000Z'))
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const project = await manager.createProject({
+      title: 'Workspace',
+      rootPath: 'C:\\repo',
+    })
+
+    const session = await manager.createSession({
+      projectId: project.config.id,
+      startupCommand: 'codex',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    expect(session.config.externalSession).toBeUndefined()
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.status,
+    ).toBe('running')
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            id: string
+          }>
+          activeSessionId: string | null
+        }
+      ).sessions,
+    ).toEqual([])
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: unknown[]
+          activeSessionId: string | null
+        }
+      ).activeSessionId,
+    ).toBeNull()
+
+    const externalSessionId = '019desktop-session'
+    mocks.setFile(
+      path.join(
+        os.homedir(),
+        '.codex',
+        'sessions',
+        '2026',
+        '04',
+        '20',
+        `rollout-2026-04-20T19-13-04-${externalSessionId}.jsonl`,
+      ),
+      [
+        `{"timestamp":"2026-04-20T19:15:14.450Z","type":"session_meta","payload":{"id":"${externalSessionId}","timestamp":"2026-04-20T19:13:04.375Z","cwd":"C:\\\\repo","originator":"Codex Desktop","source":"vscode"}}`,
+      ].join('\n'),
+      '2026-04-20T19:17:49.000Z',
+    )
+
+    await vi.advanceTimersByTimeAsync(60)
+    await vi.waitFor(() => {
+      expect(
+        manager.listSessions().projects[0]?.sessions.find(
+          (entry) => entry.config.id === session.config.id,
+        )?.config.externalSession,
+      ).toEqual({
+        provider: 'codex',
+        sessionId: externalSessionId,
+      })
+    })
+
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            id: string
+            externalSession?: {
+              provider: string
+              sessionId: string
+            }
+          }>
+          activeSessionId: string | null
+        }
+      ).sessions[0],
+    ).toMatchObject({
+      id: session.config.id,
+      externalSession: {
+        provider: 'codex',
+        sessionId: externalSessionId,
+      },
+    })
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: unknown[]
+          activeSessionId: string | null
+        }
+      ).activeSessionId,
+    ).toBe(session.config.id)
   })
 
   it('starts a fresh Codex session instead of reviving project history', async () => {

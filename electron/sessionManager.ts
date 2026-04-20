@@ -160,6 +160,7 @@ const CODEX_SESSION_DISCOVERY_RETRY_DELAYS_MS = [
   15_000,
   15_000,
   15_000,
+  ...Array.from({ length: 24 }, () => 15_000),
 ]
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
 const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
@@ -391,6 +392,7 @@ export class SessionManager {
       reject: (error: Error) => void
     }
   >()
+  private readonly transientManagedSessionIds = new Set<string>()
   private readonly pendingExternalSessionAttentionResolutions = new Map<
     string,
     NodeJS.Timeout
@@ -781,22 +783,30 @@ export class SessionManager {
         createdAt: now,
         updatedAt: now,
       }
+      const managedProvider = this.detectResumableProvider(config.startupCommand)
+      const requiresBlockingManagedSessionBinding =
+        managedProvider !== null &&
+        Boolean(input.createWithWorktree || input.projectRootPath?.trim())
 
       this.configs.set(id, config)
+      if (managedProvider && !requiresBlockingManagedSessionBinding) {
+        this.transientManagedSessionIds.add(id)
+      }
       const initialRuntime = buildRuntime(id)
       this.runtimes.set(id, initialRuntime)
       this.restoreSnapshots.set(id, buildSessionRestoreSnapshot(initialRuntime))
 
       await this.startSession(config, {
         allowManagedSessionBinding: true,
-        requireManagedSessionBinding:
-          this.detectResumableProvider(config.startupCommand) !== null,
+        requireManagedSessionBinding: requiresBlockingManagedSessionBinding,
         propagateFailure: true,
       })
 
       this.touchProject(project.id, now)
       this.activeSessionId = id
-      this.persist()
+      if (this.isPersistableSessionConfig(this.requireConfig(id))) {
+        this.persist()
+      }
       this.appendTranscriptEvent({
         sessionId: id,
         kind: 'system',
@@ -885,6 +895,7 @@ export class SessionManager {
     this.cancelScheduledSessionStart(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
+    this.transientManagedSessionIds.delete(id)
     this.restoreSnapshots.delete(id)
     this.configs.delete(id)
     this.runtimes.delete(id)
@@ -2156,6 +2167,7 @@ export class SessionManager {
       updatedAt: timestamp,
     }
 
+    this.transientManagedSessionIds.delete(nextConfig.id)
     this.claimExternalSession(nextConfig)
     this.configs.set(nextConfig.id, nextConfig)
     if (titleChanged) {
@@ -2548,6 +2560,7 @@ export class SessionManager {
       this.releaseExternalSession(config)
     }
     this.copilotInstructionSnapshots.delete(id)
+    this.transientManagedSessionIds.delete(id)
     this.restoreSnapshots.delete(id)
     this.configs.delete(id)
     this.runtimes.delete(id)
@@ -2579,6 +2592,10 @@ export class SessionManager {
     return `${provider}:${sessionId}`
   }
 
+  private isPersistableSessionConfig(config: SessionConfig): boolean {
+    return !this.transientManagedSessionIds.has(config.id)
+  }
+
   private isEligibleExternalSessionCandidate(
     candidate: DetectedExternalSession,
   ): boolean {
@@ -2586,7 +2603,12 @@ export class SessionManager {
       return true
     }
 
-    return candidate.source === 'cli' || candidate.originator === 'codex_cli_rs'
+    return (
+      candidate.source === 'cli' ||
+      candidate.source === 'vscode' ||
+      candidate.originator === 'codex_cli_rs' ||
+      candidate.originator === 'Codex Desktop'
+    )
   }
 
   private hydrateProjectConfig(project: ProjectConfig): ProjectConfig {
@@ -3773,26 +3795,40 @@ export class SessionManager {
   }
 
   private persist(): void {
+    const persistedConfigs = Array.from(this.configs.values()).filter((config) =>
+      this.isPersistableSessionConfig(config),
+    )
+    const persistedSessionIds = new Set(
+      persistedConfigs.map((config) => config.id),
+    )
+    const persistedActiveSessionId =
+      this.activeSessionId && persistedSessionIds.has(this.activeSessionId)
+        ? this.activeSessionId
+        : this.getOrderedConfigs().find((config) => persistedSessionIds.has(config.id))
+            ?.id ?? null
+
     this.store.set({
       projects: Array.from(this.projects.values()),
       locations: Array.from(this.locations.values()),
-      sessions: Array.from(this.configs.values()),
-      runtimes: Array.from(this.runtimes.values()).map((runtime) => ({
-        sessionId: runtime.sessionId,
-        lastActiveAt: runtime.lastActiveAt,
-      })),
+      sessions: persistedConfigs,
+      runtimes: Array.from(this.runtimes.values())
+        .filter((runtime) => persistedSessionIds.has(runtime.sessionId))
+        .map((runtime) => ({
+          sessionId: runtime.sessionId,
+          lastActiveAt: runtime.lastActiveAt,
+        })),
       restoreSnapshots: Object.fromEntries(
         Array.from(this.restoreSnapshots.entries()).filter(([sessionId]) =>
-          this.configs.has(sessionId),
+          persistedSessionIds.has(sessionId),
         ),
       ),
       copilotInstructionSnapshots: Object.fromEntries(
         Array.from(this.copilotInstructionSnapshots.entries()).filter(
           ([sessionId, snapshot]) =>
-            this.configs.has(sessionId) && snapshot.trim().length > 0,
+            persistedSessionIds.has(sessionId) && snapshot.trim().length > 0,
         ),
       ),
-      activeSessionId: this.activeSessionId,
+      activeSessionId: persistedActiveSessionId,
     })
   }
 
