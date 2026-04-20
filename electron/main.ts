@@ -44,11 +44,7 @@ import { ProjectSessionHistoryAgentExtractor } from './projectSessionHistoryAgen
 import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
 import { ProjectIdentityResolver } from './projectIdentity'
 import { ProjectMemoryService } from './projectMemoryService'
-import { BootstrapComposer } from './bootstrapComposer'
 import { SkillLibraryManager } from './skillLibraryManager'
-import { MempalaceRuntime } from './mempalaceRuntime'
-import { MempalaceBridge } from './mempalaceBridge'
-import { MempalaceService } from './mempalaceService'
 import { SessionManager } from './sessionManager'
 import { TerminalSnapshotStore } from './terminalSnapshotStore'
 import { TransientFileStore } from './transientFileStore'
@@ -88,12 +84,6 @@ const transientFileStore = new TransientFileStore()
 const projectIdentityResolver = new ProjectIdentityResolver()
 const transcriptStore = new TranscriptStore()
 const terminalSnapshotStore = new TerminalSnapshotStore()
-const mempalaceRuntime = new MempalaceRuntime()
-const mempalaceBridge = new MempalaceBridge(mempalaceRuntime)
-const mempalaceService = new MempalaceService(
-  mempalaceRuntime,
-  mempalaceBridge,
-)
 const projectMemoryManager = new ProjectMemoryManager(
   () => skillLibraryManager.getSettings().libraryRoot,
   new ProjectMemoryAgentExtractor(
@@ -106,16 +96,10 @@ const projectMemoryManager = new ProjectMemoryManager(
     () => skillLibraryManager.getSettings().primaryMergeAgent,
   ),
 )
-projectMemoryManager.setStructuredMemorySink(mempalaceService)
-const bootstrapComposer = new BootstrapComposer(mempalaceService)
 const projectMemoryService = new ProjectMemoryService(
   projectMemoryManager,
   transcriptStore,
   undefined,
-  {
-    memoryBackend: mempalaceService,
-    bootstrapComposer,
-  },
 )
 const sessionManager = new SessionManager({
   onData: (event) => {
@@ -713,35 +697,6 @@ function registerIpcHandlers(): void {
       return nextSettings
     },
   )
-  ipcMain.handle(IPC_CHANNELS.getMemoryBackendStatus, () =>
-    mempalaceService.getStatus(),
-  )
-  ipcMain.handle(IPC_CHANNELS.installMemoryRuntime, () =>
-    mempalaceService.installRuntime().then((result) => {
-      if (result.success) {
-        void projectMemoryService.importLegacyProjectMemory(
-          sessionManager.getProjectConfigs(),
-        )
-        projectMemoryService.resume()
-        sessionManager.scheduleProjectMemoryBackfill()
-      }
-      return result
-    }),
-  )
-  ipcMain.handle(IPC_CHANNELS.searchMemory, (_event, input) =>
-    mempalaceService.search(input),
-  )
-  ipcMain.handle(IPC_CHANNELS.reindexMemoryProject, async (_event, input) => {
-    const projectId =
-      typeof input?.projectId === 'string' && input.projectId.trim()
-        ? input.projectId
-        : null
-    const backfillInputs = sessionManager
-      .getBackfillInputs()
-      .filter((entry) => !projectId || entry.project.id === projectId)
-
-    return await projectMemoryService.reindexTranscriptMemory(backfillInputs)
-  })
   ipcMain.handle(IPC_CHANNELS.analyzeProjectArchitecture, async () =>
     sessionManager.analyzeHistoricalProjectArchitecture(),
   )

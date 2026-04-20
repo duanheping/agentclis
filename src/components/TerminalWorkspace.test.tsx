@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { SessionTerminalReplay } from '../shared/ipc'
 import type { SessionSnapshot } from '../shared/session'
 import { terminalRegistry } from '../lib/terminalRegistry'
 
@@ -541,6 +542,7 @@ describe('TerminalWorkspace', () => {
 
   it('opens the terminal before awaiting a large snapshot replay', async () => {
     let releaseSnapshotWrite: (() => void) | null = null
+    const getReleaseSnapshotWrite = (): (() => void) | null => releaseSnapshotWrite
     mockTerminalWriteHandler.mockImplementation((data: string, callback?: () => void) => {
       if (data === 'large snapshot') {
         releaseSnapshotWrite = callback ?? null
@@ -586,7 +588,11 @@ describe('TerminalWorkspace', () => {
       terminalInstances[0]?.write.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     )
 
-    releaseSnapshotWrite?.()
+    const currentReleaseSnapshotWrite = getReleaseSnapshotWrite()
+    if (currentReleaseSnapshotWrite === null) {
+      throw new Error('Expected snapshot release callback to be available')
+    }
+    currentReleaseSnapshotWrite()
 
     await waitFor(() => {
       expect(mockFit).toHaveBeenCalled()
@@ -595,11 +601,14 @@ describe('TerminalWorkspace', () => {
 
   it('opens the terminal immediately while replay fetch is still pending', async () => {
     let resolveReplay:
-      | ((value: { chunks: string[] }) => void)
+      | ((value: SessionTerminalReplay) => void)
       | null = null
-    window.agentCli.getSessionTerminalReplay = vi.fn(
-      () =>
-        new Promise((resolve) => {
+    const getResolveReplay = (): ((value: SessionTerminalReplay) => void) | null =>
+      resolveReplay
+    window.agentCli.getSessionTerminalReplay = vi.fn<
+      (sessionId: string) => Promise<SessionTerminalReplay>
+    >(() =>
+      new Promise<SessionTerminalReplay>((resolve) => {
           resolveReplay = resolve
         }),
     )
@@ -622,7 +631,11 @@ describe('TerminalWorkspace', () => {
 
     expect(terminalInstances[0]?.write).not.toHaveBeenCalled()
 
-    resolveReplay?.({
+    const currentResolveReplay = getResolveReplay()
+    if (currentResolveReplay === null) {
+      throw new Error('Expected replay resolver to be available')
+    }
+    currentResolveReplay({
       chunks: ['history'],
     })
 
@@ -633,9 +646,9 @@ describe('TerminalWorkspace', () => {
 
   it('makes the terminal live after a short replay budget instead of waiting for the full replay timeout', async () => {
     vi.useFakeTimers()
-    window.agentCli.getSessionTerminalReplay = vi.fn(
-      () => new Promise(() => undefined),
-    )
+    window.agentCli.getSessionTerminalReplay = vi.fn<
+      (sessionId: string) => Promise<SessionTerminalReplay>
+    >(() => new Promise<SessionTerminalReplay>(() => undefined))
     terminalRegistry.write('session-1', 'live-1')
 
     render(
@@ -664,9 +677,9 @@ describe('TerminalWorkspace', () => {
 
   it('does not overwrite the persisted snapshot with a blank capture when slow replay is skipped', async () => {
     vi.useFakeTimers()
-    window.agentCli.getSessionTerminalReplay = vi.fn(
-      () => new Promise(() => undefined),
-    )
+    window.agentCli.getSessionTerminalReplay = vi.fn<
+      (sessionId: string) => Promise<SessionTerminalReplay>
+    >(() => new Promise<SessionTerminalReplay>(() => undefined))
 
     render(
       <TerminalWorkspace

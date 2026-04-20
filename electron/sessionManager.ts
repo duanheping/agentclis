@@ -51,7 +51,6 @@ import {
   buildCopilotResumeCommand,
   extractCopilotSessionMeta,
   supportsCopilotSessionResume,
-  withCopilotAdditionalMcpConfig,
   withCopilotFullAccess,
 } from './copilotCli'
 import {
@@ -65,21 +64,16 @@ import {
   removeCodexInstructions,
 } from './codexInstructions'
 import {
-  injectCodexMcpConfig,
-  removeCodexMcpConfig,
-} from './codexMcpConfig'
-import {
   injectCopilotInstructions,
   removeCopilotInstructions,
 } from './copilotInstructions'
-import {
-  injectCopilotMempalaceMcpConfig,
-  removeCopilotMempalaceMcpConfig,
-} from './copilotMcpConfig'
 import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
 import { resolveProjectMemoryCapability } from './providerCapabilityResolver'
-import { createProjectSessionWorktree } from './projectWorktree'
+import {
+  createProjectSessionWorktree,
+  removeProjectSessionWorktree,
+} from './projectWorktree'
 import {
   applyRuntimeToSessionRestoreSnapshot,
   applyTerminalReplayToSessionRestoreSnapshot,
@@ -121,6 +115,12 @@ interface ExternalSessionAttentionTracker {
   polling: boolean
 }
 
+interface CreateSessionProjectResolution {
+  project: ProjectConfig
+  location: ProjectLocation
+  rollback: () => void
+}
+
 type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
   projectId?: string
   pendingFirstPromptTitle?: boolean
@@ -153,12 +153,10 @@ const CODEX_SESSION_DISCOVERY_RETRY_DELAYS_MS = [
   15_000,
 ]
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
-const HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT = 256
 const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
-const HISTORICAL_EXTERNAL_SESSION_FALLBACK_DISTANCE_GAP_MS = 5 * 60 * 1_000
-const EXTERNAL_SESSION_TITLE_SCAN_BYTES = 131_072
 const FIRST_PROMPT_TITLE_LIMIT = 80
+const RECENTLY_CLOSED_SESSION_TTL_MS = 5_000
 const BACKGROUND_IDENTITY_REFRESH_DELAY_MS = 1_500
 const BACKGROUND_MEMORY_BACKFILL_DELAY_MS = 4_500
 const EXTERNAL_ATTENTION_POLL_INTERVAL_MS = 1_500
@@ -256,23 +254,6 @@ function isLowSignalSessionTitle(
   )
 }
 
-function getSessionTitleMatchTerms(title: string): string[] {
-  const normalizedTitle = normalizeSessionTitleForComparison(title)
-  if (!normalizedTitle) {
-    return []
-  }
-
-  const terms = [normalizedTitle]
-  if (normalizedTitle.endsWith('...')) {
-    const truncatedPrefix = normalizedTitle.slice(0, -3).trimEnd()
-    if (truncatedPrefix) {
-      terms.push(truncatedPrefix)
-    }
-  }
-
-  return Array.from(new Set(terms))
-}
-
 interface PersistedSessionState {
   projects: ProjectConfig[]
   locations: ProjectLocation[]
@@ -305,7 +286,6 @@ interface SessionManagerServices {
     | 'captureSession'
     | 'scheduleBackfillSessions'
     | 'dispose'
-    | 'getMemoryBackendStatus'
   > & {
     refreshHistoricalImport?: ProjectMemoryService['refreshHistoricalImport']
   }
@@ -362,7 +342,6 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
     prunedCandidateCount: 0,
   }),
   dispose: () => undefined,
-  getMemoryBackendStatus: async () => null,
 }
 
 const noopTerminalSnapshotStore: NonNullable<SessionManagerServices['terminalSnapshots']> = {
@@ -393,6 +372,14 @@ export class SessionManager {
   private readonly liveAttentionBuffers = new Map<string, string>()
   private readonly claimedExternalSessions = new Map<string, string>()
   private readonly pendingExternalSessionDetections = new Map<string, NodeJS.Timeout>()
+  private readonly pendingManagedSessionBindings = new Map<
+    string,
+    {
+      promise: Promise<void>
+      resolve: () => void
+      reject: (error: Error) => void
+    }
+  >()
   private readonly pendingExternalSessionAttentionResolutions = new Map<
     string,
     NodeJS.Timeout
@@ -401,15 +388,10 @@ export class SessionManager {
     string,
     ExternalSessionAttentionTracker
   >()
-  private readonly historicalExternalSessionRecovery = new Set<string>()
   private readonly suppressedExit = new Set<string>()
   private readonly copilotInstructionsState = new Map<string, { cwd: string }>()
   private readonly copilotInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly copilotInstructionSnapshots = new Map<string, string>()
-  private readonly copilotMcpConfigState = new Map<string, { cwd: string }>()
-  private readonly copilotMcpConfigCwdRefs = new Map<string, { count: number }>()
-  private readonly codexMcpConfigState = new Map<string, { cwd: string }>()
-  private readonly codexMcpConfigCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly codexInstructionsState = new Map<string, { cwd: string }>()
   private readonly codexInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -418,6 +400,13 @@ export class SessionManager {
   private readonly pendingSessionStartTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
+  >()
+  private readonly recentlyClosedSessions = new Map<
+    string,
+    {
+      closedAt: number
+      result: SessionCloseResult
+    }
   >()
   private readonly events: SessionManagerEvents
   private readonly identityResolver: NonNullable<SessionManagerServices['identityResolver']>
@@ -499,7 +488,6 @@ export class SessionManager {
       )
       this.restoreSnapshots.set(hydratedConfig.id, normalizedRestoreSnapshot)
       this.claimExternalSession(hydratedConfig)
-      this.trackHistoricalExternalSessionRecovery(hydratedConfig)
 
       if (
         !sessionRestoreSnapshotsEqual(
@@ -732,58 +720,83 @@ export class SessionManager {
 
   async createSession(input: CreateSessionInput): Promise<SessionSnapshot> {
     const now = new Date().toISOString()
-    const { project, location } = await this.resolveProjectForCreate(input, now)
-    const projectMemoryCapability = input.attachProjectContext
-      ? resolveProjectMemoryCapability(input.startupCommand)
-      : null
+    const projectResolution = await this.resolveProjectForCreate(input, now)
+    const { project, location } = projectResolution
     const id = crypto.randomUUID()
-    const shell = resolveShellCommand()
-    const cwd = input.createWithWorktree
-      ? (
-          await createProjectSessionWorktree({
-            projectRootPath: location.rootPath,
-            sessionId: id,
-            createdAt: now,
-          })
-        ).cwd
-      : resolveSessionCwd(input.cwd, location.rootPath)
+    let cleanupCreatedWorktree: (() => Promise<void>) | undefined
+    try {
+      const projectMemoryCapability = input.attachProjectContext
+        ? resolveProjectMemoryCapability(input.startupCommand)
+        : null
+      const shell = resolveShellCommand()
+      const cwd = input.createWithWorktree
+        ? await (async () => {
+            const worktree = await createProjectSessionWorktree({
+              projectRootPath: location.rootPath,
+              sessionId: id,
+              createdAt: now,
+            })
+            cleanupCreatedWorktree = async () => {
+              await removeProjectSessionWorktree({
+                projectRootPath: location.rootPath,
+                branchName: worktree.branchName,
+                cwd: worktree.cwd,
+              })
+            }
+            return worktree.cwd
+          })()
+        : resolveSessionCwd(input.cwd, location.rootPath)
 
-    const config: SessionConfig = {
-      id,
-      projectId: project.id,
-      locationId: location.id,
-      title: deriveSessionTitle(input.title, input.startupCommand, cwd),
-      startupCommand: input.startupCommand.trim(),
-      pendingFirstPromptTitle: this.shouldCaptureFirstPromptTitle(
-        input.startupCommand,
-        input.title,
-      ),
-      permissionLevel: input.permissionLevel,
-      cwd,
-      shell,
-      projectMemoryMode: projectMemoryCapability?.mode ?? 'disabled',
-      projectMemoryFallbackReason:
-        projectMemoryCapability?.fallbackReason ?? null,
-      createdAt: now,
-      updatedAt: now,
+      const config: SessionConfig = {
+        id,
+        projectId: project.id,
+        locationId: location.id,
+        title: deriveSessionTitle(input.title, input.startupCommand, cwd),
+        startupCommand: input.startupCommand.trim(),
+        pendingFirstPromptTitle: this.shouldCaptureFirstPromptTitle(
+          input.startupCommand,
+          input.title,
+        ),
+        permissionLevel: input.permissionLevel,
+        cwd,
+        shell,
+        projectMemoryMode: projectMemoryCapability?.mode ?? 'disabled',
+        projectMemoryFallbackReason:
+          projectMemoryCapability?.fallbackReason ?? null,
+        createdAt: now,
+        updatedAt: now,
+      }
+
+      this.configs.set(id, config)
+      const initialRuntime = buildRuntime(id)
+      this.runtimes.set(id, initialRuntime)
+      this.restoreSnapshots.set(id, buildSessionRestoreSnapshot(initialRuntime))
+
+      await this.startSession(config, {
+        allowManagedSessionBinding: true,
+        requireManagedSessionBinding:
+          this.detectResumableProvider(config.startupCommand) !== null,
+        propagateFailure: true,
+      })
+
+      this.touchProject(project.id, now)
+      this.activeSessionId = id
+      this.persist()
+      this.appendTranscriptEvent({
+        sessionId: id,
+        kind: 'system',
+        source: 'system',
+        chunk: `Session created for ${project.title}.`,
+      })
+      return this.snapshotFor(id)
+    } catch (error) {
+      await this.rollbackCreatedSession(
+        id,
+        projectResolution.rollback,
+        cleanupCreatedWorktree,
+      )
+      throw error
     }
-
-    this.configs.set(id, config)
-    const initialRuntime = buildRuntime(id)
-    this.runtimes.set(id, initialRuntime)
-    this.restoreSnapshots.set(id, buildSessionRestoreSnapshot(initialRuntime))
-    this.touchProject(project.id, now)
-    this.activeSessionId = id
-    this.persist()
-    this.appendTranscriptEvent({
-      sessionId: id,
-      kind: 'system',
-      source: 'system',
-      chunk: `Session created for ${project.title}.`,
-    })
-
-    await this.startSession(config)
-    return this.snapshotFor(id)
   }
 
   renameSession(id: string, title: string): SessionSnapshot {
@@ -823,9 +836,15 @@ export class SessionManager {
   }
 
   async closeSession(id: string): Promise<SessionCloseResult> {
+    this.pruneRecentlyClosedSessions()
     const orderedIds = this.getOrderedConfigs().map((config) => config.id)
     const closingIndex = orderedIds.indexOf(id)
     if (closingIndex === -1) {
+      const recentClose = this.recentlyClosedSessions.get(id)
+      if (recentClose) {
+        return recentClose.result
+      }
+
       throw new Error(`Unknown session: ${id}`)
     }
 
@@ -845,11 +864,8 @@ export class SessionManager {
     this.flushInputTranscript(id)
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
-    this.cleanupCopilotMcpConfig(id)
-    this.cleanupCodexMcpConfig(id)
     this.cleanupCodexInstructions(id)
     this.cancelScheduledSessionStart(id)
-    this.historicalExternalSessionRecovery.delete(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
     this.restoreSnapshots.delete(id)
@@ -871,10 +887,12 @@ export class SessionManager {
       this.scheduleSessionStart(nextActiveSessionId)
     }
 
-    return {
+    const result = {
       closedSessionId: id,
       activeSessionId: nextActiveSessionId,
     }
+    this.rememberRecentlyClosedSession(result)
+    return result
   }
 
   writeToSession(id: string, data: string): void {
@@ -904,6 +922,15 @@ export class SessionManager {
       this.pendingExternalSessionDetections.keys(),
     )) {
       this.cancelExternalSessionDetection(sessionId)
+    }
+
+    for (const sessionId of Array.from(
+      this.pendingManagedSessionBindings.keys(),
+    )) {
+      this.rejectPendingManagedSessionBinding(
+        sessionId,
+        new Error(`Managed session binding for "${sessionId}" was cancelled during shutdown.`),
+      )
     }
 
     for (const sessionId of Array.from(
@@ -941,20 +968,19 @@ export class SessionManager {
       this.cleanupCopilotInstructions(sessionId)
     }
 
-    for (const sessionId of this.copilotMcpConfigState.keys()) {
-      this.cleanupCopilotMcpConfig(sessionId)
-    }
-
-    for (const sessionId of this.codexMcpConfigState.keys()) {
-      this.cleanupCodexMcpConfig(sessionId)
-    }
-
     for (const sessionId of this.codexInstructionsState.keys()) {
       this.cleanupCodexInstructions(sessionId)
     }
   }
 
-  private async startSession(config: SessionConfig): Promise<void> {
+  private async startSession(
+    config: SessionConfig,
+    options: {
+      allowManagedSessionBinding?: boolean
+      requireManagedSessionBinding?: boolean
+      propagateFailure?: boolean
+    } = {},
+  ): Promise<void> {
     this.cancelScheduledSessionStart(config.id)
     this.stopSession(config.id, true)
     this.cancelExternalSessionDetection(config.id)
@@ -963,8 +989,6 @@ export class SessionManager {
     this.flushInputTranscript(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
     this.cleanupCopilotInstructions(config.id)
-    this.cleanupCopilotMcpConfig(config.id)
-    this.cleanupCodexMcpConfig(config.id)
     this.cleanupCodexInstructions(config.id)
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
@@ -990,8 +1014,16 @@ export class SessionManager {
         this.persist()
       }
 
-      normalizedConfig =
-        await this.prepareManagedSessionLaunchConfig(normalizedConfig)
+      const preparedLaunchConfig =
+        await this.prepareManagedSessionLaunchConfig(normalizedConfig, options)
+      normalizedConfig = preparedLaunchConfig.config
+      const requiresManagedSessionBinding =
+        Boolean(options.requireManagedSessionBinding) &&
+        preparedLaunchConfig.bindAfterLaunch &&
+        preparedLaunchConfig.provider !== null
+      const pendingManagedSessionBinding = requiresManagedSessionBinding
+        ? this.createPendingManagedSessionBinding(config.id)
+        : null
 
       const launchCommand = await this.resolveStartupCommand(normalizedConfig)
       const launchesInline = supportsInlineShellCommand(shell)
@@ -1056,6 +1088,20 @@ export class SessionManager {
           return
         }
 
+        const exitConfig = this.configs.get(sessionId)
+        const pendingBindingProvider = exitConfig
+          ? this.detectResumableProvider(exitConfig.startupCommand)
+          : null
+        if (this.pendingManagedSessionBindings.has(sessionId)) {
+          this.rejectPendingManagedSessionBinding(
+            sessionId,
+            new Error(
+              `Managed ${pendingBindingProvider ?? 'session'} session "${exitConfig?.title ?? sessionId}" exited with code ${exitCode} before a session id was captured. Create the session again.`,
+            ),
+          )
+          return
+        }
+
         const status = exitCode === 0 ? 'exited' : 'error'
         this.setRuntime(sessionId, {
           status,
@@ -1069,7 +1115,6 @@ export class SessionManager {
           source: 'system',
           chunk: `Session exited with code ${exitCode}.`,
         })
-        const exitConfig = this.configs.get(sessionId)
         if (exitConfig) {
           void this.queueProjectMemoryCapture(exitConfig)
         }
@@ -1079,26 +1124,35 @@ export class SessionManager {
         })
       })
 
-      const externalSessionProvider =
-        !normalizedConfig.externalSession
-          ? this.detectResumableProvider(normalizedConfig.startupCommand)
-          : null
       const detectionStartedAt = Date.now()
-
-      setTimeout(() => {
+      const beginManagedSessionLaunch = () => {
         if (!launchesInline) {
           this.writeToTerminal(sessionId, `${launchCommand}\r`)
         }
 
-        if (externalSessionProvider) {
+        if (preparedLaunchConfig.bindAfterLaunch && preparedLaunchConfig.provider) {
           void this.pollForExternalSessionRef(
             sessionId,
-            externalSessionProvider,
+            preparedLaunchConfig.provider,
             detectionStartedAt,
           )
         }
-      }, 60)
+      }
+
+      if (requiresManagedSessionBinding && launchesInline) {
+        beginManagedSessionLaunch()
+      } else {
+        setTimeout(beginManagedSessionLaunch, 60)
+      }
+
+      if (pendingManagedSessionBinding) {
+        await pendingManagedSessionBinding
+      }
     } catch (error) {
+      this.rejectPendingManagedSessionBinding(config.id, this.coerceError(error))
+      this.stopSession(config.id, true)
+      this.cancelExternalSessionDetection(config.id)
+      this.stopExternalSessionAttentionTracking(config.id)
       this.setRuntime(config.id, {
         status: 'error',
         awaitingResponse: false,
@@ -1120,6 +1174,9 @@ export class SessionManager {
         sessionId: config.id,
         exitCode: -1,
       })
+      if (options.propagateFailure) {
+        throw error
+      }
     }
   }
 
@@ -1259,20 +1316,6 @@ export class SessionManager {
           count: (existing?.count ?? 0) + 1,
           created: existing ? existing.created : result.created,
         })
-
-        if (!config.externalSession) {
-          const status = await this.projectMemory.getMemoryBackendStatus()
-          if (status?.installState === 'installed' && status.pythonPath?.trim()) {
-            const mcpExisting = this.codexMcpConfigCwdRefs.get(normalizedCwd)
-            const configResult = injectCodexMcpConfig(config.cwd, status)
-            this.codexMcpConfigState.set(config.id, { cwd: config.cwd })
-            this.codexMcpConfigCwdRefs.set(normalizedCwd, {
-              count: (mcpExisting?.count ?? 0) + 1,
-              created: mcpExisting ? mcpExisting.created : configResult.created,
-            })
-          }
-        }
-
         return command
       }
 
@@ -1286,20 +1329,6 @@ export class SessionManager {
           // Only treat as "created" if the very first session created it
           created: existing ? existing.created : result.created,
         })
-
-        if (!config.externalSession) {
-          const status = await this.projectMemory.getMemoryBackendStatus()
-          if (status?.installState === 'installed' && status.pythonPath?.trim()) {
-            const mcpExisting = this.copilotMcpConfigCwdRefs.get(normalizedCwd)
-            const configResult = injectCopilotMempalaceMcpConfig(config.cwd, status)
-            command = withCopilotAdditionalMcpConfig(command, configResult.filePath) ?? command
-            this.copilotMcpConfigState.set(config.id, { cwd: config.cwd })
-            this.copilotMcpConfigCwdRefs.set(normalizedCwd, {
-              count: (mcpExisting?.count ?? 0) + 1,
-            })
-          }
-        }
-
         return command
       }
     } catch (err) {
@@ -1381,52 +1410,6 @@ export class SessionManager {
     }
   }
 
-  private cleanupCopilotMcpConfig(sessionId: string): void {
-    const state = this.copilotMcpConfigState.get(sessionId)
-    if (!state) return
-    this.copilotMcpConfigState.delete(sessionId)
-
-    const normalizedCwd = this.normalizePath(state.cwd)
-    const ref = this.copilotMcpConfigCwdRefs.get(normalizedCwd)
-    if (!ref) return
-
-    ref.count -= 1
-    if (ref.count > 0) return
-
-    this.copilotMcpConfigCwdRefs.delete(normalizedCwd)
-    try {
-      removeCopilotMempalaceMcpConfig(state.cwd)
-    } catch (err) {
-      console.warn(
-        `[project-memory] Failed to clean up Copilot MemPalace MCP config for session ${sessionId}:`,
-        err,
-      )
-    }
-  }
-
-  private cleanupCodexMcpConfig(sessionId: string): void {
-    const state = this.codexMcpConfigState.get(sessionId)
-    if (!state) return
-    this.codexMcpConfigState.delete(sessionId)
-
-    const normalizedCwd = this.normalizePath(state.cwd)
-    const ref = this.codexMcpConfigCwdRefs.get(normalizedCwd)
-    if (!ref) return
-
-    ref.count -= 1
-    if (ref.count > 0) return
-
-    this.codexMcpConfigCwdRefs.delete(normalizedCwd)
-    try {
-      removeCodexMcpConfig(state.cwd, ref.created)
-    } catch (err) {
-      console.warn(
-        `[project-memory] Failed to clean up Codex MemPalace MCP config for session ${sessionId}:`,
-        err,
-      )
-    }
-  }
-
   private cleanupCodexInstructions(sessionId: string): void {
     const state = this.codexInstructionsState.get(sessionId)
     if (!state) return
@@ -1482,6 +1465,50 @@ export class SessionManager {
     this.pendingExternalSessionDetections.delete(sessionId)
   }
 
+  private createPendingManagedSessionBinding(sessionId: string): Promise<void> {
+    const existing = this.pendingManagedSessionBindings.get(sessionId)
+    if (existing) {
+      return existing.promise
+    }
+
+    let resolveBinding!: () => void
+    let rejectBinding!: (error: Error) => void
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveBinding = resolve
+      rejectBinding = reject
+    })
+
+    this.pendingManagedSessionBindings.set(sessionId, {
+      promise,
+      resolve: resolveBinding,
+      reject: rejectBinding,
+    })
+    return promise
+  }
+
+  private resolvePendingManagedSessionBinding(sessionId: string): void {
+    const pendingBinding = this.pendingManagedSessionBindings.get(sessionId)
+    if (!pendingBinding) {
+      return
+    }
+
+    this.pendingManagedSessionBindings.delete(sessionId)
+    pendingBinding.resolve()
+  }
+
+  private rejectPendingManagedSessionBinding(
+    sessionId: string,
+    error: Error,
+  ): void {
+    const pendingBinding = this.pendingManagedSessionBindings.get(sessionId)
+    if (!pendingBinding) {
+      return
+    }
+
+    this.pendingManagedSessionBindings.delete(sessionId)
+    pendingBinding.reject(error)
+  }
+
   private detectResumableProvider(
     command: string,
   ): 'codex' | 'copilot' | null {
@@ -1496,108 +1523,51 @@ export class SessionManager {
     return null
   }
 
-  private shouldAllowHistoricalExternalSessionMatching(
-    config: SessionConfig,
-  ): boolean {
-    if (this.historicalExternalSessionRecovery.has(config.id)) {
-      return true
-    }
-
-    return this.isExplicitResumeCommand(config.startupCommand)
-  }
-
-  private isExplicitResumeCommand(command: string): boolean {
-    if (
-      supportsCodexSessionResume(command) &&
-      /\b(?:resume|fork)\b/u.test(command)
-    ) {
-      return true
-    }
-
-    return (
-      supportsCopilotSessionResume(command) &&
-      /(^|\s)--(?:resume|continue)(?:\s|=|$)/u.test(command)
-    )
-  }
-
   private async prepareManagedSessionLaunchConfig(
     config: SessionConfig,
-  ): Promise<SessionConfig> {
-    let nextConfig = config
-
-    if (nextConfig.externalSession) {
-      const storedSessionState =
-        await this.inspectStoredExternalSession(nextConfig)
-      if (storedSessionState !== 'valid') {
-        const staleExternalSession = nextConfig.externalSession
-        if (storedSessionState === 'ineligible') {
-          this.releaseExternalSession(nextConfig)
-          nextConfig = {
-            ...nextConfig,
-            externalSession: undefined,
-          }
-          this.configs.set(nextConfig.id, nextConfig)
-          this.trackHistoricalExternalSessionRecovery(nextConfig)
-          this.persist()
-          this.events.onConfig({
-            sessionId: nextConfig.id,
-            config: nextConfig,
-          })
-        }
-
-        const recoveredSession = await this.findHistoricalExternalSession(
-          nextConfig,
-          staleExternalSession.provider,
-          {
-            allowTitleMismatchFallback: true,
-          },
-        )
-        if (!recoveredSession) {
-          throw new Error(
-            this.buildExternalSessionRecoveryFailureMessage(
-              staleExternalSession.provider,
-              nextConfig,
-            ),
-          )
-        }
-
-        this.attachExternalSession(nextConfig, recoveredSession)
-        nextConfig = this.requireConfig(config.id)
+    options: {
+      allowManagedSessionBinding?: boolean
+    } = {},
+  ): Promise<{
+    config: SessionConfig
+    provider: 'codex' | 'copilot' | null
+    bindAfterLaunch: boolean
+  }> {
+    const provider = this.detectResumableProvider(config.startupCommand)
+    if (!provider) {
+      return {
+        config,
+        provider: null,
+        bindAfterLaunch: false,
       }
     }
 
-    const resumableProvider =
-      nextConfig.externalSession === undefined &&
-      this.historicalExternalSessionRecovery.has(nextConfig.id) &&
-      !this.isExplicitResumeCommand(nextConfig.startupCommand)
-        ? this.detectResumableProvider(nextConfig.startupCommand)
-        : null
-    if (!resumableProvider) {
-      return nextConfig
+    if (!config.externalSession) {
+      if (!options.allowManagedSessionBinding) {
+        throw new Error(
+          `Managed ${provider} session "${config.title}" is missing a stored session id. Create a new session to start over.`,
+        )
+      }
+
+      return {
+        config,
+        provider,
+        bindAfterLaunch: true,
+      }
     }
 
-    const historicalSession = await this.findHistoricalExternalSession(
-      nextConfig,
-      resumableProvider,
-    )
-    if (!historicalSession) {
+    const storedSessionState = await this.inspectStoredExternalSession(config)
+    if (storedSessionState !== 'valid') {
       throw new Error(
-        this.buildExternalSessionRecoveryFailureMessage(
-          resumableProvider,
-          nextConfig,
-        ),
+        `Stored ${provider} session for "${config.title}" is no longer available. Create a new session to start over.`,
       )
     }
 
-    this.attachExternalSession(nextConfig, historicalSession)
-    return this.requireConfig(config.id)
-  }
-
-  private buildExternalSessionRecoveryFailureMessage(
-    provider: 'codex' | 'copilot',
-    config: SessionConfig,
-  ): string {
-    return `Unable to recover the previous ${provider} session for "${config.title}". Create a new session to start over.`
+    return {
+      config,
+      provider,
+      bindAfterLaunch: false,
+    }
   }
 
   private async pollForExternalSessionRef(
@@ -1610,6 +1580,12 @@ export class SessionManager {
 
     const config = this.configs.get(sessionId)
     if (!config || config.externalSession || !this.terminals.has(sessionId)) {
+      this.rejectPendingManagedSessionBinding(
+        sessionId,
+        new Error(
+          `Managed ${provider} session binding for "${config?.title ?? sessionId}" was interrupted before a session id was captured.`,
+        ),
+      )
       return
     }
 
@@ -1628,15 +1604,12 @@ export class SessionManager {
       attempt,
     )
     if (nextDelayMs === null) {
-      if (this.shouldAllowHistoricalExternalSessionMatching(config)) {
-        const historicalSession = await this.findHistoricalExternalSession(
-          config,
-          provider,
-        )
-        if (historicalSession) {
-          this.attachExternalSession(config, historicalSession)
-        }
-      }
+      this.rejectPendingManagedSessionBinding(
+        sessionId,
+        new Error(
+          `Managed ${provider} session "${config.title}" did not expose a session id in time. Create the session again.`,
+        ),
+      )
       return
     }
 
@@ -1673,18 +1646,13 @@ export class SessionManager {
       startedAt - EXTERNAL_SESSION_DISCOVERY_LOOKBACK_MS,
     )
     const normalizedCwd = this.normalizePath(config.cwd)
-    const allowHistoricalMatch =
-      this.shouldAllowHistoricalExternalSessionMatching(config)
     const earliestAllowedStart =
       startedAt - EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS
 
     const match = candidates
       .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
       .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
-      .filter(
-        (candidate) =>
-          allowHistoricalMatch || candidate.startedAt >= earliestAllowedStart,
-      )
+      .filter((candidate) => candidate.startedAt >= earliestAllowedStart)
       .filter((candidate) => {
         const claimedBy = this.claimedExternalSessions.get(
           this.getExternalSessionClaimKey(candidate.provider, candidate.sessionId),
@@ -1701,93 +1669,6 @@ export class SessionManager {
     return match ?? null
   }
 
-  private async findHistoricalExternalSession(
-    config: SessionConfig,
-    provider: 'codex' | 'copilot',
-    options: {
-      allowTitleMismatchFallback?: boolean
-    } = {},
-  ): Promise<DetectedExternalSession | null> {
-    const referenceTimestamps = this.getExternalSessionReferenceTimes(config)
-    if (referenceTimestamps.length === 0) {
-      return null
-    }
-
-    const candidates = await this.listRecentExternalSessions(
-      provider,
-      Math.max(
-        0,
-        Math.min(...referenceTimestamps) - HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS,
-      ),
-      HISTORICAL_EXTERNAL_SESSION_FILE_LIMIT,
-    )
-    const normalizedCwd = this.normalizePath(config.cwd)
-    const defaultTitle = deriveSessionTitle(undefined, config.startupCommand, config.cwd)
-    const normalizedTitle = config.title.trim().toLowerCase()
-    const shouldMatchTitle =
-      normalizedTitle.length > 0 &&
-      normalizedTitle !== defaultTitle.trim().toLowerCase()
-
-    const scoredCandidates = await Promise.all(
-      candidates
-        .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
-        .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
-        .filter((candidate) => {
-          const claimedBy = this.claimedExternalSessions.get(
-            this.getExternalSessionClaimKey(candidate.provider, candidate.sessionId),
-          )
-          return !claimedBy || claimedBy === config.id
-        })
-        .map(async (candidate) => ({
-          candidate,
-          titleMatches: shouldMatchTitle
-            ? await this.doesExternalSessionMatchTitle(candidate, normalizedTitle)
-            : false,
-          distance: Math.min(
-            ...referenceTimestamps.map((referenceTime) =>
-              Math.abs(candidate.startedAt - referenceTime),
-            ),
-          ),
-        })),
-    )
-
-    const sorted = scoredCandidates
-      .sort((left, right) => {
-        if (left.titleMatches !== right.titleMatches) {
-          return left.titleMatches ? -1 : 1
-        }
-
-        return (
-          left.distance - right.distance ||
-          right.candidate.startedAt - left.candidate.startedAt
-        )
-      })
-
-    const best = sorted[0]
-    if (!best) {
-      return null
-    }
-
-    // When the session has a meaningful title, require a title match to
-    // prevent cross-session bleed between sessions that share the same CWD.
-    if (shouldMatchTitle && !best.titleMatches) {
-      if (!options.allowTitleMismatchFallback) {
-        return null
-      }
-
-      const secondBest = sorted[1]
-      if (
-        secondBest &&
-        secondBest.distance - best.distance <
-          HISTORICAL_EXTERNAL_SESSION_FALLBACK_DISTANCE_GAP_MS
-      ) {
-        return null
-      }
-    }
-
-    return best.candidate
-  }
-
   private async inspectStoredExternalSession(
     config: SessionConfig,
   ): Promise<'valid' | 'missing' | 'ineligible'> {
@@ -1798,7 +1679,9 @@ export class SessionManager {
     const candidate = await this.findRecentExternalSessionById(
       config.externalSession.provider,
       config.externalSession.sessionId,
-      this.getExternalSessionReferenceTimes(config),
+      [config.updatedAt, config.createdAt]
+        .map((value) => Date.parse(value))
+        .filter((value) => !Number.isNaN(value)),
     )
 
     if (!candidate) {
@@ -1855,67 +1738,6 @@ export class SessionManager {
     }
 
     return null
-  }
-
-  private getExternalSessionReferenceTimes(config: SessionConfig): number[] {
-    return [
-      config.updatedAt,
-      config.createdAt,
-      config.externalSession?.detectedAt,
-    ]
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => Date.parse(value))
-      .filter((value) => !Number.isNaN(value))
-  }
-
-  private async doesExternalSessionMatchTitle(
-    candidate: DetectedExternalSession,
-    normalizedTitle: string,
-  ): Promise<boolean> {
-    const matchTerms = getSessionTitleMatchTerms(normalizedTitle)
-    if (matchTerms.length === 0) {
-      return false
-    }
-
-    if (candidate.summary) {
-      const normalizedSummary = candidate.summary.trim().toLowerCase()
-      if (
-        matchTerms.some(
-          (term) =>
-            normalizedSummary.includes(term) || term.includes(normalizedSummary),
-        )
-      ) {
-        return true
-      }
-    }
-
-    if (candidate.provider === 'copilot') {
-      const transcriptPrefix = await this.readFilePrefix(
-        path.join(COPILOT_SESSIONS_ROOT, candidate.sessionId, 'events.jsonl'),
-        EXTERNAL_SESSION_TITLE_SCAN_BYTES,
-      )
-      if (!transcriptPrefix) {
-        return false
-      }
-
-      const normalizedTranscriptPrefix = transcriptPrefix.toLowerCase()
-      return matchTerms.some((term) => normalizedTranscriptPrefix.includes(term))
-    }
-
-    if (!candidate.sourcePath) {
-      return false
-    }
-
-    const prefix = await this.readFilePrefix(
-      candidate.sourcePath,
-      EXTERNAL_SESSION_TITLE_SCAN_BYTES,
-    )
-    if (!prefix) {
-      return false
-    }
-
-    const normalizedPrefix = prefix.toLowerCase()
-    return matchTerms.some((term) => normalizedPrefix.includes(term))
   }
 
   private async listRecentExternalSessions(
@@ -2118,24 +1940,6 @@ export class SessionManager {
     }
   }
 
-  private async readFilePrefix(
-    filePath: string,
-    byteLimit: number,
-  ): Promise<string | null> {
-    let handle
-
-    try {
-      handle = await open(filePath, 'r')
-      const buffer = Buffer.alloc(byteLimit)
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-      return buffer.toString('utf8', 0, bytesRead)
-    } catch {
-      return null
-    } finally {
-      await handle?.close().catch(() => undefined)
-    }
-  }
-
   private async readFileTail(
     filePath: string,
     byteLimit: number,
@@ -2247,13 +2051,11 @@ export class SessionManager {
       externalSession: {
         provider: detectedSession.provider,
         sessionId: detectedSession.sessionId,
-        detectedAt: new Date().toISOString(),
       },
       updatedAt: timestamp,
     }
 
     this.claimExternalSession(nextConfig)
-    this.historicalExternalSessionRecovery.delete(nextConfig.id)
     this.configs.set(nextConfig.id, nextConfig)
     if (titleChanged) {
       this.touchProject(nextConfig.projectId, timestamp)
@@ -2263,9 +2065,10 @@ export class SessionManager {
       sessionId: nextConfig.id,
       config: nextConfig,
     })
+    this.resolvePendingManagedSessionBinding(nextConfig.id)
     void this.ensureExternalSessionAttentionTracking(
       nextConfig,
-      detectedSession.sourcePath,
+      detectedSession.provider === 'codex' ? detectedSession.sourcePath : undefined,
     )
   }
 
@@ -2602,6 +2405,70 @@ export class SessionManager {
     }
   }
 
+  private pruneRecentlyClosedSessions(now = Date.now()): void {
+    for (const [sessionId, closeState] of this.recentlyClosedSessions.entries()) {
+      if (now - closeState.closedAt > RECENTLY_CLOSED_SESSION_TTL_MS) {
+        this.recentlyClosedSessions.delete(sessionId)
+      }
+    }
+  }
+
+  private rememberRecentlyClosedSession(result: SessionCloseResult): void {
+    this.pruneRecentlyClosedSessions()
+    this.recentlyClosedSessions.set(result.closedSessionId, {
+      closedAt: Date.now(),
+      result,
+    })
+  }
+
+  private async rollbackCreatedSession(
+    id: string,
+    rollbackProjectState?: () => void,
+    cleanupCreatedResources?: () => Promise<void>,
+  ): Promise<void> {
+    const config = this.configs.get(id)
+    this.stopSession(id, true)
+    this.cancelExternalSessionDetection(id)
+    this.rejectPendingManagedSessionBinding(
+      id,
+      new Error(`Session creation for "${config?.title ?? id}" was rolled back.`),
+    )
+    this.stopExternalSessionAttentionTracking(id)
+    this.cancelDebouncedTouchRuntime(id)
+    this.flushInputTranscript(id)
+    this.pendingFirstPromptBuffers.delete(id)
+    this.cleanupCopilotInstructions(id)
+    this.cleanupCodexInstructions(id)
+    this.clearLiveAttentionBuffer(id)
+    this.cancelScheduledSessionStart(id)
+    if (config) {
+      this.releaseExternalSession(config)
+    }
+    this.copilotInstructionSnapshots.delete(id)
+    this.restoreSnapshots.delete(id)
+    this.configs.delete(id)
+    this.runtimes.delete(id)
+    await this.terminalSnapshots.delete(id)
+    if (cleanupCreatedResources) {
+      try {
+        await cleanupCreatedResources()
+      } catch (error) {
+        console.warn(
+          `[session-manager] Failed to clean up created resources for session ${id}:`,
+          error,
+        )
+      }
+    }
+    rollbackProjectState?.()
+    this.persist()
+  }
+
+  private coerceError(error: unknown): Error {
+    return error instanceof Error
+      ? error
+      : new Error(this.getErrorMessage(error))
+  }
+
   private getExternalSessionClaimKey(
     provider: 'codex' | 'copilot',
     sessionId: string,
@@ -2617,18 +2484,6 @@ export class SessionManager {
     }
 
     return candidate.source === 'cli' || candidate.originator === 'codex_cli_rs'
-  }
-
-  private trackHistoricalExternalSessionRecovery(config: SessionConfig): void {
-    if (
-      config.externalSession ||
-      !this.detectResumableProvider(config.startupCommand)
-    ) {
-      this.historicalExternalSessionRecovery.delete(config.id)
-      return
-    }
-
-    this.historicalExternalSessionRecovery.add(config.id)
   }
 
   private hydrateProjectConfig(project: ProjectConfig): ProjectConfig {
@@ -2940,14 +2795,16 @@ export class SessionManager {
   private async resolveProjectForCreate(
     input: CreateSessionInput,
     timestamp: string,
-  ): Promise<{
-    project: ProjectConfig
-    location: ProjectLocation
-  }> {
+  ): Promise<CreateSessionProjectResolution> {
     if (input.projectId) {
       const project = this.requireProject(input.projectId)
       const projectRootPath = resolveProjectRoot(input.projectRootPath, project.rootPath)
       const inspectedLocation = await this.identityResolver.inspect(projectRootPath)
+      const previousProject = this.cloneProjectConfig(project)
+      const existingLocation = this.findLocationByRootPath(inspectedLocation.rootPath)
+      const previousLocation = existingLocation
+        ? this.cloneProjectLocation(existingLocation)
+        : null
       const location = this.upsertProjectLocation(
         project.id,
         inspectedLocation,
@@ -2957,6 +2814,14 @@ export class SessionManager {
       return {
         project: this.requireProject(project.id),
         location,
+        rollback: () => {
+          if (previousLocation) {
+            this.locations.set(previousLocation.id, previousLocation)
+          } else {
+            this.locations.delete(location.id)
+          }
+          this.projects.set(previousProject.id, previousProject)
+        },
       }
     }
 
@@ -2965,14 +2830,28 @@ export class SessionManager {
     const inspectedLocation = await this.identityResolver.inspect(rootPath)
     const existingProject = this.findProjectByRootPath(inspectedLocation.rootPath)
     if (existingProject) {
+      const previousProject = this.cloneProjectConfig(existingProject)
+      const existingLocation = this.findLocationByRootPath(inspectedLocation.rootPath)
+      const previousLocation = existingLocation
+        ? this.cloneProjectLocation(existingLocation)
+        : null
+      const location = this.upsertProjectLocation(
+        existingProject.id,
+        inspectedLocation,
+        timestamp,
+        true,
+      )
       return {
         project: this.requireProject(existingProject.id),
-        location: this.upsertProjectLocation(
-          existingProject.id,
-          inspectedLocation,
-          timestamp,
-          true,
-        ),
+        location,
+        rollback: () => {
+          if (previousLocation) {
+            this.locations.set(previousLocation.id, previousLocation)
+          } else {
+            this.locations.delete(location.id)
+          }
+          this.projects.set(previousProject.id, previousProject)
+        },
       }
     }
 
@@ -2991,9 +2870,33 @@ export class SessionManager {
     }
 
     this.projects.set(project.id, project)
+    const location = this.upsertProjectLocation(project.id, inspectedLocation, timestamp, true)
     return {
       project: this.requireProject(project.id),
-      location: this.upsertProjectLocation(project.id, inspectedLocation, timestamp, true),
+      location,
+      rollback: () => {
+        this.locations.delete(location.id)
+        this.projects.delete(project.id)
+      },
+    }
+  }
+
+  private cloneProjectConfig(project: ProjectConfig): ProjectConfig {
+    return {
+      ...project,
+      identity: project.identity
+        ? {
+            repoRoot: project.identity.repoRoot ?? null,
+            gitCommonDir: project.identity.gitCommonDir ?? null,
+            remoteFingerprint: project.identity.remoteFingerprint ?? null,
+          }
+        : undefined,
+    }
+  }
+
+  private cloneProjectLocation(location: ProjectLocation): ProjectLocation {
+    return {
+      ...location,
     }
   }
 

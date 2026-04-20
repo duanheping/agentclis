@@ -19,6 +19,12 @@ interface ProjectSessionWorktree {
   cwd: string
 }
 
+interface RemoveProjectSessionWorktreeInput {
+  projectRootPath: string
+  branchName: string
+  cwd: string
+}
+
 function buildGitErrorMessage(error: unknown, stderr: string): string {
   const details = stderr.trim()
   if (details) {
@@ -124,13 +130,66 @@ export async function createProjectSessionWorktree({
   const cwd = path.join(worktreeParent, `${timestampSegment}-${sessionSegment}`)
 
   await mkdir(worktreeParent, { recursive: true })
-  await runGit(
-    ['-C', sourceRoot, 'worktree', 'add', '-b', branchName, cwd, 'HEAD'],
-    sourceRoot,
-  )
+  try {
+    await runGit(
+      ['-C', sourceRoot, 'worktree', 'add', '-b', branchName, cwd, 'HEAD'],
+      sourceRoot,
+    )
+  } catch (error) {
+    try {
+      await removeProjectSessionWorktree({
+        projectRootPath,
+        branchName,
+        cwd,
+      })
+    } catch {
+      // Best effort only. Surface the original worktree-add failure.
+    }
+    throw error
+  }
 
   return {
     branchName,
     cwd,
+  }
+}
+
+export async function removeProjectSessionWorktree({
+  projectRootPath,
+  branchName,
+  cwd,
+}: RemoveProjectSessionWorktreeInput): Promise<void> {
+  const sourceRoot = await tryRunGit(
+    ['-C', projectRootPath, 'rev-parse', '--show-toplevel'],
+    projectRootPath,
+  )
+  if (!sourceRoot) {
+    throw new Error(
+      'Git worktrees require the project root to be inside a git repository.',
+    )
+  }
+
+  const failures: string[] = []
+
+  try {
+    await runGit(
+      ['-C', sourceRoot, 'worktree', 'remove', '--force', cwd],
+      sourceRoot,
+    )
+  } catch (error) {
+    failures.push(`remove worktree: ${buildGitErrorMessage(error, '')}`)
+  }
+
+  try {
+    await runGit(
+      ['-C', sourceRoot, 'branch', '-D', branchName],
+      sourceRoot,
+    )
+  } catch (error) {
+    failures.push(`delete branch: ${buildGitErrorMessage(error, '')}`)
+  }
+
+  if (failures.length > 0) {
+    throw new Error(failures.join('; '))
   }
 }

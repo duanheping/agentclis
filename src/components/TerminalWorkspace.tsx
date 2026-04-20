@@ -652,14 +652,6 @@ function TerminalSurface({
         lineHeight: 1.25,
         scrollback: TERMINAL_SCROLLBACK_LINES,
         allowTransparency: true,
-        cols:
-          replaySource === 'snapshot' && (replaySnapshot?.cols ?? 0) > 0
-            ? replaySnapshot?.cols
-            : undefined,
-        rows:
-          replaySource === 'snapshot' && (replaySnapshot?.rows ?? 0) > 0
-            ? replaySnapshot?.rows
-            : undefined,
         linkHandler: {
           activate: (_event, text) => {
             void window.agentCli.openExternalLink(text)
