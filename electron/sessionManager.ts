@@ -774,8 +774,6 @@ export class SessionManager {
 
       await this.startSession(config, {
         allowManagedSessionBinding: true,
-        requireManagedSessionBinding:
-          this.detectResumableProvider(config.startupCommand) !== null,
         propagateFailure: true,
       })
 
@@ -2133,12 +2131,19 @@ export class SessionManager {
 
     this.stopExternalSessionAttentionTracking(config.id)
     const currentRuntime = this.runtimes.get(config.id) ?? buildRuntime(config.id)
+    const nextInitialRuntimeState =
+      initialOffset === 0
+        ? {
+            attention: currentRuntime.attention ?? null,
+            awaitingResponse: currentRuntime.awaitingResponse ?? false,
+          }
+        : initialRuntimeState
     if (
-      currentRuntime.attention !== initialRuntimeState.attention ||
+      currentRuntime.attention !== nextInitialRuntimeState.attention ||
       (currentRuntime.awaitingResponse ?? false) !==
-        initialRuntimeState.awaitingResponse
+        nextInitialRuntimeState.awaitingResponse
     ) {
-      this.setRuntime(config.id, initialRuntimeState)
+      this.setRuntime(config.id, nextInitialRuntimeState)
     }
     const interval = setInterval(() => {
       void this.pollExternalSessionAttention(config.id)

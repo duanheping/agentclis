@@ -1789,15 +1789,18 @@ describe('SessionManager project lifecycle', () => {
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
     expectSpawnedPowerShellCommand(0, 'codex')
-    expect(session.config.externalSession).toEqual({
-      provider: 'codex',
-      sessionId: expect.not.stringMatching(/^019existing-codex-session$/u),
-    })
+    expect(session.config.externalSession).toBeUndefined()
+
+    await vi.runOnlyPendingTimersAsync()
+
     expect(
       manager.listSessions().projects[0]?.sessions.find(
         (entry) => entry.config.id === session.config.id,
       )?.config.externalSession,
-    ).toEqual(session.config.externalSession)
+    ).toEqual({
+      provider: 'codex',
+      sessionId: expect.not.stringMatching(/^019existing-codex-session$/u),
+    })
   })
 
   it('creates project-context sessions inside a fresh git worktree', async () => {
@@ -2003,12 +2006,19 @@ describe('SessionManager project lifecycle', () => {
       )?.runtime.awaitingResponse,
     ).toBe(true)
 
+    await vi.runOnlyPendingTimersAsync()
+
     const externalConfig = manager
       .listSessions()
       .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)?.config
 
     expect(externalConfig?.externalSession?.provider).toBe('copilot')
     expect(externalConfig).toBeDefined()
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )?.runtime.awaitingResponse,
+    ).toBe(true)
 
     const externalSessionId = externalConfig?.externalSession?.sessionId
     expect(externalSessionId).toBeTruthy()
@@ -2048,18 +2058,13 @@ describe('SessionManager project lifecycle', () => {
     )
 
     await vi.waitFor(() => {
-      expect(
-        manager.listSessions().projects[0]?.sessions.find(
-          (entry) => entry.config.id === session.config.id,
-        )?.runtime.awaitingResponse,
-      ).toBe(false)
-    })
+      const runtime = manager
+        .listSessions()
+        .projects[0]?.sessions.find((entry) => entry.config.id === session.config.id)?.runtime
 
-    expect(
-      manager.listSessions().projects[0]?.sessions.find(
-        (entry) => entry.config.id === session.config.id,
-      )?.runtime.attention,
-    ).toBe('task-complete')
+      expect(runtime?.awaitingResponse).toBe(false)
+      expect(runtime?.attention).toBe('task-complete')
+    })
     expect(onRuntime).toHaveBeenCalledWith({
       sessionId: session.config.id,
       runtime: expect.objectContaining({
@@ -2075,7 +2080,7 @@ describe('SessionManager project lifecycle', () => {
     })
   })
 
-  it('fails creating a managed session when the initial provider binding never appears', async () => {
+  it('creates a managed session before the initial provider binding appears', async () => {
     mocks.setAutoProvisionManagedSessions(false)
 
     const manager = new SessionManager({
@@ -2085,31 +2090,28 @@ describe('SessionManager project lifecycle', () => {
       onExit: () => undefined,
     })
 
-    const createPromise = manager.createSession({
+    const session = await manager.createSession({
       projectTitle: 'Workspace',
       projectRootPath: 'C:\\repo',
       startupCommand: 'codex',
     })
-    const createResult = createPromise.then(
-      () => null,
-      (error) => error,
-    )
+
+    expect(session.config.externalSession).toBeUndefined()
+    expect(
+      manager.listSessions().projects.flatMap((project) => project.sessions),
+    ).toHaveLength(1)
 
     await vi.runAllTimersAsync()
 
-    const createError = await createResult
-    expect(createError).toBeInstanceOf(Error)
-    expect((createError as Error).message).toBe(
-      'Managed codex session "codex" did not expose a session id in time. Create the session again.',
+    const currentSession = manager.listSessions().projects[0]?.sessions.find(
+      (entry) => entry.config.id === session.config.id,
     )
-    expect(manager.listSessions().projects).toHaveLength(0)
-    expect(
-      manager.listSessions().projects.flatMap((project) => project.sessions),
-    ).toHaveLength(0)
-    expect(mocks.killTerminalProcessTree).toHaveBeenCalledTimes(1)
+    expect(currentSession?.config.externalSession).toBeUndefined()
+    expect(currentSession?.runtime.status).toBe('running')
+    expect(mocks.killTerminalProcessTree).not.toHaveBeenCalled()
   })
 
-  it('fails a managed session create immediately when the provider exits before binding completes', async () => {
+  it('keeps a managed session when the provider exits before binding completes', async () => {
     mocks.setAutoProvisionManagedSessions(false)
 
     const manager = new SessionManager({
@@ -2119,15 +2121,11 @@ describe('SessionManager project lifecycle', () => {
       onExit: () => undefined,
     })
 
-    const createPromise = manager.createSession({
+    const session = await manager.createSession({
       projectTitle: 'Workspace',
       projectRootPath: 'C:\\repo',
       startupCommand: 'codex',
     })
-    const createResult = createPromise.then(
-      () => null,
-      (error) => error,
-    )
 
     await vi.advanceTimersByTimeAsync(0)
 
@@ -2136,16 +2134,16 @@ describe('SessionManager project lifecycle', () => {
       | undefined
     terminalExitListener?.({ exitCode: 1 })
 
-    const createError = await createResult
-    expect(createError).toBeInstanceOf(Error)
-    expect((createError as Error).message).toBe(
-      'Managed codex session "codex" exited with code 1 before a session id was captured. Create the session again.',
+    const currentSession = manager.listSessions().projects[0]?.sessions.find(
+      (entry) => entry.config.id === session.config.id,
     )
-    expect(manager.listSessions().projects).toHaveLength(0)
+    expect(currentSession?.runtime.status).toBe('error')
+    expect(currentSession?.runtime.exitCode).toBe(1)
+    expect(currentSession?.config.externalSession).toBeUndefined()
     expect(mocks.killTerminalProcessTree).not.toHaveBeenCalled()
   })
 
-  it('rolls back a provisional project location when managed session creation fails', async () => {
+  it('keeps a provisional project location when managed session binding is still pending', async () => {
     mocks.setAutoProvisionManagedSessions(false)
 
     const manager = new SessionManager({
@@ -2161,32 +2159,24 @@ describe('SessionManager project lifecycle', () => {
     })
     const originalLocationId = project.locations?.[0]?.id ?? null
 
-    const createPromise = manager.createSession({
+    const session = await manager.createSession({
       projectId: project.config.id,
       projectRootPath: 'C:\\repo\\alt',
       startupCommand: 'codex',
     })
-    const createResult = createPromise.then(
-      () => null,
-      (error) => error,
-    )
-
-    await vi.runAllTimersAsync()
-
-    const createError = await createResult
-    expect(createError).toBeInstanceOf(Error)
 
     const restoredProject = manager.listSessions().projects.find(
       (entry) => entry.config.id === project.config.id,
     )
-    expect(restoredProject?.config.primaryLocationId).toBe(originalLocationId)
-    expect(restoredProject?.locations?.map((location) => location.rootPath)).toEqual([
-      'C:\\repo',
-    ])
-    expect(restoredProject?.sessions).toHaveLength(0)
+    expect(restoredProject?.config.primaryLocationId).not.toBe(originalLocationId)
+    expect(restoredProject?.config.primaryLocationId).toBe(session.config.locationId)
+    expect(restoredProject?.locations?.map((location) => location.rootPath)).toEqual(
+      expect.arrayContaining(['C:\\repo', 'C:\\repo\\alt']),
+    )
+    expect(restoredProject?.sessions).toHaveLength(1)
   })
 
-  it('cleans up a created worktree when managed session creation fails after launch', async () => {
+  it('does not clean up a created worktree while managed session binding is pending', async () => {
     mocks.setAutoProvisionManagedSessions(false)
 
     const manager = new SessionManager({
@@ -2201,25 +2191,18 @@ describe('SessionManager project lifecycle', () => {
       rootPath: 'C:\\repo',
     })
 
-    const createPromise = manager.createSession({
+    const session = await manager.createSession({
       projectId: project.config.id,
       startupCommand: 'codex',
       createWithWorktree: true,
     })
-    const createResult = createPromise.then(
-      () => null,
-      (error) => error,
-    )
 
     await vi.runAllTimersAsync()
 
-    const createError = await createResult
-    expect(createError).toBeInstanceOf(Error)
-    expect(mocks.removeProjectSessionWorktree).toHaveBeenCalledWith({
-      projectRootPath: 'C:\\repo',
-      branchName: 'agenclis/main/20260317-153045-session',
-      cwd: 'C:\\Users\\hduan10\\.codex\\worktrees\\repo\\20260317-153045-session',
-    })
+    expect(session.config.cwd).toBe(
+      'C:\\Users\\hduan10\\.codex\\worktrees\\repo\\20260317-153045-session',
+    )
+    expect(mocks.removeProjectSessionWorktree).not.toHaveBeenCalled()
   })
 
   it('routes terminal data to the correct session when multiple sessions run concurrently', async () => {
