@@ -4,7 +4,7 @@ import { appendFile, mkdtemp, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { TranscriptEvent } from '../src/shared/projectMemory'
 import { TranscriptStore } from './transcriptStore'
@@ -559,7 +559,55 @@ describe('TranscriptStore', () => {
     })
   })
 
-  it('filters transcript pages by kind and search text', async () => {
+  it('uses tail paging for unfiltered transcript pages without reading the full file', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
+    tempRoots.push(tempRoot)
+    const store = new TranscriptStore(tempRoot)
+
+    await store.append(buildEvent({ id: 'event-1', chunk: 'alpha' }))
+    await store.append(
+      buildEvent({
+        id: 'event-2',
+        chunk: 'beta',
+        timestamp: '2026-03-22T12:00:01.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-3',
+        chunk: 'gamma',
+        timestamp: '2026-03-22T12:00:02.000Z',
+      }),
+    )
+
+    const readEventsSpy = vi.spyOn(store, 'readEvents')
+    const readTailEventsSpy = vi.spyOn(store, 'readTailEvents')
+
+    await expect(
+      store.readEventsPage('session-1', {
+        limit: 2,
+      }),
+    ).resolves.toEqual({
+      events: [
+        buildEvent({
+          id: 'event-2',
+          chunk: 'beta',
+          timestamp: '2026-03-22T12:00:01.000Z',
+        }),
+        buildEvent({
+          id: 'event-3',
+          chunk: 'gamma',
+          timestamp: '2026-03-22T12:00:02.000Z',
+        }),
+      ],
+      nextCursor: '1',
+    })
+
+    expect(readEventsSpy).not.toHaveBeenCalled()
+    expect(readTailEventsSpy).toHaveBeenCalledOnce()
+  })
+
+  it('streams filtered transcript pages from the tail without reading the full file', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'agenclis-transcript-'))
     tempRoots.push(tempRoot)
     const store = new TranscriptStore(tempRoot)
@@ -569,7 +617,7 @@ describe('TranscriptStore', () => {
         id: 'event-1',
         kind: 'output',
         source: 'pty',
-        chunk: 'first reply',
+        chunk: 'alpha result',
       }),
     )
     await store.append(
@@ -586,28 +634,84 @@ describe('TranscriptStore', () => {
         id: 'event-3',
         kind: 'output',
         source: 'pty',
-        chunk: 'second reply with result',
+        chunk: 'beta result',
         timestamp: '2026-03-22T12:00:02.000Z',
       }),
     )
+    await store.append(
+      buildEvent({
+        id: 'event-4',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'gamma result',
+        timestamp: '2026-03-22T12:00:03.000Z',
+      }),
+    )
+    await store.append(
+      buildEvent({
+        id: 'event-5',
+        kind: 'output',
+        source: 'pty',
+        chunk: 'delta result',
+        timestamp: '2026-03-22T12:00:04.000Z',
+      }),
+    )
+
+    const readEventsSpy = vi.spyOn(store, 'readEvents')
+
+    const latestPage = await store.readEventsPage('session-1', {
+      kinds: ['output'],
+      search: 'result',
+      limit: 2,
+    })
+
+    expect(latestPage).toEqual({
+      events: [
+        buildEvent({
+          id: 'event-4',
+          kind: 'output',
+          source: 'pty',
+          chunk: 'gamma result',
+          timestamp: '2026-03-22T12:00:03.000Z',
+        }),
+        buildEvent({
+          id: 'event-5',
+          kind: 'output',
+          source: 'pty',
+          chunk: 'delta result',
+          timestamp: '2026-03-22T12:00:04.000Z',
+        }),
+      ],
+      nextCursor: '2',
+    })
 
     await expect(
       store.readEventsPage('session-1', {
+        cursor: latestPage.nextCursor,
         kinds: ['output'],
         search: 'result',
+        limit: 2,
       }),
     ).resolves.toEqual({
       events: [
         buildEvent({
+          id: 'event-1',
+          kind: 'output',
+          source: 'pty',
+          chunk: 'alpha result',
+        }),
+        buildEvent({
           id: 'event-3',
           kind: 'output',
           source: 'pty',
-          chunk: 'second reply with result',
+          chunk: 'beta result',
           timestamp: '2026-03-22T12:00:02.000Z',
         }),
       ],
       nextCursor: null,
     })
+
+    expect(readEventsSpy).not.toHaveBeenCalled()
   })
 
   it('ignores a malformed transcript tail during paged reads', async () => {

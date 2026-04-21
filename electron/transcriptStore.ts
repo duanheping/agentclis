@@ -55,6 +55,16 @@ interface TailSelectionState {
   tailReversed: TranscriptEvent[]
 }
 
+interface FilteredPageSelectionState {
+  allowedKinds: Set<TranscriptEvent['kind']>
+  normalizedSearch: string | null
+  remainingSkip: number
+  limit: number
+  allowMalformedTail: boolean
+  matchesNewestFirst: TranscriptEvent[]
+  hasMore: boolean
+}
+
 function clampTranscriptPageLimit(value: number | undefined): number {
   const normalized = Number.isFinite(value)
     ? Math.floor(value ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT)
@@ -100,6 +110,17 @@ function normalizeTranscriptPageCursor(
   }
 
   return Math.min(maxValue, Math.max(0, parsed))
+}
+
+function normalizeFilteredTranscriptPageCursor(
+  cursor: string | null | undefined,
+): number {
+  const parsed = Number.parseInt(cursor ?? '', 10)
+  if (!Number.isFinite(parsed)) {
+    return 0
+  }
+
+  return Math.max(0, parsed)
 }
 
 interface HeadSelectionState {
@@ -263,6 +284,51 @@ function collectTailEventFromLine(
 
   state.tailReversed.push(event)
   state.byteCount += chunkSize
+  return false
+}
+
+function collectFilteredPageEventFromLine(
+  lineBuffer: Buffer,
+  state: FilteredPageSelectionState,
+): boolean {
+  const line = trimTranscriptLine(lineBuffer)
+  if (!line) {
+    return false
+  }
+
+  let event: TranscriptEvent
+  try {
+    event = JSON.parse(line) as TranscriptEvent
+  } catch (error) {
+    if (state.allowMalformedTail) {
+      state.allowMalformedTail = false
+      return false
+    }
+
+    throw error
+  }
+
+  state.allowMalformedTail = false
+
+  if (state.allowedKinds.size > 0 && !state.allowedKinds.has(event.kind)) {
+    return false
+  }
+
+  if (!matchesTranscriptSearch(event, state.normalizedSearch)) {
+    return false
+  }
+
+  if (state.remainingSkip > 0) {
+    state.remainingSkip -= 1
+    return false
+  }
+
+  if (state.matchesNewestFirst.length >= state.limit) {
+    state.hasMore = true
+    return true
+  }
+
+  state.matchesNewestFirst.push(event)
   return false
 }
 
@@ -466,24 +532,35 @@ export class TranscriptStore {
     const limit = clampTranscriptPageLimit(options.limit)
     const normalizedSearch = normalizeTranscriptSearch(options.search)
     const allowedKinds = new Set(options.kinds ?? [])
-    const events = await this.readEvents(sessionId)
-    const filteredEvents = events.filter((event) => {
-      if (allowedKinds.size > 0 && !allowedKinds.has(event.kind)) {
-        return false
+    const useTailPaging =
+      normalizedSearch === null && allowedKinds.size === 0
+
+    if (useTailPaging) {
+      const index = await this.readIndex(sessionId)
+      const endExclusive = normalizeTranscriptPageCursor(
+        options.cursor,
+        index.eventCount,
+      )
+      const startIndex = Math.max(0, endExclusive - limit)
+      const tailEventCount = Math.max(0, index.eventCount - startIndex)
+      const tailEvents = tailEventCount > 0
+        ? await this.readTailEvents(sessionId, {
+            maxEvents: tailEventCount,
+          })
+        : []
+
+      return {
+        events: tailEvents.slice(0, Math.max(0, endExclusive - startIndex)),
+        nextCursor: startIndex > 0 ? String(startIndex) : null,
       }
-
-      return matchesTranscriptSearch(event, normalizedSearch)
-    })
-    const endExclusive = normalizeTranscriptPageCursor(
-      options.cursor,
-      filteredEvents.length,
-    )
-    const startIndex = Math.max(0, endExclusive - limit)
-
-    return {
-      events: filteredEvents.slice(startIndex, endExclusive),
-      nextCursor: startIndex > 0 ? String(startIndex) : null,
     }
+
+    return await this.readFilteredEventsPageFromTail(sessionId, {
+      cursor: options.cursor,
+      limit,
+      kinds: options.kinds,
+      search: options.search,
+    })
   }
 
   async readSampledEvents(
@@ -545,6 +622,101 @@ export class TranscriptStore {
   async readIndex(sessionId: string): Promise<TranscriptIndex> {
     await this.pendingWrites.get(sessionId)
     return await this.readCachedIndex(sessionId)
+  }
+
+  private async readFilteredEventsPageFromTail(
+    sessionId: string,
+    options: Omit<GetSessionTranscriptPageInput, 'sessionId'> & {
+      limit: number
+    },
+  ): Promise<SessionTranscriptPage> {
+    await this.pendingWrites.get(sessionId)
+
+    const skipMatches = normalizeFilteredTranscriptPageCursor(options.cursor)
+    const state: FilteredPageSelectionState = {
+      allowedKinds: new Set(options.kinds ?? []),
+      normalizedSearch: normalizeTranscriptSearch(options.search),
+      remainingSkip: skipMatches,
+      limit: options.limit,
+      allowMalformedTail: true,
+      matchesNewestFirst: [],
+      hasMore: false,
+    }
+
+    let handle: Awaited<ReturnType<typeof open>> | null = null
+
+    try {
+      const transcriptPath = this.getTranscriptPath(sessionId)
+      handle = await open(transcriptPath, 'r')
+      const stats = await handle.stat()
+      if (stats.size === 0) {
+        return {
+          events: [],
+          nextCursor: null,
+        }
+      }
+
+      let carry = Buffer.alloc(0)
+      let position = stats.size
+      let reachedPageEnd = false
+
+      while (position > 0 && !reachedPageEnd) {
+        const bytesToRead = Math.min(TAIL_REPLAY_READ_CHUNK_BYTES, position)
+        const chunkStart = position - bytesToRead
+        const buffer = Buffer.alloc(bytesToRead)
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, chunkStart)
+        const chunk = buffer.subarray(0, bytesRead)
+        const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk
+
+        const firstNewlineIndex = combined.indexOf(0x0a)
+        if (firstNewlineIndex === -1) {
+          carry = Buffer.from(combined)
+          position = chunkStart
+          continue
+        }
+
+        let lineEnd = combined.length
+        for (
+          let newlineIndex = combined.lastIndexOf(0x0a);
+          newlineIndex >= firstNewlineIndex;
+          newlineIndex = combined.lastIndexOf(0x0a, newlineIndex - 1)
+        ) {
+          const lineBuffer = combined.subarray(newlineIndex + 1, lineEnd)
+          if (collectFilteredPageEventFromLine(lineBuffer, state)) {
+            reachedPageEnd = true
+            break
+          }
+
+          lineEnd = newlineIndex
+        }
+
+        carry = Buffer.from(combined.subarray(0, lineEnd))
+        position = chunkStart
+      }
+
+      if (!reachedPageEnd && carry.length > 0) {
+        void collectFilteredPageEventFromLine(carry, state)
+      }
+
+      const events = state.matchesNewestFirst.reverse()
+      return {
+        events,
+        nextCursor: state.hasMore
+          ? String(skipMatches + events.length)
+          : null,
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+
+      return {
+        events: [],
+        nextCursor: null,
+      }
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
   }
 
   private async ensureAppendDirectories(): Promise<void> {
