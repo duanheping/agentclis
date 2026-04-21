@@ -824,7 +824,7 @@ export class SessionManager {
       this.touchRuntime(id)
     }
     this.persist()
-    this.scheduleSessionStart(id)
+    await this.ensureSessionStarted(id)
   }
 
   async restartSession(id: string): Promise<SessionSnapshot> {
@@ -1194,6 +1194,11 @@ export class SessionManager {
 
   private scheduleSessionStart(id: string, delayMs = 0): void {
     if (this.pendingSessionStartTimers.has(id)) {
+      return
+    }
+
+    if (delayMs <= 0) {
+      void this.ensureSessionStarted(id).catch(() => undefined)
       return
     }
 

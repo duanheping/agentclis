@@ -499,6 +499,66 @@ describe('SessionManager restore policy', () => {
     expect(mocks.spawn).toHaveBeenCalledTimes(2)
   })
 
+  it('starts an activated restored session before activateSession resolves', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-a',
+          title: 'Alpha project',
+          rootPath: 'C:\\repo\\alpha',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          updatedAt: '2026-03-11T10:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-a',
+          title: 'Alpha session',
+          startupCommand: 'alpha',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo\\alpha',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-11T10:00:00.000Z',
+          updatedAt: '2026-03-11T10:05:00.000Z',
+        },
+        {
+          id: 'session-b',
+          projectId: 'project-a',
+          title: 'Beta session',
+          startupCommand: 'beta',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo\\alpha',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-03-11T11:00:00.000Z',
+          updatedAt: '2026-03-11T11:05:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-b',
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.runOnlyPendingTimersAsync()
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+
+    await manager.activateSession('session-a')
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(2)
+    expectSpawnedPowerShellCommand(1, 'alpha')
+    expect(
+      manager.listSessions().projects[0]?.sessions.find(
+        (session) => session.config.id === 'session-a',
+      )?.runtime.status,
+    ).toBe('running')
+  })
+
   it('keeps the restored active session first even when titles would sort it later', () => {
     mocks.setPersistedState({
       projects: [
