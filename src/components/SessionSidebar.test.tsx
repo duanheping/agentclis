@@ -151,6 +151,7 @@ function renderSidebar(overrides?: Partial<ComponentProps<typeof SessionSidebar>
       skillSyncStatus={buildSkillSyncStatus()}
       skillsLoading={false}
       skillsBusy={false}
+      skillAgentSettingsSaving={false}
       skillsSyncing={false}
       skillsResolving={null}
       skillsGeneratingMerge={null}

@@ -39,6 +39,7 @@ interface SessionSidebarProps {
   skillSyncStatus: SkillSyncStatus | null
   skillsLoading: boolean
   skillsBusy: boolean
+  skillAgentSettingsSaving: boolean
   skillsSyncing: boolean
   skillsResolving: string | null
   skillsGeneratingMerge: string | null
@@ -342,6 +343,7 @@ export function SessionSidebar({
   skillSyncStatus,
   skillsLoading,
   skillsBusy,
+  skillAgentSettingsSaving,
   skillsSyncing,
   skillsResolving,
   skillsGeneratingMerge,
@@ -377,6 +379,7 @@ export function SessionSidebar({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement | null>(null)
+  const settingsMutationBusy = skillsBusy || skillAgentSettingsSaving
 
   useEffect(() => {
     if (!contextMenu) {
@@ -737,7 +740,7 @@ export function SessionSidebar({
                     <button
                       type="button"
                       className="ghost-button sidebar-settings__sync-button"
-                      disabled={skillsLoading || skillsBusy}
+                      disabled={skillsLoading || settingsMutationBusy}
                       onClick={() => {
                         void onSyncSkills()
                       }}
@@ -772,7 +775,7 @@ export function SessionSidebar({
                         <button
                           type="button"
                           className="sidebar-settings__path-card"
-                          disabled={skillsBusy}
+                          disabled={settingsMutationBusy}
                           onClick={() => {
                             void onPickSkillLibraryRoot()
                           }}
@@ -788,7 +791,7 @@ export function SessionSidebar({
                           <button
                             type="button"
                             className="ghost-button sidebar-settings__action"
-                            disabled={skillsBusy}
+                            disabled={settingsMutationBusy}
                             onClick={() => {
                               void onPickSkillLibraryRoot()
                             }}
@@ -808,7 +811,9 @@ export function SessionSidebar({
                           <button
                             type="button"
                             className="ghost-button sidebar-settings__action"
-                            disabled={!skillLibrarySettings.libraryRoot || skillsBusy}
+                            disabled={
+                              !skillLibrarySettings.libraryRoot || settingsMutationBusy
+                            }
                             onClick={() => {
                               void onClearSkillLibraryRoot()
                             }}
@@ -844,7 +849,7 @@ export function SessionSidebar({
                             label: formatMergeAgentLabel(agent),
                           }))}
                           disabled={
-                            skillsBusy ||
+                            settingsMutationBusy ||
                             skillsGeneratingMerge !== null ||
                             skillsApplyingMerge
                           }
@@ -870,7 +875,7 @@ export function SessionSidebar({
                             })),
                           ]}
                           disabled={
-                            skillsBusy ||
+                            settingsMutationBusy ||
                             skillsGeneratingMerge !== null ||
                             skillsApplyingMerge
                           }
@@ -895,7 +900,7 @@ export function SessionSidebar({
                             className="ghost-button sidebar-settings__action"
                             disabled={
                               skillsLoading ||
-                              skillsBusy ||
+                              settingsMutationBusy ||
                               projectMemoryBusy ||
                               !skillLibrarySettings.libraryRoot.trim()
                             }
@@ -912,7 +917,7 @@ export function SessionSidebar({
                             className="ghost-button sidebar-settings__action"
                             disabled={
                               skillsLoading ||
-                              skillsBusy ||
+                              settingsMutationBusy ||
                               projectMemoryBusy ||
                               !skillLibrarySettings.libraryRoot.trim()
                             }
@@ -980,7 +985,7 @@ export function SessionSidebar({
                                       className="ghost-button sidebar-settings__action"
                                       disabled={
                                         skillsSyncing ||
-                                        skillsBusy ||
+                                        settingsMutationBusy ||
                                         skillsResolving !== null ||
                                         skillsGeneratingMerge !== null ||
                                         skillsApplyingMerge
@@ -1001,7 +1006,7 @@ export function SessionSidebar({
                                         className="ghost-button sidebar-settings__action"
                                         disabled={
                                           skillsSyncing ||
-                                          skillsBusy ||
+                                          settingsMutationBusy ||
                                           skillsResolving !== null ||
                                           skillsGeneratingMerge !== null ||
                                           skillsApplyingMerge
@@ -1070,7 +1075,7 @@ export function SessionSidebar({
                                           disabled={
                                             skillsApplyingMerge ||
                                             skillsSyncing ||
-                                            skillsBusy
+                                            settingsMutationBusy
                                           }
                                           onClick={() => {
                                             void onApplySkillAiMerge()

@@ -267,6 +267,7 @@ function App() {
   const [skillSyncStatus, setSkillSyncStatus] = useState<SkillSyncStatus | null>(null)
   const [skillsLoading, setSkillsLoading] = useState(Boolean(agentCli))
   const [skillsBusy, setSkillsBusy] = useState(false)
+  const [skillAgentSettingsSaving, setSkillAgentSettingsSaving] = useState(false)
   const [skillsResolving, setSkillsResolving] = useState<string | null>(null)
   const [skillsGeneratingMerge, setSkillsGeneratingMerge] = useState<string | null>(null)
   const [skillsApplyingMerge, setSkillsApplyingMerge] = useState(false)
@@ -527,14 +528,19 @@ function App() {
     return overview
   }
 
-  const persistSkillSettings = async (settings: SkillLibrarySettings) => {
+  const persistSkillSettings = async (
+    settings: SkillLibrarySettings,
+    options: { refreshStatus?: boolean } = {},
+  ) => {
     if (!agentCli) {
       throw new Error('Agent bridge is unavailable.')
     }
 
     const nextSettings = await agentCli.updateSkillLibrarySettings(settings)
     setSkillLibrarySettings(nextSettings)
-    setSkillSyncStatus(await agentCli.getSkillSyncStatus())
+    if (options.refreshStatus ?? true) {
+      setSkillSyncStatus(await agentCli.getSkillSyncStatus())
+    }
     setProjectArchitectureAnalysisStatus(null)
     setProjectSessionsAnalysisStatus(null)
     setSkillAiMergeProposal(null)
@@ -542,21 +548,29 @@ function App() {
 
   const mutateSkillSettings = async (
     transform: (current: SkillLibrarySettings) => SkillLibrarySettings,
+    options: {
+      refreshStatus?: boolean
+      busyState?: 'skills' | 'agent'
+    } = {},
   ) => {
     if (!skillLibrarySettings) {
       setSkillsErrorMessage('Skill settings are still loading.')
       return
     }
 
-    setSkillsBusy(true)
+    const setBusy =
+      options.busyState === 'agent' ? setSkillAgentSettingsSaving : setSkillsBusy
+    setBusy(true)
     setSkillsErrorMessage(null)
 
     try {
-      await persistSkillSettings(transform(skillLibrarySettings))
+      await persistSkillSettings(transform(skillLibrarySettings), {
+        refreshStatus: options.refreshStatus,
+      })
     } catch (error) {
       setSkillsErrorMessage(getErrorMessage(error))
     } finally {
-      setSkillsBusy(false)
+      setBusy(false)
     }
   }
 
@@ -1415,19 +1429,31 @@ function App() {
   }
 
   const handleSetPrimaryMergeAgent = async (agent: SkillAiMergeAgent) => {
-    await mutateSkillSettings((current) => ({
-      ...current,
-      primaryMergeAgent: agent,
-      reviewMergeAgent:
-        current.reviewMergeAgent === agent ? 'none' : current.reviewMergeAgent,
-    }))
+    await mutateSkillSettings(
+      (current) => ({
+        ...current,
+        primaryMergeAgent: agent,
+        reviewMergeAgent:
+          current.reviewMergeAgent === agent ? 'none' : current.reviewMergeAgent,
+      }),
+      {
+        refreshStatus: false,
+        busyState: 'agent',
+      },
+    )
   }
 
   const handleSetReviewMergeAgent = async (agent: SkillAiReviewAgent) => {
-    await mutateSkillSettings((current) => ({
-      ...current,
-      reviewMergeAgent: agent === current.primaryMergeAgent ? 'none' : agent,
-    }))
+    await mutateSkillSettings(
+      (current) => ({
+        ...current,
+        reviewMergeAgent: agent === current.primaryMergeAgent ? 'none' : agent,
+      }),
+      {
+        refreshStatus: false,
+        busyState: 'agent',
+      },
+    )
   }
 
   const handleSyncSkills = async () => {
@@ -1856,6 +1882,7 @@ function App() {
           skillSyncStatus={skillSyncStatus}
           skillsLoading={skillsLoading}
           skillsBusy={skillsBusy}
+          skillAgentSettingsSaving={skillAgentSettingsSaving}
           skillsSyncing={skillsSyncing}
           skillsResolving={skillsResolving}
           skillsGeneratingMerge={skillsGeneratingMerge}

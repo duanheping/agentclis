@@ -44,7 +44,10 @@ import { ProjectSessionHistoryAgentExtractor } from './projectSessionHistoryAgen
 import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
 import { ProjectIdentityResolver } from './projectIdentity'
 import { ProjectMemoryService } from './projectMemoryService'
-import { SkillLibraryManager } from './skillLibraryManager'
+import {
+  SkillLibraryManager,
+  shouldRefreshProjectMemoryAfterSkillSettingsUpdate,
+} from './skillLibraryManager'
 import { SessionManager } from './sessionManager'
 import { TerminalSnapshotStore } from './terminalSnapshotStore'
 import { TransientFileStore } from './transientFileStore'
@@ -689,14 +692,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.getSkillLibrarySettings, () =>
     skillLibraryManager.getSettings(),
   )
-  ipcMain.handle(IPC_CHANNELS.updateSkillLibrarySettings, (_event, settings) =>
-    {
-      const nextSettings = skillLibraryManager.updateSettings(settings)
+  ipcMain.handle(IPC_CHANNELS.updateSkillLibrarySettings, (_event, settings) => {
+    const previousSettings = skillLibraryManager.getSettings()
+    const nextSettings = skillLibraryManager.updateSettings(settings)
+    if (
+      shouldRefreshProjectMemoryAfterSkillSettingsUpdate(
+        previousSettings,
+        nextSettings,
+      )
+    ) {
       projectMemoryService.resume()
       sessionManager.scheduleProjectMemoryBackfill()
-      return nextSettings
-    },
-  )
+    }
+    return nextSettings
+  })
   ipcMain.handle(IPC_CHANNELS.analyzeProjectArchitecture, async () =>
     sessionManager.analyzeHistoricalProjectArchitecture(),
   )

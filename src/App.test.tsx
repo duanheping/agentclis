@@ -648,6 +648,57 @@ describe('App skills settings', () => {
     expect(lastSettingsCall?.reviewMergeAgent).toBe('copilot')
   })
 
+  it('does not rescan skill roots when only the primary agent changes', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Create a project or session to get started.')
+    await waitFor(() => {
+      expect(agentCli.getSkillSyncStatus).toHaveBeenCalled()
+    })
+    const statusCallCount = agentCli.getSkillSyncStatus.mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Primary agent' }))
+    await user.click(screen.getByRole('option', { name: 'Claude' }))
+
+    await waitFor(() => {
+      expect(agentCli.updateSkillLibrarySettings).toHaveBeenCalled()
+    })
+
+    expect(agentCli.getSkillSyncStatus).toHaveBeenCalledTimes(statusCallCount)
+    expect(screen.getByRole('button', { name: 'Primary agent' })).toHaveTextContent(
+      'Claude',
+    )
+  })
+
+  it('rescans skill roots when the library root changes', async () => {
+    const user = userEvent.setup()
+    const { agentCli } = createAgentCliMock()
+
+    window.agentCli = agentCli
+
+    render(<App />)
+
+    await screen.findByText('Create a project or session to get started.')
+    await waitFor(() => {
+      expect(agentCli.getSkillSyncStatus).toHaveBeenCalled()
+    })
+    const statusCallCount = agentCli.getSkillSyncStatus.mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Choose' }))
+
+    await waitFor(() => {
+      expect(agentCli.getSkillSyncStatus).toHaveBeenCalledTimes(statusCallCount + 1)
+    })
+    expect(screen.getByText('C:\\repo\\agentclis-skills')).toBeInTheDocument()
+  })
+
   it('shows skill conflicts and lets the user resolve one from the settings panel', async () => {
     const user = userEvent.setup()
     const { agentCli } = createAgentCliMock()

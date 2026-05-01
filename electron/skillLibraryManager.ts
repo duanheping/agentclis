@@ -160,6 +160,16 @@ function normalizeSettings(
   }
 }
 
+export function shouldRefreshProjectMemoryAfterSkillSettingsUpdate(
+  previous: SkillLibrarySettings,
+  next: SkillLibrarySettings,
+): boolean {
+  const previousRoot = previous.libraryRoot.trim()
+  const nextRoot = next.libraryRoot.trim()
+
+  return Boolean(nextRoot) && previousRoot !== nextRoot
+}
+
 function cloneSettings(settings: SkillLibrarySettings): SkillLibrarySettings {
   return structuredClone(settings)
 }

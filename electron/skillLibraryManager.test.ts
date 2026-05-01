@@ -55,7 +55,10 @@ vi.mock('./skillMergeAgent', () => ({
   reviewSkillMerge: mocks.reviewSkillMerge,
 }))
 
-import { SkillLibraryManager } from './skillLibraryManager'
+import {
+  SkillLibraryManager,
+  shouldRefreshProjectMemoryAfterSkillSettingsUpdate,
+} from './skillLibraryManager'
 
 async function writeFiles(
   rootPath: string,
@@ -111,6 +114,48 @@ describe('SkillLibraryManager', () => {
   function knownSkillRoot(provider: 'codex' | 'claude' | 'copilot'): string {
     return path.join(tempRoot, `.${provider}`, 'skills')
   }
+
+  it('only requests project-memory refresh when a usable library root changes', () => {
+    const baseSettings = {
+      libraryRoot: 'C:\\skills',
+      primaryMergeAgent: 'codex',
+      reviewMergeAgent: 'none',
+    } as const
+
+    expect(
+      shouldRefreshProjectMemoryAfterSkillSettingsUpdate(baseSettings, {
+        ...baseSettings,
+        primaryMergeAgent: 'copilot',
+      }),
+    ).toBe(false)
+    expect(
+      shouldRefreshProjectMemoryAfterSkillSettingsUpdate(baseSettings, {
+        ...baseSettings,
+        reviewMergeAgent: 'claude',
+      }),
+    ).toBe(false)
+    expect(
+      shouldRefreshProjectMemoryAfterSkillSettingsUpdate(baseSettings, {
+        ...baseSettings,
+        libraryRoot: '',
+      }),
+    ).toBe(false)
+    expect(
+      shouldRefreshProjectMemoryAfterSkillSettingsUpdate(
+        {
+          ...baseSettings,
+          libraryRoot: '',
+        },
+        baseSettings,
+      ),
+    ).toBe(true)
+    expect(
+      shouldRefreshProjectMemoryAfterSkillSettingsUpdate(baseSettings, {
+        ...baseSettings,
+        libraryRoot: 'C:\\other-skills',
+      }),
+    ).toBe(true)
+  })
 
   it('syncs discovered skills into the configured library root', async () => {
     const { manager, libraryRoot } = await createManager()
