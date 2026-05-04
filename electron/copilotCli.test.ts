@@ -142,11 +142,11 @@ describe('copilotCli', () => {
   it('adds an additional MCP config to an interactive Copilot command', () => {
     const result = withCopilotAdditionalMcpConfig(
       'copilot --model gpt-5.2 --allow-all',
-      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\mempalace.json',
+      'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\config.json',
     )
 
     expect(result).toBe(
-      'copilot --model gpt-5.2 --allow-all --additional-mcp-config @C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\mempalace.json',
+      'copilot --model gpt-5.2 --allow-all --additional-mcp-config @C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\config.json',
     )
   })
 
@@ -155,7 +155,7 @@ describe('copilotCli', () => {
     expect(
       withCopilotAdditionalMcpConfig(
         command,
-        'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\mempalace.json',
+        'C:\\Users\\hduan10\\AppData\\Roaming\\agentclis\\copilot-mcp\\abcd\\config.json',
       ),
     ).toBe(command)
   })

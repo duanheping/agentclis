@@ -47,6 +47,7 @@ describe('TerminalSnapshotStore', () => {
 
   it('returns the latest snapshot immediately while a write is still pending', async () => {
     let releaseWrite: (() => void) | null = null
+    const getReleaseWrite = (): (() => void) | null => releaseWrite
     atomicFileMocks.writeUtf8FileAtomic.mockImplementationOnce(
       async () =>
         await new Promise<void>((resolve) => {
@@ -73,12 +74,17 @@ describe('TerminalSnapshotStore', () => {
     await vi.waitFor(() => {
       expect(releaseWrite).not.toBeNull()
     })
-    releaseWrite?.()
+    const currentReleaseWrite = getReleaseWrite()
+    if (currentReleaseWrite === null) {
+      throw new Error('Expected write release callback to be available')
+    }
+    currentReleaseWrite()
     await writePromise
   })
 
   it('returns null immediately after a delete is queued behind a pending write', async () => {
     let releaseWrite: (() => void) | null = null
+    const getReleaseWrite = (): (() => void) | null => releaseWrite
     atomicFileMocks.writeUtf8FileAtomic.mockImplementationOnce(
       async () =>
         await new Promise<void>((resolve) => {
@@ -106,7 +112,11 @@ describe('TerminalSnapshotStore', () => {
     await vi.waitFor(() => {
       expect(releaseWrite).not.toBeNull()
     })
-    releaseWrite?.()
+    const currentReleaseWrite = getReleaseWrite()
+    if (currentReleaseWrite === null) {
+      throw new Error('Expected write release callback to be available')
+    }
+    currentReleaseWrite()
     await writePromise
     await deletePromise
   })

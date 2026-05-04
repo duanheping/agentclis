@@ -51,7 +51,6 @@ import {
   buildCopilotResumeCommand,
   extractCopilotSessionMeta,
   supportsCopilotSessionResume,
-  withCopilotAdditionalMcpConfig,
   withCopilotFullAccess,
 } from './copilotCli'
 import {
@@ -65,17 +64,9 @@ import {
   removeCodexInstructions,
 } from './codexInstructions'
 import {
-  injectCodexMcpConfig,
-  removeCodexMcpConfig,
-} from './codexMcpConfig'
-import {
   injectCopilotInstructions,
   removeCopilotInstructions,
 } from './copilotInstructions'
-import {
-  injectCopilotMempalaceMcpConfig,
-  removeCopilotMempalaceMcpConfig,
-} from './copilotMcpConfig'
 import type { ProjectLocationIdentity } from './projectIdentity'
 import type { ProjectMemoryService } from './projectMemoryService'
 import { resolveProjectMemoryCapability } from './providerCapabilityResolver'
@@ -295,7 +286,6 @@ interface SessionManagerServices {
     | 'captureSession'
     | 'scheduleBackfillSessions'
     | 'dispose'
-    | 'getMemoryBackendStatus'
   > & {
     refreshHistoricalImport?: ProjectMemoryService['refreshHistoricalImport']
   }
@@ -352,7 +342,6 @@ const noopProjectMemory: NonNullable<SessionManagerServices['projectMemory']> = 
     prunedCandidateCount: 0,
   }),
   dispose: () => undefined,
-  getMemoryBackendStatus: async () => null,
 }
 
 const noopTerminalSnapshotStore: NonNullable<SessionManagerServices['terminalSnapshots']> = {
@@ -403,10 +392,6 @@ export class SessionManager {
   private readonly copilotInstructionsState = new Map<string, { cwd: string }>()
   private readonly copilotInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly copilotInstructionSnapshots = new Map<string, string>()
-  private readonly copilotMcpConfigState = new Map<string, { cwd: string }>()
-  private readonly copilotMcpConfigCwdRefs = new Map<string, { count: number }>()
-  private readonly codexMcpConfigState = new Map<string, { cwd: string }>()
-  private readonly codexMcpConfigCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly codexInstructionsState = new Map<string, { cwd: string }>()
   private readonly codexInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -841,7 +826,7 @@ export class SessionManager {
       this.touchRuntime(id)
     }
     this.persist()
-    this.scheduleSessionStart(id)
+    await this.ensureSessionStarted(id)
   }
 
   async restartSession(id: string): Promise<SessionSnapshot> {
@@ -879,8 +864,6 @@ export class SessionManager {
     this.flushInputTranscript(id)
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
-    this.cleanupCopilotMcpConfig(id)
-    this.cleanupCodexMcpConfig(id)
     this.cleanupCodexInstructions(id)
     this.cancelScheduledSessionStart(id)
     this.releaseExternalSession(closingConfig)
@@ -985,14 +968,6 @@ export class SessionManager {
       this.cleanupCopilotInstructions(sessionId)
     }
 
-    for (const sessionId of this.copilotMcpConfigState.keys()) {
-      this.cleanupCopilotMcpConfig(sessionId)
-    }
-
-    for (const sessionId of this.codexMcpConfigState.keys()) {
-      this.cleanupCodexMcpConfig(sessionId)
-    }
-
     for (const sessionId of this.codexInstructionsState.keys()) {
       this.cleanupCodexInstructions(sessionId)
     }
@@ -1014,8 +989,6 @@ export class SessionManager {
     this.flushInputTranscript(config.id)
     this.pendingFirstPromptBuffers.delete(config.id)
     this.cleanupCopilotInstructions(config.id)
-    this.cleanupCopilotMcpConfig(config.id)
-    this.cleanupCodexMcpConfig(config.id)
     this.cleanupCodexInstructions(config.id)
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
@@ -1226,6 +1199,11 @@ export class SessionManager {
       return
     }
 
+    if (delayMs <= 0) {
+      void this.ensureSessionStarted(id).catch(() => undefined)
+      return
+    }
+
     const timer = setTimeout(() => {
       this.pendingSessionStartTimers.delete(id)
       void this.ensureSessionStarted(id).catch(() => undefined)
@@ -1343,20 +1321,6 @@ export class SessionManager {
           count: (existing?.count ?? 0) + 1,
           created: existing ? existing.created : result.created,
         })
-
-        if (!config.externalSession) {
-          const status = await this.projectMemory.getMemoryBackendStatus()
-          if (status?.installState === 'installed' && status.pythonPath?.trim()) {
-            const mcpExisting = this.codexMcpConfigCwdRefs.get(normalizedCwd)
-            const configResult = injectCodexMcpConfig(config.cwd, status)
-            this.codexMcpConfigState.set(config.id, { cwd: config.cwd })
-            this.codexMcpConfigCwdRefs.set(normalizedCwd, {
-              count: (mcpExisting?.count ?? 0) + 1,
-              created: mcpExisting ? mcpExisting.created : configResult.created,
-            })
-          }
-        }
-
         return command
       }
 
@@ -1370,20 +1334,6 @@ export class SessionManager {
           // Only treat as "created" if the very first session created it
           created: existing ? existing.created : result.created,
         })
-
-        if (!config.externalSession) {
-          const status = await this.projectMemory.getMemoryBackendStatus()
-          if (status?.installState === 'installed' && status.pythonPath?.trim()) {
-            const mcpExisting = this.copilotMcpConfigCwdRefs.get(normalizedCwd)
-            const configResult = injectCopilotMempalaceMcpConfig(config.cwd, status)
-            command = withCopilotAdditionalMcpConfig(command, configResult.filePath) ?? command
-            this.copilotMcpConfigState.set(config.id, { cwd: config.cwd })
-            this.copilotMcpConfigCwdRefs.set(normalizedCwd, {
-              count: (mcpExisting?.count ?? 0) + 1,
-            })
-          }
-        }
-
         return command
       }
     } catch (err) {
@@ -1460,52 +1410,6 @@ export class SessionManager {
     } catch (err) {
       console.warn(
         `[project-memory] Failed to clean up Copilot instructions for session ${sessionId}:`,
-        err,
-      )
-    }
-  }
-
-  private cleanupCopilotMcpConfig(sessionId: string): void {
-    const state = this.copilotMcpConfigState.get(sessionId)
-    if (!state) return
-    this.copilotMcpConfigState.delete(sessionId)
-
-    const normalizedCwd = this.normalizePath(state.cwd)
-    const ref = this.copilotMcpConfigCwdRefs.get(normalizedCwd)
-    if (!ref) return
-
-    ref.count -= 1
-    if (ref.count > 0) return
-
-    this.copilotMcpConfigCwdRefs.delete(normalizedCwd)
-    try {
-      removeCopilotMempalaceMcpConfig(state.cwd)
-    } catch (err) {
-      console.warn(
-        `[project-memory] Failed to clean up Copilot MemPalace MCP config for session ${sessionId}:`,
-        err,
-      )
-    }
-  }
-
-  private cleanupCodexMcpConfig(sessionId: string): void {
-    const state = this.codexMcpConfigState.get(sessionId)
-    if (!state) return
-    this.codexMcpConfigState.delete(sessionId)
-
-    const normalizedCwd = this.normalizePath(state.cwd)
-    const ref = this.codexMcpConfigCwdRefs.get(normalizedCwd)
-    if (!ref) return
-
-    ref.count -= 1
-    if (ref.count > 0) return
-
-    this.codexMcpConfigCwdRefs.delete(normalizedCwd)
-    try {
-      removeCodexMcpConfig(state.cwd, ref.created)
-    } catch (err) {
-      console.warn(
-        `[project-memory] Failed to clean up Codex MemPalace MCP config for session ${sessionId}:`,
         err,
       )
     }
@@ -2234,12 +2138,19 @@ export class SessionManager {
 
     this.stopExternalSessionAttentionTracking(config.id)
     const currentRuntime = this.runtimes.get(config.id) ?? buildRuntime(config.id)
+    const nextInitialRuntimeState =
+      initialOffset === 0
+        ? {
+            attention: currentRuntime.attention ?? null,
+            awaitingResponse: currentRuntime.awaitingResponse ?? false,
+          }
+        : initialRuntimeState
     if (
-      currentRuntime.attention !== initialRuntimeState.attention ||
+      currentRuntime.attention !== nextInitialRuntimeState.attention ||
       (currentRuntime.awaitingResponse ?? false) !==
-        initialRuntimeState.awaitingResponse
+        nextInitialRuntimeState.awaitingResponse
     ) {
-      this.setRuntime(config.id, initialRuntimeState)
+      this.setRuntime(config.id, nextInitialRuntimeState)
     }
     const interval = setInterval(() => {
       void this.pollExternalSessionAttention(config.id)
@@ -2539,8 +2450,6 @@ export class SessionManager {
     this.flushInputTranscript(id)
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
-    this.cleanupCopilotMcpConfig(id)
-    this.cleanupCodexMcpConfig(id)
     this.cleanupCodexInstructions(id)
     this.clearLiveAttentionBuffer(id)
     this.cancelScheduledSessionStart(id)
@@ -2987,9 +2896,13 @@ export class SessionManager {
   private cloneProjectConfig(project: ProjectConfig): ProjectConfig {
     return {
       ...project,
-      identity: {
-        ...project.identity,
-      },
+      identity: project.identity
+        ? {
+            repoRoot: project.identity.repoRoot ?? null,
+            gitCommonDir: project.identity.gitCommonDir ?? null,
+            remoteFingerprint: project.identity.remoteFingerprint ?? null,
+          }
+        : undefined,
     }
   }
 

@@ -31,7 +31,7 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/[ \t]+/g, ' ').replace(/\r/g, '').trim()
 }
 
-function clampSummary(value: string | null): string | null {
+function clampSummary(value: string | null | undefined): string | null {
   const normalized = normalizeWhitespace(stripTerminalControlSequences(value ?? ''))
   if (!normalized) {
     return null

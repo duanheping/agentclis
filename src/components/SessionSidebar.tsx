@@ -20,11 +20,6 @@ import {
   type SessionSnapshot,
 } from '../shared/session'
 import { getSessionAttentionBadgeLabel } from '../shared/sessionAttention'
-import type { MemoryBackendStatus } from '../shared/memorySearch'
-import type { MemoryReindexResult } from '../shared/memorySearch'
-import type { MemorySearchResult } from '../shared/memorySearch'
-import { MemoryBackendSettings } from './MemoryBackendSettings'
-import { MemorySearchPanel } from './MemorySearchPanel'
 
 interface SessionSidebarProps {
   projects: ProjectSnapshot[]
@@ -44,6 +39,7 @@ interface SessionSidebarProps {
   skillSyncStatus: SkillSyncStatus | null
   skillsLoading: boolean
   skillsBusy: boolean
+  skillAgentSettingsSaving: boolean
   skillsSyncing: boolean
   skillsResolving: string | null
   skillsGeneratingMerge: string | null
@@ -52,24 +48,8 @@ interface SessionSidebarProps {
   projectSessionsAnalyzing: boolean
   projectArchitectureAnalysisStatus: string | null
   projectSessionsAnalysisStatus: string | null
-  memoryBackendStatus: MemoryBackendStatus | null
-  memoryBackendLoading: boolean
-  memoryBackendInstalling: boolean
-  memoryBackendReindexing: boolean
-  memoryBackendErrorMessage: string | null
-  memoryBackendReindexResult: MemoryReindexResult | null
-  memorySearchLoading: boolean
-  memorySearchErrorMessage: string | null
-  memorySearchResult: MemorySearchResult | null
   skillAiMergeProposal: SkillAiMergeProposal | null
   skillsErrorMessage: string | null
-  onInstallMemoryBackend: () => Promise<void>
-  onRefreshMemoryBackendStatus: () => Promise<void>
-  onReindexMemoryBackend: () => Promise<void>
-  onSearchMemory: (query: string) => Promise<void>
-  onOpenMemorySearchSession: (sessionId: string) => Promise<void>
-  onOpenMemoryBackendInstallRoot: () => Promise<void>
-  onOpenMemoryBackendPalacePath: () => Promise<void>
   onPickSkillLibraryRoot: () => Promise<void>
   onClearSkillLibraryRoot: () => Promise<void>
   onOpenSkillLibraryRoot: () => Promise<void>
@@ -117,17 +97,6 @@ interface SkillAgentSelectProps<T extends string> {
   options: SkillAgentOption<T>[]
   disabled: boolean
   onChange: (value: T) => void
-}
-
-function findActiveProjectId(
-  projects: ProjectSnapshot[],
-  activeSessionId: string | null,
-): string | null {
-  return (
-    projects.find((project) =>
-      project.sessions.some((session) => session.config.id === activeSessionId),
-    )?.config.id ?? null
-  )
 }
 
 function formatMergeAgentLabel(agent: SkillAiMergeAgent): string {
@@ -374,6 +343,7 @@ export function SessionSidebar({
   skillSyncStatus,
   skillsLoading,
   skillsBusy,
+  skillAgentSettingsSaving,
   skillsSyncing,
   skillsResolving,
   skillsGeneratingMerge,
@@ -382,24 +352,8 @@ export function SessionSidebar({
   projectSessionsAnalyzing,
   projectArchitectureAnalysisStatus,
   projectSessionsAnalysisStatus,
-  memoryBackendStatus,
-  memoryBackendLoading,
-  memoryBackendInstalling,
-  memoryBackendReindexing,
-  memoryBackendErrorMessage,
-  memoryBackendReindexResult,
-  memorySearchLoading,
-  memorySearchErrorMessage,
-  memorySearchResult,
   skillAiMergeProposal,
   skillsErrorMessage,
-  onInstallMemoryBackend,
-  onRefreshMemoryBackendStatus,
-  onReindexMemoryBackend,
-  onSearchMemory,
-  onOpenMemorySearchSession,
-  onOpenMemoryBackendInstallRoot,
-  onOpenMemoryBackendPalacePath,
   onPickSkillLibraryRoot,
   onClearSkillLibraryRoot,
   onOpenSkillLibraryRoot,
@@ -413,7 +367,10 @@ export function SessionSidebar({
   onApplySkillAiMerge,
   onDismissSkillAiMerge,
 }: SessionSidebarProps) {
-  const activeProjectId = findActiveProjectId(projects, activeSessionId)
+  const activeProjectId =
+    projects.find((project) =>
+      project.sessions.some((session) => session.config.id === activeSessionId),
+    )?.config.id ?? null
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [projectVisibility, setProjectVisibility] = useState<
@@ -422,6 +379,7 @@ export function SessionSidebar({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsRef = useRef<HTMLDivElement | null>(null)
+  const settingsMutationBusy = skillsBusy || skillAgentSettingsSaving
 
   useEffect(() => {
     if (!contextMenu) {
@@ -776,53 +734,13 @@ export function SessionSidebar({
                   </label>
                 </div>
 
-                <MemoryBackendSettings
-                  status={memoryBackendStatus}
-                  loading={memoryBackendLoading}
-                  installing={memoryBackendInstalling}
-                  reindexing={memoryBackendReindexing}
-                  errorMessage={memoryBackendErrorMessage}
-                  reindexResult={memoryBackendReindexResult}
-                  onInstall={() => {
-                    void onInstallMemoryBackend()
-                  }}
-                  onRefresh={() => {
-                    void onRefreshMemoryBackendStatus()
-                  }}
-                  onReindex={() => {
-                    void onReindexMemoryBackend()
-                  }}
-                  onOpenInstallRoot={() => {
-                    void onOpenMemoryBackendInstallRoot()
-                  }}
-                  onOpenPalacePath={() => {
-                    void onOpenMemoryBackendPalacePath()
-                  }}
-                />
-
-                <MemorySearchPanel
-                  projects={projects}
-                  activeProjectId={activeProjectId}
-                  status={memoryBackendStatus}
-                  loading={memorySearchLoading}
-                  errorMessage={memorySearchErrorMessage}
-                  result={memorySearchResult}
-                  onSearch={(query) => {
-                    void onSearchMemory(query)
-                  }}
-                  onOpenSession={(sessionId) => {
-                    setSettingsOpen(false)
-                    void onOpenMemorySearchSession(sessionId)
-                  }}
-                />
-
                 <div className="sidebar-settings__section">
                   <div className="sidebar-settings__section-header">
                     <p className="sidebar-settings__eyebrow">Skills</p>
                     <button
                       type="button"
                       className="ghost-button sidebar-settings__sync-button"
-                      disabled={skillsLoading || skillsBusy}
+                      disabled={skillsLoading || settingsMutationBusy}
                       onClick={() => {
                         void onSyncSkills()
                       }}
@@ -857,7 +775,7 @@ export function SessionSidebar({
                         <button
                           type="button"
                           className="sidebar-settings__path-card"
-                          disabled={skillsBusy}
+                          disabled={settingsMutationBusy}
                           onClick={() => {
                             void onPickSkillLibraryRoot()
                           }}
@@ -873,7 +791,7 @@ export function SessionSidebar({
                           <button
                             type="button"
                             className="ghost-button sidebar-settings__action"
-                            disabled={skillsBusy}
+                            disabled={settingsMutationBusy}
                             onClick={() => {
                               void onPickSkillLibraryRoot()
                             }}
@@ -893,7 +811,9 @@ export function SessionSidebar({
                           <button
                             type="button"
                             className="ghost-button sidebar-settings__action"
-                            disabled={!skillLibrarySettings.libraryRoot || skillsBusy}
+                            disabled={
+                              !skillLibrarySettings.libraryRoot || settingsMutationBusy
+                            }
                             onClick={() => {
                               void onClearSkillLibraryRoot()
                             }}
@@ -929,7 +849,7 @@ export function SessionSidebar({
                             label: formatMergeAgentLabel(agent),
                           }))}
                           disabled={
-                            skillsBusy ||
+                            settingsMutationBusy ||
                             skillsGeneratingMerge !== null ||
                             skillsApplyingMerge
                           }
@@ -955,7 +875,7 @@ export function SessionSidebar({
                             })),
                           ]}
                           disabled={
-                            skillsBusy ||
+                            settingsMutationBusy ||
                             skillsGeneratingMerge !== null ||
                             skillsApplyingMerge
                           }
@@ -980,7 +900,7 @@ export function SessionSidebar({
                             className="ghost-button sidebar-settings__action"
                             disabled={
                               skillsLoading ||
-                              skillsBusy ||
+                              settingsMutationBusy ||
                               projectMemoryBusy ||
                               !skillLibrarySettings.libraryRoot.trim()
                             }
@@ -997,7 +917,7 @@ export function SessionSidebar({
                             className="ghost-button sidebar-settings__action"
                             disabled={
                               skillsLoading ||
-                              skillsBusy ||
+                              settingsMutationBusy ||
                               projectMemoryBusy ||
                               !skillLibrarySettings.libraryRoot.trim()
                             }
@@ -1065,7 +985,7 @@ export function SessionSidebar({
                                       className="ghost-button sidebar-settings__action"
                                       disabled={
                                         skillsSyncing ||
-                                        skillsBusy ||
+                                        settingsMutationBusy ||
                                         skillsResolving !== null ||
                                         skillsGeneratingMerge !== null ||
                                         skillsApplyingMerge
@@ -1086,7 +1006,7 @@ export function SessionSidebar({
                                         className="ghost-button sidebar-settings__action"
                                         disabled={
                                           skillsSyncing ||
-                                          skillsBusy ||
+                                          settingsMutationBusy ||
                                           skillsResolving !== null ||
                                           skillsGeneratingMerge !== null ||
                                           skillsApplyingMerge
@@ -1155,7 +1075,7 @@ export function SessionSidebar({
                                           disabled={
                                             skillsApplyingMerge ||
                                             skillsSyncing ||
-                                            skillsBusy
+                                            settingsMutationBusy
                                           }
                                           onClick={() => {
                                             void onApplySkillAiMerge()

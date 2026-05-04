@@ -1,3 +1,25 @@
+<!-- agentclis-project-memory:start -->
+Use the project memory for this logical project before proceeding.
+Current local checkout: agentclis_3
+Latest summary: This session recorded 544 transcript events.
+Active decisions:
+- Default managed CLI: codex
+- Default managed CLI: copilot
+- Canonical remote: github.com/duanheping/agentclis
+- Preferred shell: pwsh.exe
+Project preferences:
+- The vitest suite in electron/sessionManager.test.ts initialises with restored persisted sessions via setPersistedState(). New test assertions that check the full session list must account for pre-existing sessions; narrow assertions to the specific behavior under test (e.g. du...
+Component workflows:
+- Legacy project memory is persisted through `.agenclis-memory` artifacts written by `ProjectMemoryManager` and scheduled by `ProjectMemoryService`; there is no external memory runtime or MCP dependency.
+- To run a focused subset of main-process tests: `npx vitest run electron/projectMemoryService.test.ts electron/sessionManager.test.ts` (list specific files). This avoids running the full suite and is faster for iterating on a fix. The test runner is vitest v4 with no special confi...
+Troubleshooting patterns:
+- If project memory appears missing in new sessions, first check whether the Skill Library root is configured. When it is unset, `ProjectMemoryService` pauses queued capture jobs and returns an unavailable bootstrap context until the root is restored.
+- When npm install fails because Electron's postinstall script cannot reach github.com (DNS resolution failure), retry with `npm install --ignore-scripts`. This installs all JS dependencies without downloading Electron native binaries and is sufficient for running vitest unit te...
+Critical files:
+- AGENTS.md at the repo root is the authoritative project guidelines file. It documents: module layout (src/ for React renderer, electron/ for main process), build/test/lint commands (npm test → vitest run, npm run lint → eslint), coding style (2-space indent, single quotes, no...
+- electron/projectMemoryManager.ts owns legacy project-memory artifact generation under `.agenclis-memory`, while electron/projectMemoryService.ts schedules capture/backfill and electron/sessionManager.ts injects the resulting bootstrap text into managed sessions.
+<!-- agentclis-project-memory:end -->
+
 # Repository Guidelines
 
 ## Project Structure & Module Organization

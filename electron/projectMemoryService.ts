@@ -21,12 +21,6 @@ import type {
 import type { HistoricalProjectSessionDescriptor } from './projectSessionHistoryAgent'
 import type { PreparedStructuredAgent } from './structuredAgentRunner'
 import type { TranscriptStore } from './transcriptStore'
-import type { MempalaceSessionIndexResult } from '../src/shared/memoryIndex'
-import type {
-  MemoryBackendStatus,
-  MemoryReindexResult,
-} from '../src/shared/memorySearch'
-import type { MempalaceLegacyImportBundle } from '../src/shared/memoryIndex'
 
 type ProjectMemoryJobType = 'capture-session' | 'backfill-session'
 type ProjectMemoryJobPriority = 'high' | 'low'
@@ -58,26 +52,6 @@ interface ProjectMemoryServiceOptions {
   lowPriorityDelayMs?: number
   retryDelayMs?: number
   maxAttempts?: number
-}
-
-interface ProjectMemoryServiceDependencies {
-  memoryBackend?: {
-    getStatus?(): Promise<MemoryBackendStatus>
-    indexSessionTranscript(input: ProjectMemoryJobPayload & {
-      transcript: TranscriptEvent[]
-      transcriptPath: string
-    }): Promise<MempalaceSessionIndexResult>
-    importLegacyProjectMemory?(
-      input: MempalaceLegacyImportBundle,
-    ): Promise<unknown>
-  }
-  bootstrapComposer?: {
-    composeContext(input: {
-      project: ProjectConfig
-      location: ProjectLocation | null
-      query?: string
-    }): Promise<AssembledProjectContext>
-  }
 }
 
 const MAX_DIAGNOSTICS = 80
@@ -196,15 +170,6 @@ function dedupeKeyForSession(sessionId: string): string {
   return `session:${sessionId}`
 }
 
-function hasBootstrapContext(context: AssembledProjectContext): boolean {
-  return Boolean(
-    context.bootstrapMessage?.trim() ||
-    context.fileReferences.length > 0 ||
-    context.summaryExcerpt?.trim() ||
-    context.architectureExcerpt?.trim(),
-  )
-}
-
 function buildUnavailableContext(input: {
   project: ProjectConfig
   location: ProjectLocation | null
@@ -222,12 +187,6 @@ function buildUnavailableContext(input: {
     fileReferences: [],
     summaryExcerpt: null,
   }
-}
-
-function mempalaceBackendIsUnavailable(
-  status: MemoryBackendStatus | null,
-): boolean {
-  return Boolean(status && status.installState !== 'installed')
 }
 
 export class ProjectMemoryService {
@@ -252,8 +211,6 @@ export class ProjectMemoryService {
   private readonly lowPriorityDelayMs: number
   private readonly retryDelayMs: number
   private readonly maxAttempts: number
-  private readonly memoryBackend?: ProjectMemoryServiceDependencies['memoryBackend']
-  private readonly bootstrapComposer?: ProjectMemoryServiceDependencies['bootstrapComposer']
 
   private state: PersistedProjectMemoryState
   private drainTimer: NodeJS.Timeout | null = null
@@ -273,15 +230,12 @@ export class ProjectMemoryService {
       | 'readSampledEvents'
     >,
     options: ProjectMemoryServiceOptions = {},
-    dependencies: ProjectMemoryServiceDependencies = {},
   ) {
     this.manager = manager
     this.transcriptStore = transcriptStore
     this.lowPriorityDelayMs = options.lowPriorityDelayMs ?? 3_000
     this.retryDelayMs = options.retryDelayMs ?? 4_000
     this.maxAttempts = options.maxAttempts ?? 3
-    this.memoryBackend = dependencies.memoryBackend
-    this.bootstrapComposer = dependencies.bootstrapComposer
     this.state = normalizePersistedState(this.store.store)
     this.store.set(structuredClone(this.state))
 
@@ -301,65 +255,6 @@ export class ProjectMemoryService {
     query?: string
   }): Promise<AssembledProjectContext> {
     const managerEnabled = this.manager.isEnabled()
-    const backendStatus = await this.getMemoryBackendStatus()
-
-    if (this.bootstrapComposer) {
-      try {
-        const context = await this.bootstrapComposer.composeContext(input)
-        if (hasBootstrapContext(context)) {
-          return context
-        }
-        if (mempalaceBackendIsUnavailable(backendStatus)) {
-          if (!managerEnabled) {
-            return buildUnavailableContext({
-              ...input,
-              reason:
-                backendStatus?.message?.trim() ||
-                'MemPalace is not currently available.',
-            })
-          }
-        } else {
-          const emptyComposerMessage =
-            'MemPalace returned no startup context.'
-          this.recordDiagnostic({
-            timestamp: new Date().toISOString(),
-            level: 'warning',
-            code: 'bootstrap-composer-empty',
-            message: managerEnabled
-              ? `${emptyComposerMessage} Falling back to the legacy project memory backend.`
-              : `${emptyComposerMessage} The legacy project memory backend is not configured.`,
-            projectId: input.project.id,
-          })
-          if (!managerEnabled) {
-            return buildUnavailableContext({
-              ...input,
-              reason:
-                'MemPalace returned no startup context and the legacy project memory backend is not configured.',
-            })
-          }
-        }
-      } catch (error) {
-        const message =
-          error instanceof Error && error.message.trim()
-            ? `MemPalace bootstrap composition failed: ${error.message.trim()}`
-            : 'MemPalace bootstrap composition failed.'
-        this.recordDiagnostic({
-          timestamp: new Date().toISOString(),
-          level: 'warning',
-          code: 'bootstrap-composer-failed',
-          message: managerEnabled
-            ? `${message} Falling back to the legacy project memory backend.`
-            : `${message} The legacy project memory backend is not configured.`,
-          projectId: input.project.id,
-        })
-        if (!managerEnabled) {
-          return buildUnavailableContext({
-            ...input,
-            reason: 'MemPalace bootstrap composition failed and the legacy project memory backend is not configured.',
-          })
-        }
-      }
-    }
 
     if (managerEnabled) {
       return await this.manager.assembleContext(input)
@@ -394,33 +289,6 @@ export class ProjectMemoryService {
     },
   ): Promise<ProjectMemoryRefreshResult> {
     return await this.manager.refreshHistoricalImport(projects, options)
-  }
-
-  async importLegacyProjectMemory(projects: ProjectConfig[]): Promise<void> {
-    if (!this.memoryBackend?.importLegacyProjectMemory) {
-      return
-    }
-
-    for (const project of projects) {
-      const bundle = await this.manager.buildLegacyImportBundle(project)
-      if (!bundle) {
-        continue
-      }
-
-      await this.memoryBackend.importLegacyProjectMemory(bundle)
-    }
-  }
-
-  async getMemoryBackendStatus(): Promise<MemoryBackendStatus | null> {
-    if (!this.memoryBackend?.getStatus) {
-      return null
-    }
-
-    try {
-      return await this.memoryBackend.getStatus()
-    } catch {
-      return null
-    }
   }
 
   async analyzeHistoricalArchitecture(
@@ -632,7 +500,7 @@ export class ProjectMemoryService {
       return
     }
 
-    if (!this.manager.isEnabled() && !this.memoryBackend) {
+    if (!this.manager.isEnabled()) {
       if (!this.blockedByMissingLibraryRoot) {
         this.blockedByMissingLibraryRoot = true
         this.recordDiagnostic({
@@ -692,23 +560,13 @@ export class ProjectMemoryService {
       }
 
       const transcript = await this.readTranscriptForMemoryJob(job.payload.session.id)
-      const transcriptPath = this.transcriptStore.getTranscriptPath(job.payload.session.id)
-
-      let memoryBackendResult: MempalaceSessionIndexResult | null = null
-      if (this.memoryBackend) {
-        memoryBackendResult = await this.memoryBackend.indexSessionTranscript({
-          ...job.payload,
-          transcript,
-          transcriptPath,
-        })
-      }
 
       if (managerEnabled) {
         await this.manager.captureSession({
           ...job.payload,
           transcript,
         })
-      } else if (memoryBackendResult?.status === 'deferred') {
+      } else {
         return false
       }
 
@@ -771,66 +629,6 @@ export class ProjectMemoryService {
 
   private persist(): void {
     this.store.set(structuredClone(this.state))
-  }
-
-  async reindexTranscriptMemory(
-    inputs: ProjectMemoryJobPayload[],
-  ): Promise<MemoryReindexResult> {
-    if (!this.memoryBackend) {
-      return {
-        backend: 'mempalace',
-        projectId: inputs.length === 1 ? inputs[0]?.project.id ?? null : null,
-        sessionsScanned: inputs.length,
-        sessionsIndexed: 0,
-        sessionsDeferred: 0,
-        sessionsSkipped: inputs.length,
-        errorCount: 0,
-        warning: 'MemPalace transcript indexing is not configured.',
-      }
-    }
-
-    const projectId = inputs.length === 1 ? inputs[0]?.project.id ?? null : null
-    const result: MemoryReindexResult = {
-      backend: 'mempalace',
-      projectId,
-      sessionsScanned: inputs.length,
-      sessionsIndexed: 0,
-      sessionsDeferred: 0,
-      sessionsSkipped: 0,
-      errorCount: 0,
-      warning: null,
-    }
-
-    for (const input of inputs) {
-      try {
-        const transcriptIndex = await this.transcriptStore.readIndex(input.session.id)
-        if (transcriptIndex.eventCount === 0) {
-          result.sessionsSkipped += 1
-          continue
-        }
-
-        const transcript = await this.readTranscriptForMemoryJob(input.session.id)
-        const indexResult = await this.memoryBackend.indexSessionTranscript({
-          ...input,
-          transcript,
-          transcriptPath: this.transcriptStore.getTranscriptPath(input.session.id),
-        })
-
-        if (indexResult.status === 'indexed') {
-          result.sessionsIndexed += 1
-        } else if (indexResult.status === 'deferred') {
-          result.sessionsDeferred += 1
-          result.warning = indexResult.warning
-        } else {
-          result.sessionsSkipped += 1
-        }
-      } catch (error) {
-        result.errorCount += 1
-        result.warning = error instanceof Error ? error.message : String(error)
-      }
-    }
-
-    return result
   }
 
   private async readTranscriptForMemoryJob(

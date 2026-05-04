@@ -36,8 +36,7 @@ function sameExternalSession(
 
   return (
     left.provider === right.provider &&
-    left.sessionId === right.sessionId &&
-    left.detectedAt === right.detectedAt
+    left.sessionId === right.sessionId
   )
 }
 
