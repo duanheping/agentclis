@@ -14,6 +14,15 @@ export function getTerminalShortcutInput(
     return null
   }
 
+  if (
+    (event.key === ' ' || event.key === 'Spacebar') &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey
+  ) {
+    return ' '
+  }
+
   if (event.key !== 'Enter') {
     return null
   }

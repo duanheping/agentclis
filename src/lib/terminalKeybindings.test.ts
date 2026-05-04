@@ -24,6 +24,37 @@ function createKeyboardEvent(
 }
 
 describe('getTerminalShortcutInput', () => {
+  it('maps plain Space to a space input', () => {
+    expect(
+      getTerminalShortcutInput(
+        createKeyboardEvent({
+          key: ' ',
+        }),
+      ),
+    ).toBe(' ')
+  })
+
+  it('maps legacy Spacebar key values to a space input', () => {
+    expect(
+      getTerminalShortcutInput(
+        createKeyboardEvent({
+          key: 'Spacebar',
+        }),
+      ),
+    ).toBe(' ')
+  })
+
+  it('does not intercept Ctrl+Space', () => {
+    expect(
+      getTerminalShortcutInput(
+        createKeyboardEvent({
+          key: ' ',
+          ctrlKey: true,
+        }),
+      ),
+    ).toBeNull()
+  })
+
   it('maps Ctrl+Enter to a newline', () => {
     expect(
       getTerminalShortcutInput(
