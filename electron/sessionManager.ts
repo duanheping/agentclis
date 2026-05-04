@@ -774,6 +774,8 @@ export class SessionManager {
 
       await this.startSession(config, {
         allowManagedSessionBinding: true,
+        requireManagedSessionBinding:
+          this.detectResumableProvider(config.startupCommand) !== null,
         propagateFailure: true,
       })
 

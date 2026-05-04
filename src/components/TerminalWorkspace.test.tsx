@@ -16,6 +16,7 @@ const mockTerminalWriteHandler = vi.hoisted(() =>
 const terminalInstances = vi.hoisted(() => [] as Array<{
   write: ReturnType<typeof vi.fn>
   open: ReturnType<typeof vi.fn>
+  customKeyHandler: ((event: KeyboardEvent) => boolean) | null
 }>)
 
 vi.mock('@xterm/xterm', () => ({
@@ -62,7 +63,10 @@ vi.mock('@xterm/xterm', () => ({
     registerLinkProvider = vi.fn(() => ({
       dispose: vi.fn(),
     }))
-    attachCustomKeyEventHandler = vi.fn()
+    customKeyHandler: ((event: KeyboardEvent) => boolean) | null = null
+    attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => {
+      this.customKeyHandler = handler
+    })
     onData = vi.fn(() => ({
       dispose: vi.fn(),
     }))
@@ -175,6 +179,21 @@ function mockElementRect(
 async function flushEffects(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
+}
+
+function createTerminalKeyboardEvent(
+  key: string,
+  options: Partial<KeyboardEventInit> = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  })
+  vi.spyOn(event, 'preventDefault')
+  vi.spyOn(event, 'stopPropagation')
+  return event
 }
 
 describe('TerminalWorkspace', () => {
@@ -347,6 +366,52 @@ describe('TerminalWorkspace', () => {
         }),
       )
     })
+  })
+
+  it('forwards plain Space through the terminal shortcut handler', async () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.customKeyHandler).not.toBeNull()
+    })
+
+    const event = createTerminalKeyboardEvent(' ')
+    const handled = terminalInstances[0]!.customKeyHandler!(event)
+
+    expect(handled).toBe(false)
+    expect(event.preventDefault).toHaveBeenCalled()
+    expect(event.stopPropagation).toHaveBeenCalled()
+    expect(window.agentCli.writeToSession).toHaveBeenCalledWith('session-1', ' ')
+  })
+
+  it('forwards Ctrl+Enter as a newline through the terminal shortcut handler', async () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.customKeyHandler).not.toBeNull()
+    })
+
+    const event = createTerminalKeyboardEvent('Enter', {
+      ctrlKey: true,
+    })
+    const handled = terminalInstances[0]!.customKeyHandler!(event)
+
+    expect(handled).toBe(false)
+    expect(event.preventDefault).toHaveBeenCalled()
+    expect(event.stopPropagation).toHaveBeenCalled()
+    expect(window.agentCli.writeToSession).toHaveBeenCalledWith('session-1', '\n')
   })
 
   it('only mounts xterm surfaces for the active session', async () => {
