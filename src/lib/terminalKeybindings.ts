@@ -16,10 +16,13 @@ export function getTerminalShortcutInput(
 
   if (
     (event.key === ' ' || event.key === 'Spacebar') &&
-    !event.ctrlKey &&
     !event.altKey &&
     !event.metaKey
   ) {
+    // Ctrl+Space inserts a newline (same as Ctrl+Enter) for multi-line input.
+    if (event.ctrlKey) {
+      return '\n'
+    }
     return ' '
   }
 

@@ -774,8 +774,7 @@ export class SessionManager {
 
       await this.startSession(config, {
         allowManagedSessionBinding: true,
-        requireManagedSessionBinding:
-          this.detectResumableProvider(config.startupCommand) !== null,
+        requireManagedSessionBinding: false,
         propagateFailure: true,
       })
 
@@ -1139,7 +1138,7 @@ export class SessionManager {
         }
       }
 
-      if (requiresManagedSessionBinding && launchesInline) {
+      if (launchesInline) {
         beginManagedSessionLaunch()
       } else {
         setTimeout(beginManagedSessionLaunch, 60)
