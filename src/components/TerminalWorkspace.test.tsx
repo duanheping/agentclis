@@ -414,6 +414,30 @@ describe('TerminalWorkspace', () => {
     expect(window.agentCli.writeToSession).toHaveBeenCalledWith('session-1', '\n')
   })
 
+  it('forwards Ctrl+Space as a newline through the terminal shortcut handler', async () => {
+    render(
+      <TerminalWorkspace
+        sessions={[buildSession()]}
+        activeSessionId="session-1"
+        windowsCommandPromptSessionIds={[]}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.customKeyHandler).not.toBeNull()
+    })
+
+    const event = createTerminalKeyboardEvent(' ', {
+      ctrlKey: true,
+    })
+    const handled = terminalInstances[0]!.customKeyHandler!(event)
+
+    expect(handled).toBe(false)
+    expect(event.preventDefault).toHaveBeenCalled()
+    expect(event.stopPropagation).toHaveBeenCalled()
+    expect(window.agentCli.writeToSession).toHaveBeenCalledWith('session-1', '\n')
+  })
+
   it('only mounts xterm surfaces for the active session', async () => {
     render(
       <TerminalWorkspace
