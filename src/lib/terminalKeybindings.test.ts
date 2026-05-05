@@ -44,7 +44,7 @@ describe('getTerminalShortcutInput', () => {
     ).toBe(' ')
   })
 
-  it('does not intercept Ctrl+Space', () => {
+  it('maps Ctrl+Space to a newline', () => {
     expect(
       getTerminalShortcutInput(
         createKeyboardEvent({
@@ -52,7 +52,7 @@ describe('getTerminalShortcutInput', () => {
           ctrlKey: true,
         }),
       ),
-    ).toBeNull()
+    ).toBe('\n')
   })
 
   it('maps Ctrl+Enter to a newline', () => {
