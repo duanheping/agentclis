@@ -691,6 +691,7 @@ function App() {
       ({ sessionId }) => {
         pendingWindowsCommandPromptCloseSessionIdsRef.current.delete(sessionId)
         hideWindowsCommandPrompt(sessionId)
+        requestTerminalFocus(sessionId)
       },
     )
 
@@ -761,6 +762,7 @@ function App() {
     agentCli,
     hideWindowsCommandPrompt,
     refreshSkillState,
+    requestTerminalFocus,
     setInitialData,
     updateConfig,
     updateRuntime,
