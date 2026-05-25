@@ -40,6 +40,7 @@ interface TerminalWorkspaceProps {
 
 interface SessionTerminalStackProps {
   sessionId: string
+  cwd: string
   active: boolean
   showWindowsCommandPrompt: boolean
   splitRatio: number
@@ -52,6 +53,7 @@ interface SessionTerminalStackProps {
 
 interface TerminalSurfaceProps {
   terminalId: string
+  cwd: string
   active: boolean
   autoFocus?: boolean
   focusRequestSequence?: number
@@ -360,6 +362,7 @@ export function TerminalWorkspace({
         <SessionTerminalStack
           key={activeSession.config.id}
           sessionId={activeSession.config.id}
+          cwd={activeSession.config.cwd}
           active
           showWindowsCommandPrompt={windowsCommandPromptSessionIds.includes(
             activeSession.config.id,
@@ -378,6 +381,7 @@ export function TerminalWorkspace({
 
 function SessionTerminalStack({
   sessionId,
+  cwd,
   active,
   showWindowsCommandPrompt,
   splitRatio,
@@ -409,6 +413,7 @@ function SessionTerminalStack({
         ) : null}
         <TerminalSurface
           terminalId={sessionId}
+          cwd={cwd}
           active={active}
           autoFocus={shouldAutoFocusAgentTerminal}
           focusRequestSequence={
@@ -437,6 +442,7 @@ function SessionTerminalStack({
             <div className="terminal-pane__header">Windows cmd</div>
             <TerminalSurface
               terminalId={windowsCommandPromptTerminalId}
+              cwd={cwd}
               active={active}
               focusRequestSequence={
                 focusTerminalId === windowsCommandPromptTerminalId
@@ -460,6 +466,7 @@ function SessionTerminalStack({
 
 function TerminalSurface({
   terminalId,
+  cwd,
   active,
   autoFocus = false,
   focusRequestSequence = 0,
@@ -618,7 +625,53 @@ function TerminalSurface({
           return
         }
 
-        fitAddon.fit()
+        // Custom fit that ignores scrollbar width reservation. FitAddon
+        // subtracts scrollbar.width (default 14px) from available width, but
+        // our overlay scrollbar doesn't reduce content area. Recalculate cols
+        // using full parent width so Copilot CLI's sidebar isn't clipped.
+        const parentEl = terminal.element?.parentElement
+        const dims = terminal.dimensions
+        if (
+          !parentEl ||
+          !dims ||
+          dims.css.cell.width === 0 ||
+          dims.css.cell.height === 0
+        ) {
+          fitAddon.fit()
+          void onResizeRef.current(terminal.cols, terminal.rows)
+          return
+        }
+
+        const parentStyle = window.getComputedStyle(parentEl)
+        const parentWidth = Math.max(
+          0,
+          parseInt(parentStyle.getPropertyValue('width')),
+        )
+        const parentHeight = parseInt(
+          parentStyle.getPropertyValue('height'),
+        )
+        const termEl = terminal.element!
+        const termStyle = window.getComputedStyle(termEl)
+        const padX =
+          (parseInt(termStyle.getPropertyValue('padding-left')) || 0) +
+          (parseInt(termStyle.getPropertyValue('padding-right')) || 0)
+        const padY =
+          (parseInt(termStyle.getPropertyValue('padding-top')) || 0) +
+          (parseInt(termStyle.getPropertyValue('padding-bottom')) || 0)
+
+        const cols = Math.max(
+          2,
+          Math.floor((parentWidth - padX) / dims.css.cell.width),
+        )
+        const rows = Math.max(
+          1,
+          Math.floor((parentHeight - padY) / dims.css.cell.height),
+        )
+
+        if (cols !== terminal.cols || rows !== terminal.rows) {
+          terminal.resize(cols, rows)
+        }
+
         void onResizeRef.current(terminal.cols, terminal.rows)
       },
       focus: () => terminal?.focus(),
@@ -709,9 +762,11 @@ function TerminalSurface({
       )
       markdownFileLinks = terminal.registerLinkProvider(
         createMarkdownFileLinkProvider(terminal, (target) => {
-          void window.agentCli.openFileReference(target)
+          void window.agentCli.openFileReference(target, cwd)
         }, (target) => {
           void window.agentCli.openExternalLink(target)
+        }, {
+          baseDir: cwd,
         }),
       )
       detachPasteHandler = attachPlainTextPasteHandler(terminal, {
@@ -820,7 +875,7 @@ function TerminalSurface({
       fitAddonRef.current = null
       fitTerminalRef.current = null
     }
-  }, [terminalId])
+  }, [cwd, terminalId])
 
   useEffect(() => {
     if (!active || !terminalRef.current || !fitAddonRef.current) {
