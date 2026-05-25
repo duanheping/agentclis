@@ -14,12 +14,28 @@ describe('openFileReferenceTarget', () => {
     expect(openPath).toHaveBeenCalledWith('C:/repo/src/main.c')
   })
 
-  it('rejects relative file references', async () => {
+  it('rejects relative file references without a base directory', async () => {
     await expect(
       openFileReferenceTarget('src/main.c', {
         openPath: vi.fn().mockResolvedValue(''),
       }),
-    ).rejects.toThrow('File reference must use an absolute or home-relative path.')
+    ).rejects.toThrow(
+      'File reference must use an absolute, home-relative, or session-relative path.',
+    )
+  })
+
+  it('resolves relative file references against the base directory', async () => {
+    const openPath = vi.fn().mockResolvedValue('')
+
+    await openFileReferenceTarget(
+      'Design_Docs/ECG-213664_CddDrm_findings.md:12',
+      { openPath },
+      { baseDir: 'C:\\repo' },
+    )
+
+    expect(openPath).toHaveBeenCalledWith(
+      'C:\\repo\\Design_Docs\\ECG-213664_CddDrm_findings.md',
+    )
   })
 
   it('expands home-relative file references before opening them', async () => {

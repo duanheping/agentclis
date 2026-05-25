@@ -804,8 +804,8 @@ function registerIpcHandlers(): void {
     (_event, projectPath: string, file: ProjectGitFileChange) =>
       revertProjectGitFile(projectPath, file),
   )
-  ipcMain.handle(IPC_CHANNELS.openFileReference, (_event, target: string) =>
-    openFileReferenceTarget(target, shell),
+  ipcMain.handle(IPC_CHANNELS.openFileReference, (_event, target: string, baseDir?: string) =>
+    openFileReferenceTarget(target, shell, { baseDir }),
   )
   ipcMain.handle(IPC_CHANNELS.listWindowsCommandPrompts, () =>
     windowsCommandPromptManager.listOpenSessionIds(),

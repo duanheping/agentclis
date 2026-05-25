@@ -13,10 +13,15 @@ interface WrappedLineMatchContext {
   segments: WrappedLineSegment[]
 }
 
+interface MarkdownFileLinkProviderOptions {
+  baseDir?: string
+}
+
 export function createMarkdownFileLinkProvider(
   terminal: Pick<Terminal, 'buffer'>,
   onActivate: (target: string) => void,
   onActivateExternal?: (target: string) => void,
+  options: MarkdownFileLinkProviderOptions = {},
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
@@ -27,7 +32,9 @@ export function createMarkdownFileLinkProvider(
       }
 
       const links = [
-        ...findFileReferences(context.text).map((match) => ({
+        ...findFileReferences(context.text, {
+          baseDir: options.baseDir,
+        }).map((match) => ({
           fullMatch: match.fullMatch,
           startIndex: match.startIndex,
           endIndex: match.endIndex,

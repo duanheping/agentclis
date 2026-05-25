@@ -35,6 +35,19 @@ describe('parseFileReferenceTarget', () => {
     expect(parseFileReferenceTarget('https://example.com/test.ts')).toBeNull()
   })
 
+  it('resolves relative file references against a base directory', () => {
+    expect(
+      parseFileReferenceTarget('Design_Docs/ECG-213664_CddDrm_findings.md:12', {
+        baseDir: 'C:\\repo',
+      }),
+    ).toEqual({
+      raw: 'Design_Docs/ECG-213664_CddDrm_findings.md:12',
+      path: 'C:\\repo\\Design_Docs\\ECG-213664_CddDrm_findings.md',
+      line: 12,
+      column: undefined,
+    })
+  })
+
   it('expands home-relative paths when a home directory is provided', () => {
     expect(
       parseFileReferenceTarget('~\\Downloads\\report.md', {
@@ -71,6 +84,29 @@ describe('findMarkdownFileReferences', () => {
       },
     ])
   })
+
+  it('returns markdown links that point at relative file paths with a base directory', () => {
+    expect(
+      findMarkdownFileReferences(
+        'See [findings](Design_Docs/ECG-213664_CddDrm_findings.md).',
+        { baseDir: 'C:\\repo' },
+      ),
+    ).toEqual([
+      {
+        fullMatch: '[findings](Design_Docs/ECG-213664_CddDrm_findings.md)',
+        label: 'findings',
+        href: 'Design_Docs/ECG-213664_CddDrm_findings.md',
+        startIndex: 4,
+        endIndex: 57,
+        target: {
+          raw: 'Design_Docs/ECG-213664_CddDrm_findings.md',
+          path: 'C:\\repo\\Design_Docs\\ECG-213664_CddDrm_findings.md',
+          line: undefined,
+          column: undefined,
+        },
+      },
+    ])
+  })
 })
 
 describe('findPlainFileReferences', () => {
@@ -89,6 +125,22 @@ describe('findPlainFileReferences', () => {
           column: undefined,
         },
       },
+    ])
+  })
+
+  it('finds plain session-relative file paths in terminal text', () => {
+    const matches = findPlainFileReferences(
+      'Saved Design_Docs/ECG-213664_CddDrm_findings.md and AGENTS.md.',
+      { baseDir: 'C:\\repo' },
+    )
+
+    expect(matches.map((match) => match.fullMatch)).toEqual([
+      'Design_Docs/ECG-213664_CddDrm_findings.md',
+      'AGENTS.md',
+    ])
+    expect(matches.map((match) => match.target.path)).toEqual([
+      'C:\\repo\\Design_Docs\\ECG-213664_CddDrm_findings.md',
+      'C:\\repo\\AGENTS.md',
     ])
   })
 })

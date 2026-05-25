@@ -115,8 +115,8 @@ const api: AgentCliApi = {
     ),
   revertProjectGitFile: (projectPath, file) =>
     ipcRenderer.invoke(IPC_CHANNELS.revertProjectGitFile, projectPath, file),
-  openFileReference: (target) =>
-    ipcRenderer.invoke(IPC_CHANNELS.openFileReference, target),
+  openFileReference: (target, baseDir) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openFileReference, target, baseDir),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   listWindowsCommandPrompts: () =>
     ipcRenderer.invoke(IPC_CHANNELS.listWindowsCommandPrompts),

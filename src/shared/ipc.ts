@@ -201,7 +201,7 @@ export interface AgentCliApi {
     projectPath: string,
     file: ProjectGitFileChange,
   ): Promise<void>
-  openFileReference(target: string): Promise<void>
+  openFileReference(target: string, baseDir?: string): Promise<void>
   getPathForFile(file: File): string
   listWindowsCommandPrompts(): Promise<string[]>
   openWindowsCommandPrompt(sessionId: string, cwd: string): Promise<void>

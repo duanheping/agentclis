@@ -94,6 +94,66 @@ describe('createMarkdownFileLinkProvider', () => {
     )
   })
 
+  it('returns clickable plain session-relative file links', () => {
+    const onActivate = vi.fn()
+    const provider = createMarkdownFileLinkProvider(
+      createTerminalBuffer([
+        { text: 'Open Design_Docs/ECG-213664_CddDrm_findings.md now' },
+      ]),
+      onActivate,
+      undefined,
+      { baseDir: 'C:\\repo' },
+    )
+
+    let links: Array<{
+      text: string
+      range: {
+        start: { x: number; y: number }
+        end: { x: number; y: number }
+      }
+      activate: (...args: unknown[]) => void
+    }> = []
+
+    provider.provideLinks(1, (value) => {
+      links = (value ?? []) as unknown as typeof links
+    })
+
+    expect(links).toHaveLength(1)
+    expect(links[0]?.text).toBe('Design_Docs/ECG-213664_CddDrm_findings.md')
+    expect(links[0]?.range.start).toEqual({ x: 6, y: 1 })
+
+    links[0]?.activate(undefined, links[0]?.text)
+    expect(onActivate).toHaveBeenCalledWith(
+      'Design_Docs/ECG-213664_CddDrm_findings.md',
+    )
+  })
+
+  it('returns clickable bare session-relative file links', () => {
+    const onActivate = vi.fn()
+    const provider = createMarkdownFileLinkProvider(
+      createTerminalBuffer([
+        { text: 'Changed AGENTS.md and package.json' },
+      ]),
+      onActivate,
+      undefined,
+      { baseDir: 'C:\\repo' },
+    )
+
+    let links: Array<{
+      text: string
+      activate: (...args: unknown[]) => void
+    }> = []
+
+    provider.provideLinks(1, (value) => {
+      links = (value ?? []) as unknown as typeof links
+    })
+
+    expect(links.map((link) => link.text)).toEqual(['AGENTS.md', 'package.json'])
+
+    links[0]?.activate(undefined, links[0]?.text)
+    expect(onActivate).toHaveBeenCalledWith('AGENTS.md')
+  })
+
   it('returns clickable plain web links that span wrapped lines', () => {
     const onActivateFile = vi.fn()
     const onActivateExternal = vi.fn()

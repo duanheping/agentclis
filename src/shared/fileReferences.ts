@@ -27,11 +27,12 @@ export type FileReferenceMatch =
 
 interface FileReferenceParseOptions {
   homeDir?: string
+  baseDir?: string
 }
 
 const MARKDOWN_LINK_PATTERN = /\[([^\]\r\n]+)\]\(([^)\r\n]+)\)/gu
 const PLAIN_FILE_REFERENCE_PATTERN =
-  /(?:^|[\s([{"'])((?:~[\\/]|[a-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+[\\/]|\/)\S*)/giu
+  /(?:^|[\s([{"'])((?:~[\\/]|[a-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+[\\/]|\/|\.{1,2}[\\/]|[^\s\\/:"'<>|?*]+[\\/]|[a-z0-9_.@+-]+\.[a-z][a-z0-9+_-]*)\S*)/giu
 const HASH_LINE_SUFFIX_PATTERN = /#L(?<line>\d+)(?:C(?<column>\d+))?$/u
 const COLON_LINE_SUFFIX_PATTERN = /:(?<line>\d+)(?::(?<column>\d+))?$/u
 const TRAILING_PUNCTUATION_PATTERN = /[)\]}>,.;!?'"`]+$/u
@@ -46,7 +47,7 @@ export function parseFileReferenceTarget(
   }
 
   const { path, line, column } = splitPathAndLocation(normalized)
-  const resolvedPath = resolveFilePath(path, options.homeDir)
+  const resolvedPath = resolveFilePath(path, options.homeDir, options.baseDir)
   if (!resolvedPath) {
     return null
   }
@@ -59,7 +60,10 @@ export function parseFileReferenceTarget(
   }
 }
 
-export function findMarkdownFileReferences(text: string): MarkdownFileReferenceMatch[] {
+export function findMarkdownFileReferences(
+  text: string,
+  options: FileReferenceParseOptions = {},
+): MarkdownFileReferenceMatch[] {
   const matches: MarkdownFileReferenceMatch[] = []
 
   for (const match of text.matchAll(MARKDOWN_LINK_PATTERN)) {
@@ -71,7 +75,7 @@ export function findMarkdownFileReferences(text: string): MarkdownFileReferenceM
       continue
     }
 
-    const target = parseFileReferenceTarget(href)
+    const target = parseFileReferenceTarget(href, options)
     if (!target) {
       continue
     }
@@ -89,8 +93,11 @@ export function findMarkdownFileReferences(text: string): MarkdownFileReferenceM
   return matches
 }
 
-export function findPlainFileReferences(text: string): PlainFileReferenceMatch[] {
-  const markdownMatches = findMarkdownFileReferences(text)
+export function findPlainFileReferences(
+  text: string,
+  options: FileReferenceParseOptions = {},
+): PlainFileReferenceMatch[] {
+  const markdownMatches = findMarkdownFileReferences(text, options)
   const matches: PlainFileReferenceMatch[] = []
 
   for (const match of text.matchAll(PLAIN_FILE_REFERENCE_PATTERN)) {
@@ -102,7 +109,7 @@ export function findPlainFileReferences(text: string): PlainFileReferenceMatch[]
     }
 
     const candidateStartIndex = startIndex + fullMatch.length - candidate.length
-    const trimmed = trimPlainFileReferenceCandidate(candidate)
+    const trimmed = trimPlainFileReferenceCandidate(candidate, options)
     if (!trimmed) {
       continue
     }
@@ -123,9 +130,12 @@ export function findPlainFileReferences(text: string): PlainFileReferenceMatch[]
   return matches
 }
 
-export function findFileReferences(text: string): FileReferenceMatch[] {
-  const markdownMatches = findMarkdownFileReferences(text)
-  const plainMatches = findPlainFileReferences(text)
+export function findFileReferences(
+  text: string,
+  options: FileReferenceParseOptions = {},
+): FileReferenceMatch[] {
+  const markdownMatches = findMarkdownFileReferences(text, options)
+  const plainMatches = findPlainFileReferences(text, options)
 
   return [...markdownMatches, ...plainMatches].sort(
     (left, right) => left.startIndex - right.startIndex,
@@ -156,7 +166,11 @@ function splitPathAndLocation(
   return { path: value }
 }
 
-function resolveFilePath(value: string, homeDir?: string): string | null {
+function resolveFilePath(
+  value: string,
+  homeDir?: string,
+  baseDir?: string,
+): string | null {
   if (isAbsoluteFilePath(value)) {
     return value
   }
@@ -167,6 +181,14 @@ function resolveFilePath(value: string, homeDir?: string): string | null {
     }
 
     return joinHomeRelativePath(homeDir, value)
+  }
+
+  if (isRelativeFilePath(value)) {
+    if (!baseDir?.trim()) {
+      return null
+    }
+
+    return joinRelativePath(baseDir, value)
   }
 
   if (!value.startsWith('file://')) {
@@ -202,6 +224,14 @@ function isHomeRelativeFilePath(value: string): boolean {
   return /^~[\\/]/u.test(value)
 }
 
+function isRelativeFilePath(value: string): boolean {
+  if (!value || /^[a-z][a-z0-9+.-]*:/iu.test(value)) {
+    return false
+  }
+
+  return /[\\/]/u.test(value) || looksLikeFileReferencePath(value)
+}
+
 function joinHomeRelativePath(homeDir: string, value: string): string {
   const trimmedHomeDir = homeDir.trim().replace(/[\\/]+$/u, '')
   const suffix = value.slice(1).replace(/^[\\/]+/u, '')
@@ -213,21 +243,37 @@ function joinHomeRelativePath(homeDir: string, value: string): string {
   return `${trimmedHomeDir}${separator}${suffix.replace(/[\\/]/gu, separator)}`
 }
 
+function joinRelativePath(baseDir: string, value: string): string {
+  const trimmedBaseDir = baseDir.trim().replace(/[\\/]+$/u, '')
+  const separator = trimmedBaseDir.includes('\\') ? '\\' : '/'
+  const suffix = value
+    .replace(/^\.[\\/]/u, '')
+    .replace(/[\\/]/gu, separator)
+
+  if (!suffix || suffix === '.') {
+    return trimmedBaseDir
+  }
+
+  return `${trimmedBaseDir}${separator}${suffix}`
+}
+
 function trimPlainFileReferenceCandidate(
   value: string,
+  options: FileReferenceParseOptions,
 ): { fullMatch: string; target: FileReferenceTarget } | null {
   let candidate = value
 
   while (candidate) {
-    const target = parseFileReferenceTarget(candidate)
+    const parseCandidate = candidate.replace(TRAILING_PUNCTUATION_PATTERN, '')
+    const target = parseFileReferenceTarget(parseCandidate || candidate, options)
     if (target && looksLikeFileReferencePath(target.path)) {
       return {
-        fullMatch: candidate,
+        fullMatch: parseCandidate || candidate,
         target,
       }
     }
 
-    const trimmedCandidate = candidate.replace(TRAILING_PUNCTUATION_PATTERN, '')
+    const trimmedCandidate = parseCandidate
     if (trimmedCandidate === candidate) {
       break
     }
@@ -250,10 +296,15 @@ function looksLikeFileReferencePath(value: string): boolean {
   }
 
   const extensionSeparatorIndex = basename.lastIndexOf('.')
-  return (
-    extensionSeparatorIndex > 0 &&
-    extensionSeparatorIndex < basename.length - 1
-  )
+  if (
+    extensionSeparatorIndex <= 0 ||
+    extensionSeparatorIndex >= basename.length - 1
+  ) {
+    return false
+  }
+
+  const extension = basename.slice(extensionSeparatorIndex + 1)
+  return /[a-z]/iu.test(extension)
 }
 
 function overlapsExistingMatch(
