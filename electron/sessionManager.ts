@@ -2748,6 +2748,8 @@ export class SessionManager {
       return startIndex
     }
 
+    // CSI sequences: \x1b[ ... <final byte '@'-'~'>
+    // SS3 sequences: \x1bO <single char>
     if (data[index] === '[' || data[index] === 'O') {
       index += 1
       while (index < data.length) {
@@ -2758,6 +2760,26 @@ export class SessionManager {
 
         index += 1
       }
+
+      return index - 1
+    }
+
+    // OSC sequences: \x1b] ... terminated by BEL (\x07) or ST (\x1b\\)
+    if (data[index] === ']') {
+      index += 1
+      while (index < data.length) {
+        if (data[index] === '\u0007') {
+          return index
+        }
+
+        if (data[index] === '\u001b' && data[index + 1] === '\\') {
+          return index + 1
+        }
+
+        index += 1
+      }
+
+      return index - 1
     }
 
     return index
