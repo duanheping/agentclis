@@ -154,7 +154,9 @@ export function extractCopilotSessionMeta(content: string): CopilotSessionMeta |
   const cwd = findYamlValue(content, 'cwd')
   const timestamp =
     findYamlValue(content, 'created_at') ?? findYamlValue(content, 'updated_at')
-  const summary = findYamlValue(content, 'summary')?.trim()
+  const summary =
+    findYamlValue(content, 'summary')?.trim() ||
+    findYamlValue(content, 'name')?.trim()
 
   if (!sessionId || !cwd || !timestamp) {
     return null
