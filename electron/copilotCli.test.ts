@@ -46,6 +46,24 @@ describe('copilotCli', () => {
     })
   })
 
+  it('uses the Copilot workspace name when summary is not present', () => {
+    expect(
+      extractCopilotSessionMeta(
+        [
+          'id: 938fdaf9-c35d-42ab-bca3-566ab3d91f79',
+          'cwd: C:\\Users\\hduan10\\Documents\\repo\\MSAR43_S32G',
+          'name: Update PR 7629 Using Template',
+          'created_at: 2026-05-28T17:46:41.908Z',
+        ].join('\n'),
+      ),
+    ).toEqual({
+      sessionId: '938fdaf9-c35d-42ab-bca3-566ab3d91f79',
+      timestamp: '2026-05-28T17:46:41.908Z',
+      cwd: 'C:\\Users\\hduan10\\Documents\\repo\\MSAR43_S32G',
+      summary: 'Update PR 7629 Using Template',
+    })
+  })
+
   it('rejects non-copilot executables', () => {
     expect(supportsCopilotSessionResume('node index.js')).toBe(false)
     expect(supportsCopilotSessionResume('codex --model gpt')).toBe(false)

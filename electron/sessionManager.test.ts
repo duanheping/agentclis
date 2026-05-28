@@ -131,7 +131,7 @@ const mocks = vi.hoisted(() => {
     onExit: vi.fn(),
   })
   const terminals: Array<ReturnType<typeof createTerminal>> = []
-  const spawn = vi.fn((shell: unknown, args: unknown, options: unknown) => {
+  const spawn = vi.fn((_shell: unknown, args: unknown, options: unknown) => {
     const terminal = createTerminal()
     terminals.push(terminal)
     maybeProvisionManagedSession(args, options)
@@ -180,7 +180,7 @@ const mocks = vi.hoisted(() => {
       terminals.length = 0
       mocks.killTerminalProcessTree.mockReset()
       spawn.mockReset()
-      spawn.mockImplementation((shell: unknown, args: unknown, options: unknown) => {
+      spawn.mockImplementation((_shell: unknown, args: unknown, options: unknown) => {
         const terminal = createTerminal()
         terminals.push(terminal)
         maybeProvisionManagedSession(args, options)
@@ -1902,6 +1902,51 @@ describe('SessionManager project lifecycle', () => {
     })
   })
 
+  it('ignores xterm DCS responses while deriving first prompt titles', async () => {
+    const onConfig = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'copilot',
+    })
+
+    manager.writeToSession(
+      session.config.id,
+      '\u001bP>|xterm.js(6.1.0-beta.19)\u001b\\',
+    )
+    manager.writeToSession(
+      session.config.id,
+      "use repo's default pr template to update #7629",
+    )
+    manager.writeToSession(session.config.id, '\r')
+
+    const renamedSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )
+
+    expect(renamedSession?.config.title).toBe(
+      "use repo's default pr template to update #7629",
+    )
+    expect(renamedSession?.config.pendingFirstPromptTitle).toBe(false)
+    expect(onConfig).toHaveBeenCalledWith({
+      sessionId: session.config.id,
+      config: expect.objectContaining({
+        id: session.config.id,
+        title: "use repo's default pr template to update #7629",
+        pendingFirstPromptTitle: false,
+      }),
+    })
+  })
+
   it('does not override a manual title with the first prompt', async () => {
     const onConfig = vi.fn()
     const manager = new SessionManager({
@@ -2467,6 +2512,75 @@ describe('SessionManager project lifecycle', () => {
         }
       ).sessions[0]?.title,
     ).toBe('Review ECG2 Callout Analysis')
+  })
+
+  it('repairs Copilot titles polluted by terminal control responses from workspace names', () => {
+    const externalSessionId = '33301b34-0c7c-4968-aa11-cc87fe2bdea4'
+    const workspaceFilePath = path.join(
+      os.homedir(),
+      '.copilot',
+      'session-state',
+      externalSessionId,
+      'workspace.yaml',
+    )
+
+    mocks.setFile(
+      workspaceFilePath,
+      [
+        `id: ${externalSessionId}`,
+        'cwd: C:\\repo',
+        'name: Update PR 7629 Using Template',
+        'created_at: 2026-05-28T17:46:41.908Z',
+      ].join('\n'),
+    )
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-05-28T17:46:32.043Z',
+          updatedAt: '2026-05-28T17:48:55.564Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-1',
+          projectId: 'project-1',
+          title: ">|xterm.js(6.1.0-beta.19use repo's default pr template",
+          startupCommand: 'copilot',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+          createdAt: '2026-05-28T17:46:32.043Z',
+          updatedAt: '2026-05-28T17:48:28.564Z',
+          externalSession: {
+            provider: 'copilot',
+            sessionId: externalSessionId,
+          },
+        },
+      ],
+      activeSessionId: 'session-1',
+    })
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const hydratedSession = manager.listSessions().projects[0]?.sessions[0]
+
+    expect(hydratedSession?.config.title).toBe('Update PR 7629 Using Template')
+    expect(hydratedSession?.config.pendingFirstPromptTitle).toBe(false)
+    expect(
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{ title: string }>
+        }
+      ).sessions[0]?.title,
+    ).toBe('Update PR 7629 Using Template')
   })
 
   it('fails restoring a Copilot session without a stored id even when matching event logs exist', async () => {
@@ -3738,7 +3852,7 @@ describe('SessionManager logical project identity and project context', () => {
             source: 'pty',
             chunk: 'latest reply',
           },
-        ],
+        ] satisfies TranscriptEvent[],
         nextCursor: '4',
       })),
     }
@@ -4042,7 +4156,7 @@ describe('SessionManager logical project identity and project context', () => {
 
     const transcriptStore = {
       append: vi.fn(async () => undefined),
-      readTailEvents: vi.fn(async () => [
+      readTailEvents: vi.fn(async (): Promise<TranscriptEvent[]> => [
         {
           id: 'event-1',
           sessionId: 'session-a',

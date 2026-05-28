@@ -205,13 +205,25 @@ function isPathLikeSessionTitle(title: string): boolean {
   )
 }
 
+function isTerminalControlResponseTitle(title: string): boolean {
+  const normalized = title.trim()
+  return (
+    /^>\|xterm\.js\(/iu.test(normalized) ||
+    /^(?:\d+;)*\d+;rgb:[0-9a-f]{1,4}\/[0-9a-f]{1,4}\/[0-9a-f]{1,4}/iu
+      .test(normalized)
+  )
+}
+
 function isMeaningfulSessionTitleCandidate(title: string): boolean {
   const normalized = title.trim()
   if (!normalized) {
     return false
   }
 
-  if (isPathLikeSessionTitle(normalized)) {
+  if (
+    isPathLikeSessionTitle(normalized) ||
+    isTerminalControlResponseTitle(normalized)
+  ) {
     return false
   }
 
@@ -2764,8 +2776,16 @@ export class SessionManager {
       return index - 1
     }
 
-    // OSC sequences: \x1b] ... terminated by BEL (\x07) or ST (\x1b\\)
-    if (data[index] === ']') {
+    // OSC/DCS/SOS/PM/APC strings: \x1b] / \x1bP / \x1bX / \x1b^ / \x1b_
+    // terminated by BEL (\x07) or ST (\x1b\\). Copilot probes xterm.js with
+    // DCS; without skipping it, the terminal reply can become the session title.
+    if (
+      data[index] === ']' ||
+      data[index] === 'P' ||
+      data[index] === 'X' ||
+      data[index] === '^' ||
+      data[index] === '_'
+    ) {
       index += 1
       while (index < data.length) {
         if (data[index] === '\u0007') {
