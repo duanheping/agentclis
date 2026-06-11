@@ -713,6 +713,9 @@ function TerminalSurface({
         windowsPty: {
           backend: 'conpty',
         },
+        vtExtensions: {
+          kittyKeyboard: true,
+        },
         theme: {
           background: '#161616',
           foreground: '#e8e8ea',

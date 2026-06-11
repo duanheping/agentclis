@@ -55,24 +55,24 @@ describe('getTerminalShortcutInput', () => {
     ).toBe('\n')
   })
 
-  it('maps Ctrl+Enter to a newline', () => {
+  it('does not intercept Ctrl+Enter', () => {
     expect(
       getTerminalShortcutInput(
         createKeyboardEvent({
           ctrlKey: true,
         }),
       ),
-    ).toBe('\n')
+    ).toBeNull()
   })
 
-  it('maps Shift+Enter to a newline', () => {
+  it('does not intercept Shift+Enter', () => {
     expect(
       getTerminalShortcutInput(
         createKeyboardEvent({
           shiftKey: true,
         }),
       ),
-    ).toBe('\n')
+    ).toBeNull()
   })
 
   it('does not intercept plain Enter', () => {
