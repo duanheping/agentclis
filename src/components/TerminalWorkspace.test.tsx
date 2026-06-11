@@ -360,6 +360,9 @@ describe('TerminalWorkspace', () => {
       expect(mockTerminalConstructor).toHaveBeenCalledWith(
         expect.objectContaining({
           scrollback: 50_000,
+          vtExtensions: {
+            kittyKeyboard: true,
+          },
           windowsPty: {
             backend: 'conpty',
           },
@@ -390,7 +393,7 @@ describe('TerminalWorkspace', () => {
     expect(window.agentCli.writeToSession).toHaveBeenCalledWith('session-1', ' ')
   })
 
-  it('forwards Ctrl+Enter as a newline through the terminal shortcut handler', async () => {
+  it('lets Ctrl+Enter pass through to xterm keyboard handling', async () => {
     render(
       <TerminalWorkspace
         sessions={[buildSession()]}
@@ -408,10 +411,10 @@ describe('TerminalWorkspace', () => {
     })
     const handled = terminalInstances[0]!.customKeyHandler!(event)
 
-    expect(handled).toBe(false)
-    expect(event.preventDefault).toHaveBeenCalled()
-    expect(event.stopPropagation).toHaveBeenCalled()
-    expect(window.agentCli.writeToSession).toHaveBeenCalledWith('session-1', '\n')
+    expect(handled).toBe(true)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
+    expect(window.agentCli.writeToSession).not.toHaveBeenCalled()
   })
 
   it('forwards Ctrl+Space as a newline through the terminal shortcut handler', async () => {
