@@ -2064,6 +2064,37 @@ describe('SessionManager project lifecycle', () => {
     })
   })
 
+  it('uses the first submitted prompt as the title for opencode sessions', async () => {
+    const onConfig = vi.fn()
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    const session = await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'opencode',
+    })
+
+    expect(session.config.title).toBe('opencode')
+    expect(session.config.pendingFirstPromptTitle).toBe(true)
+
+    manager.writeToSession(session.config.id, 'add opencode support')
+    manager.writeToSession(session.config.id, '\r')
+
+    const renamedSession = manager
+      .listSessions()
+      .projects[0]?.sessions.find(
+        (entry) => entry.config.id === session.config.id,
+      )
+
+    expect(renamedSession?.config.title).toBe('add opencode support')
+    expect(renamedSession?.config.pendingFirstPromptTitle).toBe(false)
+  })
+
   it('ignores xterm DCS responses while deriving first prompt titles', async () => {
     const onConfig = vi.fn()
     const manager = new SessionManager({
