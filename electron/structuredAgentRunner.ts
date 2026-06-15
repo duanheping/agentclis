@@ -512,7 +512,6 @@ async function runOpencodeStructured(input: {
       'run',
       '--format',
       'json',
-      '--dangerously-skip-permissions',
       `Read and follow all instructions in the file at ${promptPath}.`,
     ],
     null,
@@ -683,7 +682,6 @@ function buildAnalysisScript(input: {
       [
         '& opencode run',
         '--format json',
-        '--dangerously-skip-permissions',
         q(`Read and follow all instructions in the file at ${input.promptPath}.`),
       ].join(' '),
     )

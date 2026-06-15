@@ -401,7 +401,7 @@ describe('structuredAgentRunner shutdown handling', () => {
       const script = await readFile(scriptPath, 'utf8')
       expect(script).toContain('opencode run')
       expect(script).toContain('--format json')
-      expect(script).toContain('--dangerously-skip-permissions')
+      expect(script).not.toContain('--dangerously-skip-permissions')
       expect(script).toContain('Read and follow all instructions in the file at')
     } else {
       expect(spawnCall[0]).toBe('opencode')
@@ -410,9 +410,9 @@ describe('structuredAgentRunner shutdown handling', () => {
           'run',
           '--format',
           'json',
-          '--dangerously-skip-permissions',
         ]),
       )
+      expect(spawnCall[1]).not.toContain('--dangerously-skip-permissions')
     }
 
     mocks.children[0]?.emit('close', 1)

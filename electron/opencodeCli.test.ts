@@ -46,16 +46,15 @@ describe('opencodeCli', () => {
     )
   })
 
-  it('adds full-access flag when requested', () => {
-    expect(withOpencodeFullAccess('opencode --model m')).toBe(
-      'opencode --model m --dangerously-skip-permissions',
-    )
+  it('leaves the TUI command unchanged for full-access (no CLI bypass flag)', () => {
+    // The opencode TUI launcher has no permission-bypass flag, so full-access
+    // is a no-op on the command line.
+    expect(withOpencodeFullAccess('opencode --model m')).toBe('opencode --model m')
+    expect(withOpencodeFullAccess('opencode')).toBe('opencode')
   })
 
-  it('does not duplicate an existing full-access flag', () => {
-    expect(
-      withOpencodeFullAccess('opencode --dangerously-skip-permissions'),
-    ).toBe('opencode --dangerously-skip-permissions')
+  it('returns null from withOpencodeFullAccess for non-opencode commands', () => {
+    expect(withOpencodeFullAccess('node index.js')).toBeNull()
   })
 
   it('rejects non-opencode executables', () => {

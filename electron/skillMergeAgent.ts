@@ -635,7 +635,6 @@ async function runOpencodeStructured(
       'run',
       '--format',
       'json',
-      '--dangerously-skip-permissions',
       structuredPrompt,
     ],
     null,

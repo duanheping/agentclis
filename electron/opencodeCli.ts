@@ -48,8 +48,6 @@ const FLAG_OPTIONS = new Set([
   '--fork',
   '--mdns',
   '--print-logs',
-  '--pure',
-  '--dangerously-skip-permissions',
 ])
 
 // Options that take a single value (either `--opt value` or `--opt=value`).
@@ -99,18 +97,22 @@ export function buildOpencodeResumeCommand(
   ])
 }
 
+/**
+ * Full-access for the opencode TUI is a no-op on the command line.
+ *
+ * Unlike `opencode run`, the interactive TUI launcher exposes no permission
+ * bypass flag (`--dangerously-skip-permissions` is rejected as unknown), and
+ * permissions are governed by opencode's own config / OPENCODE_PERMISSION env.
+ * We therefore validate the command but leave it unchanged so the session
+ * still launches; opencode handles permission prompts itself.
+ */
 export function withOpencodeFullAccess(command: string): string | null {
   const parsed = parseOpencodeCommand(command)
   if (!parsed) {
     return null
   }
 
-  const resumeOptions = [...parsed.resumeOptions]
-  if (!parsed.optionNames.has('--dangerously-skip-permissions')) {
-    resumeOptions.push('--dangerously-skip-permissions')
-  }
-
-  return joinCommandTokens([parsed.executable, ...resumeOptions])
+  return joinCommandTokens([parsed.executable, ...parsed.resumeOptions])
 }
 
 /**
