@@ -461,6 +461,67 @@ async function runCopilotStructured(input: {
   )
 }
 
+function buildOpencodePromptContent(input: {
+  prompt: string
+  schema: string
+  outputPath?: string
+}): string {
+  const parts = [input.prompt.trimEnd()]
+  const schema = input.schema.trim()
+
+  if (schema) {
+    parts.push('', 'JSON schema to follow:', schema)
+  }
+
+  if (input.outputPath) {
+    parts.push(
+      '',
+      `Write your complete JSON response to the file: ${input.outputPath}`,
+      'Do not print the raw JSON in your conversation response — only write it to that file.',
+    )
+  } else {
+    parts.push('', 'Return only JSON. Do not wrap it in markdown.')
+  }
+
+  return parts.join('\n')
+}
+
+async function runOpencodeStructured(input: {
+  tempRoot: string
+  schema: string
+  prompt: string
+  contextDirectories: string[]
+}): Promise<string> {
+  const outputPath = path.join(input.tempRoot, 'response.json')
+  const promptPath = path.join(input.tempRoot, 'opencode-prompt.txt')
+  await writeFile(
+    promptPath,
+    buildOpencodePromptContent({
+      prompt: input.prompt,
+      schema: input.schema,
+      outputPath,
+    }),
+    'utf8',
+  )
+
+  const workingDirectory = input.contextDirectories[0] ?? input.tempRoot
+  const stdout = await runCommand(
+    'opencode',
+    workingDirectory,
+    [
+      'run',
+      '--format',
+      'json',
+      '--dangerously-skip-permissions',
+      `Read and follow all instructions in the file at ${promptPath}.`,
+    ],
+    null,
+  )
+
+  const fileOutput = await readFile(outputPath, 'utf8').catch(() => '')
+  return pickBestStructuredOutput(fileOutput, stdout)
+}
+
 export async function runStructuredAgent(input: {
   agent: SkillAiMergeAgent
   schema: string
@@ -493,6 +554,15 @@ export async function runStructuredAgent(input: {
         prompt: input.prompt,
         contextDirectories,
         tempRoot,
+      })
+    }
+
+    if (input.agent === 'opencode') {
+      return await runOpencodeStructured({
+        tempRoot,
+        schema: input.schema,
+        prompt: input.prompt,
+        contextDirectories,
       })
     }
 
@@ -536,7 +606,13 @@ export async function prepareStructuredAgent(input: {
       schema: input.schema,
       outputPath,
     })
-    : input.prompt
+    : input.agent === 'opencode'
+      ? buildOpencodePromptContent({
+        prompt: input.prompt,
+        schema: input.schema,
+        outputPath,
+      })
+      : input.prompt
   await writeFile(promptPath, promptContent, 'utf8')
 
   const scriptContent = buildAnalysisScript({
@@ -554,9 +630,12 @@ export async function prepareStructuredAgent(input: {
     tempRoot,
     outputPath,
     startupCommand,
-    cwd: input.agent === 'claude' || input.agent === 'copilot'
-      ? (contextDirectories[0] ?? tempRoot)
-      : tempRoot,
+    cwd:
+      input.agent === 'claude' ||
+      input.agent === 'copilot' ||
+      input.agent === 'opencode'
+        ? (contextDirectories[0] ?? tempRoot)
+        : tempRoot,
   }
 }
 
@@ -598,6 +677,15 @@ function buildAnalysisScript(input: {
         `> ${q(input.outputPath)}`,
       ].join(' '),
       `Write-Host 'Analysis complete.' -ForegroundColor Green`,
+    )
+  } else if (input.agent === 'opencode') {
+    lines.push(
+      [
+        '& opencode run',
+        '--format json',
+        '--dangerously-skip-permissions',
+        q(`Read and follow all instructions in the file at ${input.promptPath}.`),
+      ].join(' '),
     )
   } else {
     const dirArgs = input.contextDirectories

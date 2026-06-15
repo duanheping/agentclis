@@ -1,9 +1,10 @@
 import type { ProjectMemoryMode } from '../src/shared/session'
 import { supportsCodexSessionResume } from './codexCli'
 import { supportsCopilotSessionResume } from './copilotCli'
+import { supportsOpencodeSessionResume } from './opencodeCli'
 
 export interface ProviderProjectMemoryCapability {
-  provider: 'codex' | 'copilot' | null
+  provider: 'codex' | 'copilot' | 'opencode' | null
   mode: ProjectMemoryMode
   supportsHiddenSessionStart: boolean
   supportsHiddenPromptUpdate: boolean
@@ -33,12 +34,22 @@ export function resolveProjectMemoryCapability(
     }
   }
 
+  if (supportsOpencodeSessionResume(startupCommand)) {
+    return {
+      provider: 'opencode',
+      mode: 'opencode-instructions',
+      supportsHiddenSessionStart: true,
+      supportsHiddenPromptUpdate: false,
+      fallbackReason: null,
+    }
+  }
+
   return {
     provider: null,
     mode: 'unsupported',
     supportsHiddenSessionStart: false,
     supportsHiddenPromptUpdate: false,
     fallbackReason:
-      'Hidden project memory is currently supported only for Codex and Copilot sessions.',
+      'Hidden project memory is currently supported only for Codex, Copilot, and opencode sessions.',
   }
 }

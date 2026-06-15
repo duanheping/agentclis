@@ -1,8 +1,10 @@
+import { execFile } from 'node:child_process'
 import { readFileSync, type Dirent } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 
 import Store from 'electron-store'
 
@@ -42,6 +44,8 @@ import {
   reduceCodexAttentionState,
   reduceCopilotAwaitingResponseState,
   reduceCopilotAttentionState,
+  reduceOpencodeAttentionState,
+  reduceOpencodeAwaitingResponseState,
 } from '../src/shared/sessionAttention'
 import type {
   ProjectLocation,
@@ -60,9 +64,19 @@ import {
   withCodexDangerousBypass,
 } from './codexCli'
 import {
+  buildOpencodeResumeCommand,
+  extractOpencodeSessionMeta,
+  supportsOpencodeSessionResume,
+  withOpencodeFullAccess,
+} from './opencodeCli'
+import {
   injectCodexInstructions,
   removeCodexInstructions,
 } from './codexInstructions'
+import {
+  injectOpencodeInstructions,
+  removeOpencodeInstructions,
+} from './opencodeInstructions'
 import {
   injectCopilotInstructions,
   removeCopilotInstructions,
@@ -94,7 +108,7 @@ import { killTerminalProcessTree } from './ptyProcessTree'
 type IPty = import('node-pty').IPty
 
 interface DetectedExternalSession {
-  provider: 'codex' | 'copilot'
+  provider: 'codex' | 'copilot' | 'opencode'
   sessionId: string
   timestamp: string
   cwd: string
@@ -106,7 +120,7 @@ interface DetectedExternalSession {
 }
 
 interface ExternalSessionAttentionTracker {
-  provider: 'codex' | 'copilot'
+  provider: 'codex' | 'copilot' | 'opencode'
   externalSessionId: string
   filePath: string
   interval: NodeJS.Timeout
@@ -128,6 +142,31 @@ type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
 
 const CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions')
 const COPILOT_SESSIONS_ROOT = path.join(os.homedir(), '.copilot', 'session-state')
+const OPENCODE_SESSION_LIST_LIMIT = 64
+const OPENCODE_SESSION_QUERY_TIMEOUT_MS = 10_000
+const OPENCODE_SESSION_DISCOVERY_RETRY_DELAYS_MS = Array.from(
+  { length: 23 },
+  () => 750,
+)
+const execFileAsync = promisify(execFile)
+
+/**
+ * Resolve the opencode executable name from a managed startup command so that
+ * DB queries (`opencode session list`) use the same binary the user launched.
+ */
+function resolveOpencodeExecutable(command: string): string {
+  const trimmed = command.trim()
+  if (!trimmed) {
+    return 'opencode'
+  }
+
+  const firstToken =
+    trimmed.startsWith('"')
+      ? trimmed.slice(1, trimmed.indexOf('"', 1))
+      : trimmed.split(/\s+/u)[0]
+
+  return firstToken || 'opencode'
+}
 const CODEX_SESSION_FILE_PREFIX_BYTES = 4096
 const EXTERNAL_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
 const COPILOT_SESSION_DISCOVERY_RETRY_DELAYS_MS = Array.from(
@@ -406,6 +445,8 @@ export class SessionManager {
   private readonly copilotInstructionSnapshots = new Map<string, string>()
   private readonly codexInstructionsState = new Map<string, { cwd: string }>()
   private readonly codexInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
+  private readonly opencodeInstructionsState = new Map<string, { cwd: string }>()
+  private readonly opencodeInstructionsCwdRefs = new Map<string, { count: number, created: boolean }>()
   private readonly touchRuntimeTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly inputTranscriptBuffers = new Map<string, string[]>()
   private readonly inputTranscriptTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -875,6 +916,7 @@ export class SessionManager {
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
     this.cleanupCodexInstructions(id)
+    this.cleanupOpencodeInstructions(id)
     this.cancelScheduledSessionStart(id)
     this.releaseExternalSession(closingConfig)
     this.copilotInstructionSnapshots.delete(id)
@@ -981,6 +1023,10 @@ export class SessionManager {
     for (const sessionId of this.codexInstructionsState.keys()) {
       this.cleanupCodexInstructions(sessionId)
     }
+
+    for (const sessionId of this.opencodeInstructionsState.keys()) {
+      this.cleanupOpencodeInstructions(sessionId)
+    }
   }
 
   private async startSession(
@@ -1000,6 +1046,7 @@ export class SessionManager {
     this.pendingFirstPromptBuffers.delete(config.id)
     this.cleanupCopilotInstructions(config.id)
     this.cleanupCodexInstructions(config.id)
+    this.cleanupOpencodeInstructions(config.id)
     this.clearLiveAttentionBuffer(config.id)
     this.setRuntime(config.id, {
       attention: null,
@@ -1293,6 +1340,12 @@ export class SessionManager {
           command,
           config.externalSession.sessionId,
         ) ?? command
+    } else if (config.externalSession?.provider === 'opencode') {
+      command =
+        buildOpencodeResumeCommand(
+          command,
+          config.externalSession.sessionId,
+        ) ?? command
     }
 
     // Inject project memory via provider-native mechanisms
@@ -1342,6 +1395,18 @@ export class SessionManager {
         this.copilotInstructionsCwdRefs.set(normalizedCwd, {
           count: (existing?.count ?? 0) + 1,
           // Only treat as "created" if the very first session created it
+          created: existing ? existing.created : result.created,
+        })
+        return command
+      }
+
+      if (mode === 'opencode-instructions') {
+        const normalizedCwd = this.normalizePath(config.cwd)
+        const existing = this.opencodeInstructionsCwdRefs.get(normalizedCwd)
+        const result = injectOpencodeInstructions(config.cwd, memoryText)
+        this.opencodeInstructionsState.set(config.id, { cwd: config.cwd })
+        this.opencodeInstructionsCwdRefs.set(normalizedCwd, {
+          count: (existing?.count ?? 0) + 1,
           created: existing ? existing.created : result.created,
         })
         return command
@@ -1448,6 +1513,29 @@ export class SessionManager {
     }
   }
 
+  private cleanupOpencodeInstructions(sessionId: string): void {
+    const state = this.opencodeInstructionsState.get(sessionId)
+    if (!state) return
+    this.opencodeInstructionsState.delete(sessionId)
+
+    const normalizedCwd = this.normalizePath(state.cwd)
+    const ref = this.opencodeInstructionsCwdRefs.get(normalizedCwd)
+    if (!ref) return
+
+    ref.count -= 1
+    if (ref.count > 0) return
+
+    this.opencodeInstructionsCwdRefs.delete(normalizedCwd)
+    try {
+      removeOpencodeInstructions(state.cwd, ref.created)
+    } catch (err) {
+      console.warn(
+        `[project-memory] Failed to clean up opencode instructions for session ${sessionId}:`,
+        err,
+      )
+    }
+  }
+
   private applyPermissionFlags(
     command: string,
     config: SessionConfig,
@@ -1465,6 +1553,10 @@ export class SessionManager {
       provider === 'codex'
     ) {
       return withCodexDangerousBypass(command) ?? command
+    }
+
+    if (provider === 'opencode') {
+      return withOpencodeFullAccess(command) ?? command
     }
 
     return command
@@ -1526,13 +1618,17 @@ export class SessionManager {
 
   private detectResumableProvider(
     command: string,
-  ): 'codex' | 'copilot' | null {
+  ): 'codex' | 'copilot' | 'opencode' | null {
     if (supportsCodexSessionResume(command)) {
       return 'codex'
     }
 
     if (supportsCopilotSessionResume(command)) {
       return 'copilot'
+    }
+
+    if (supportsOpencodeSessionResume(command)) {
+      return 'opencode'
     }
 
     return null
@@ -1545,7 +1641,7 @@ export class SessionManager {
     } = {},
   ): Promise<{
     config: SessionConfig
-    provider: 'codex' | 'copilot' | null
+    provider: 'codex' | 'copilot' | 'opencode' | null
     bindAfterLaunch: boolean
   }> {
     const provider = this.detectResumableProvider(config.startupCommand)
@@ -1587,7 +1683,7 @@ export class SessionManager {
 
   private async pollForExternalSessionRef(
     sessionId: string,
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     startedAt: number,
     attempt = 0,
   ): Promise<void> {
@@ -1640,20 +1736,22 @@ export class SessionManager {
   }
 
   private getExternalSessionDiscoveryRetryDelayMs(
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     attempt: number,
   ): number | null {
     const retryDelays =
       provider === 'codex'
         ? CODEX_SESSION_DISCOVERY_RETRY_DELAYS_MS
-        : COPILOT_SESSION_DISCOVERY_RETRY_DELAYS_MS
+        : provider === 'opencode'
+          ? OPENCODE_SESSION_DISCOVERY_RETRY_DELAYS_MS
+          : COPILOT_SESSION_DISCOVERY_RETRY_DELAYS_MS
 
     return retryDelays[attempt] ?? null
   }
 
   private async findMatchingExternalSession(
     config: SessionConfig,
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     startedAt: number,
   ): Promise<DetectedExternalSession | null> {
     const candidates = await this.listRecentExternalSessions(
@@ -1709,12 +1807,19 @@ export class SessionManager {
   }
 
   private async findRecentExternalSessionById(
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     sessionId: string,
     referenceTimestamps: number[],
   ): Promise<DetectedExternalSession | null> {
     if (referenceTimestamps.length === 0) {
       return null
+    }
+
+    if (provider === 'opencode') {
+      const candidates = await this.listRecentOpencodeSessions(0)
+      return (
+        candidates.find((candidate) => candidate.sessionId === sessionId) ?? null
+      )
     }
 
     if (provider === 'copilot') {
@@ -1756,10 +1861,14 @@ export class SessionManager {
   }
 
   private async listRecentExternalSessions(
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     sinceMs: number,
     limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
   ): Promise<DetectedExternalSession[]> {
+    if (provider === 'opencode') {
+      return this.listRecentOpencodeSessions(sinceMs, limit)
+    }
+
     if (provider === 'copilot') {
       return this.listRecentCopilotSessions(sinceMs, limit)
     }
@@ -1775,6 +1884,93 @@ export class SessionManager {
     }
 
     return sessions
+  }
+
+  private async listRecentOpencodeSessions(
+    sinceMs: number,
+    limit = OPENCODE_SESSION_LIST_LIMIT,
+  ): Promise<DetectedExternalSession[]> {
+    const records = await this.queryOpencodeSessions(limit)
+    const sessions: DetectedExternalSession[] = []
+
+    for (const record of records) {
+      const meta = extractOpencodeSessionMeta(JSON.stringify(record))
+      if (!meta) {
+        continue
+      }
+
+      const startedAt = Date.parse(meta.timestamp)
+      if (Number.isNaN(startedAt) || startedAt < sinceMs) {
+        continue
+      }
+
+      sessions.push({
+        provider: 'opencode',
+        sessionId: meta.sessionId,
+        timestamp: meta.timestamp,
+        cwd: meta.cwd,
+        startedAt,
+        summary: meta.summary,
+      })
+    }
+
+    return sessions
+      .sort((left, right) => right.startedAt - left.startedAt)
+      .slice(0, limit)
+  }
+
+  /**
+   * Query opencode's session database via the CLI. opencode stores sessions in
+   * a database rather than loose transcript files, so we shell out to
+   * `opencode session list --format json` and parse the JSON payload.
+   */
+  private async queryOpencodeSessions(
+    limit: number,
+  ): Promise<unknown[]> {
+    const executable = resolveOpencodeExecutable(this.resolveOpencodeStartupCommand())
+
+    try {
+      const { stdout } = await execFileAsync(
+        executable,
+        ['session', 'list', '--format', 'json', '--max-count', String(limit)],
+        {
+          timeout: OPENCODE_SESSION_QUERY_TIMEOUT_MS,
+          windowsHide: true,
+          maxBuffer: 16 * 1024 * 1024,
+        },
+      )
+
+      const parsed = JSON.parse(stdout) as unknown
+      if (Array.isArray(parsed)) {
+        return parsed
+      }
+      if (parsed && typeof parsed === 'object') {
+        const sessions = (parsed as { sessions?: unknown }).sessions
+        return Array.isArray(sessions) ? sessions : [parsed]
+      }
+      return []
+    } catch (error) {
+      console.warn('[opencode] Failed to query session list:', error)
+      return []
+    }
+  }
+
+  /**
+   * Find a representative opencode startup command among the managed configs so
+   * that we invoke the same `opencode` binary the user configured. Falls back to
+   * the bare `opencode` executable when none is available.
+   */
+  private resolveOpencodeStartupCommand(): string {
+    for (const config of this.configs.values()) {
+      if (
+        config.externalSession?.provider === 'opencode' ||
+        supportsOpencodeSessionResume(config.startupCommand)
+      ) {
+        return config.startupCommand
+      }
+    }
+
+    return 'opencode'
   }
 
   private async listRecentCopilotSessions(
@@ -2097,6 +2293,14 @@ export class SessionManager {
       return
     }
 
+    // opencode stores its transcript in a database rather than a tailable file,
+    // so there is no file-based attention stream to follow. Resume still works
+    // via the DB query; we simply skip the file-tailing tracker here.
+    if (config.externalSession.provider === 'opencode') {
+      this.stopExternalSessionAttentionTracking(config.id)
+      return
+    }
+
     const filePath =
       sourcePath ??
       (await this.resolveExternalSessionAttentionFilePath(
@@ -2178,7 +2382,7 @@ export class SessionManager {
   }
 
   private async readPersistedExternalSessionState(
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     filePath: string,
   ): Promise<Pick<SessionRuntime, 'attention' | 'awaitingResponse'>> {
     const content = await this.readFileTail(
@@ -2202,6 +2406,15 @@ export class SessionManager {
 
       if (provider === 'codex') {
         attention = reduceCodexAttentionState(attention, line)
+        continue
+      }
+
+      if (provider === 'opencode') {
+        attention = reduceOpencodeAttentionState(attention, line)
+        awaitingResponse = reduceOpencodeAwaitingResponseState(
+          awaitingResponse,
+          line,
+        )
         continue
       }
 
@@ -2231,9 +2444,14 @@ export class SessionManager {
   }
 
   private async resolveExternalSessionAttentionFilePath(
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     sessionId: string,
   ): Promise<string | null> {
+    if (provider === 'opencode') {
+      // opencode transcripts live in a database, not a tailable file.
+      return null
+    }
+
     if (provider === 'copilot') {
       const filePath = path.join(COPILOT_SESSIONS_ROOT, sessionId, 'events.jsonl')
       try {
@@ -2366,7 +2584,7 @@ export class SessionManager {
 
   private processExternalSessionAttentionLine(
     sessionId: string,
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     line: string,
   ): void {
     if (!line.trim()) {
@@ -2378,12 +2596,16 @@ export class SessionManager {
     const nextAttention =
       provider === 'codex'
         ? reduceCodexAttentionState(currentAttention, line)
-        : reduceCopilotAttentionState(currentAttention, line)
+        : provider === 'opencode'
+          ? reduceOpencodeAttentionState(currentAttention, line)
+          : reduceCopilotAttentionState(currentAttention, line)
     const currentAwaitingResponse = currentRuntime.awaitingResponse ?? false
     const nextAwaitingResponse =
       provider === 'copilot'
         ? reduceCopilotAwaitingResponseState(currentAwaitingResponse, line)
-        : currentAwaitingResponse
+        : provider === 'opencode'
+          ? reduceOpencodeAwaitingResponseState(currentAwaitingResponse, line)
+          : currentAwaitingResponse
 
     if (
       nextAttention === currentAttention &&
@@ -2461,6 +2683,7 @@ export class SessionManager {
     this.pendingFirstPromptBuffers.delete(id)
     this.cleanupCopilotInstructions(id)
     this.cleanupCodexInstructions(id)
+    this.cleanupOpencodeInstructions(id)
     this.clearLiveAttentionBuffer(id)
     this.cancelScheduledSessionStart(id)
     if (config) {
@@ -2492,7 +2715,7 @@ export class SessionManager {
   }
 
   private getExternalSessionClaimKey(
-    provider: 'codex' | 'copilot',
+    provider: 'codex' | 'copilot' | 'opencode',
     sessionId: string,
   ): string {
     return `${provider}:${sessionId}`

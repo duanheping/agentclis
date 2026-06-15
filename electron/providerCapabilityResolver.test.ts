@@ -25,6 +25,16 @@ describe('providerCapabilityResolver', () => {
     })
   })
 
+  it('enables hidden instructions for opencode', () => {
+    expect(resolveProjectMemoryCapability('opencode --model anthropic/claude')).toEqual({
+      provider: 'opencode',
+      mode: 'opencode-instructions',
+      supportsHiddenSessionStart: true,
+      supportsHiddenPromptUpdate: false,
+      fallbackReason: null,
+    })
+  })
+
   it('marks non-managed commands as unsupported', () => {
     expect(resolveProjectMemoryCapability('node index.js')).toEqual({
       provider: null,
@@ -32,7 +42,7 @@ describe('providerCapabilityResolver', () => {
       supportsHiddenSessionStart: false,
       supportsHiddenPromptUpdate: false,
       fallbackReason:
-        'Hidden project memory is currently supported only for Codex and Copilot sessions.',
+        'Hidden project memory is currently supported only for Codex, Copilot, and opencode sessions.',
     })
   })
 })

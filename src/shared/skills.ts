@@ -1,4 +1,4 @@
-export const SKILL_AI_MERGE_AGENTS = ['codex', 'claude', 'copilot'] as const
+export const SKILL_AI_MERGE_AGENTS = ['codex', 'claude', 'copilot', 'opencode'] as const
 
 export type SkillAiMergeAgent = (typeof SKILL_AI_MERGE_AGENTS)[number]
 

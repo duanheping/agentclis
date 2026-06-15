@@ -74,6 +74,10 @@ function formatAgentLabel(agent: SkillAiMergeAgent): string {
     return 'Claude'
   }
 
+  if (agent === 'opencode') {
+    return 'opencode'
+  }
+
   return 'Copilot'
 }
 
@@ -618,6 +622,29 @@ async function runCopilotStructured(
   return result.stdout
 }
 
+async function runOpencodeStructured(
+  workingDirectory: string,
+  prompt: string,
+  onProgress?: SkillMergeProgressListener,
+): Promise<string> {
+  const structuredPrompt = `${prompt}\nReturn only JSON. Do not wrap it in markdown.`
+  const result = await runCommand(
+    'opencode',
+    workingDirectory,
+    [
+      'run',
+      '--format',
+      'json',
+      '--dangerously-skip-permissions',
+      structuredPrompt,
+    ],
+    null,
+    onProgress,
+  )
+
+  return result.stdout
+}
+
 async function readMergedFiles(mergedRoot: string): Promise<SkillAiMergeProposal['files']> {
   const mergedFiles = await listFilesRecursive(mergedRoot)
   return Promise.all(
@@ -682,6 +709,9 @@ export async function generateSkillMerge(
         'bypassPermissions',
         onProgress,
       )
+      await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
+    } else if (agent === 'opencode') {
+      const output = await runOpencodeStructured(tempRoot, prompt, onProgress)
       await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
     } else {
       const output = await runCopilotStructured(tempRoot, prompt, onProgress)
@@ -798,6 +828,9 @@ export async function reviewSkillMerge(
         onProgress,
       )
       await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
+    } else if (reviewer === 'opencode') {
+      const output = await runOpencodeStructured(tempRoot, prompt, onProgress)
+      await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
     } else {
       const output = await runCopilotStructured(tempRoot, prompt, onProgress)
       await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
@@ -904,6 +937,9 @@ export async function refineSkillMerge(
         'bypassPermissions',
         onProgress,
       )
+      await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
+    } else if (agent === 'opencode') {
+      const output = await runOpencodeStructured(tempRoot, prompt, onProgress)
       await writeFile(outputPath, `${output.trim()}\n`, 'utf8')
     } else {
       const output = await runCopilotStructured(tempRoot, prompt, onProgress)

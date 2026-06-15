@@ -8,6 +8,12 @@ import {
   type ProjectSnapshot,
 } from '../shared/session'
 
+const PROVIDER_LABELS: Record<ManagedCliProvider, string> = {
+  codex: 'Codex CLI',
+  copilot: 'Copilot CLI',
+  opencode: 'opencode CLI',
+}
+
 interface CreateSessionDialogProps {
   open: boolean
   initialIntent: 'session' | 'project'
@@ -369,7 +375,7 @@ export function CreateSessionDialog({
                     />
                     <span className="provider-option__body">
                       <span className="provider-option__title">
-                        {provider === 'codex' ? 'Codex CLI' : 'Copilot CLI'}
+                        {PROVIDER_LABELS[provider]}
                       </span>
                     </span>
                   </label>

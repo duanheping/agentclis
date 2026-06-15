@@ -1985,7 +1985,7 @@ function App() {
                     aria-hidden="true"
                   />
                   <span className="workspace-home__suggestion-title">
-                    Start a Codex or Copilot session
+                    Start a Codex, Copilot, or opencode session
                   </span>
                   <span className="workspace-home__suggestion-copy">
                     Open the session flow and launch an agent inside your current repo.

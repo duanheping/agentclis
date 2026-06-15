@@ -87,6 +87,33 @@ async function resolveCopilotPromptPath(
   return match[1]
 }
 
+async function resolveOpencodePromptPath(
+  spawnCall: [string, string[], { cwd?: string }],
+): Promise<string> {
+  if (process.platform === 'win32') {
+    const scriptPath = spawnCall[1][3]
+    const script = await readFile(scriptPath, 'utf8')
+    const match = script.match(
+      /Read and follow all instructions in the file at (.+?opencode-prompt\.txt)/u,
+    )
+    if (!match) {
+      throw new Error('Could not resolve opencode prompt path from the generated script.')
+    }
+    return match[1]
+  }
+
+  const promptArg = spawnCall[1].find((arg) =>
+    arg.includes('opencode-prompt.txt'),
+  )
+  const match = promptArg?.match(
+    /Read and follow all instructions in the file at (.+?opencode-prompt\.txt)/u,
+  )
+  if (!match) {
+    throw new Error('Could not resolve opencode prompt path from the spawn arguments.')
+  }
+  return match[1]
+}
+
 async function resolveCodexOutputPath(
   spawnCall: [string, string[], { cwd?: string }],
 ): Promise<string> {
@@ -335,6 +362,95 @@ describe('structuredAgentRunner shutdown handling', () => {
     const contextDirectory = process.cwd()
     const prepared = await prepareStructuredAgent({
       agent: 'copilot',
+      schema: '{"type":"object"}',
+      prompt: 'Summarize the repository.',
+      contextDirectories: [contextDirectory],
+    })
+
+    expect(prepared.cwd).toBe(contextDirectory)
+
+    await cleanupStructuredAgentTemp(prepared.tempRoot)
+  })
+
+  it('runs opencode structured jobs in run mode from the first context directory', async () => {
+    const contextDirectory = process.cwd()
+    const promise = runStructuredAgent({
+      agent: 'opencode',
+      schema: '{"type":"object","properties":{"status":{"type":"string"}}}',
+      prompt: 'Summarize the repository.',
+      contextDirectories: [contextDirectory],
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const spawnCall = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { cwd?: string },
+    ]
+    expect(spawnCall[2]).toEqual(
+      expect.objectContaining({
+        cwd: contextDirectory,
+      }),
+    )
+
+    if (process.platform === 'win32') {
+      const scriptPath = spawnCall[1][3]
+      const script = await readFile(scriptPath, 'utf8')
+      expect(script).toContain('opencode run')
+      expect(script).toContain('--format json')
+      expect(script).toContain('--dangerously-skip-permissions')
+      expect(script).toContain('Read and follow all instructions in the file at')
+    } else {
+      expect(spawnCall[0]).toBe('opencode')
+      expect(spawnCall[1]).toEqual(
+        expect.arrayContaining([
+          'run',
+          '--format',
+          'json',
+          '--dangerously-skip-permissions',
+        ]),
+      )
+    }
+
+    mocks.children[0]?.emit('close', 1)
+    await expect(promise).rejects.toThrow(/opencode exited with code 1/i)
+  })
+
+  it('reads the opencode response file written by the run command', async () => {
+    const contextDirectory = process.cwd()
+    const promise = runStructuredAgent({
+      agent: 'opencode',
+      schema: '{"type":"object","properties":{"status":{"type":"string"}}}',
+      prompt: 'Summarize the repository.',
+      contextDirectories: [contextDirectory],
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    const spawnCall = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { cwd?: string },
+    ]
+    const promptPath = await resolveOpencodePromptPath(spawnCall)
+    const outputPath = path.join(path.dirname(promptPath), 'response.json')
+    await writeFile(outputPath, '{"status":"from-file"}\n', 'utf8')
+
+    mocks.children[0]?.stdout.emit('data', Buffer.from('not-json-chatter'))
+    mocks.children[0]?.emit('close', 0)
+
+    await expect(promise).resolves.toBe('{"status":"from-file"}')
+  })
+
+  it('anchors prepared opencode analysis scripts in the first context directory', async () => {
+    const contextDirectory = process.cwd()
+    const prepared = await prepareStructuredAgent({
+      agent: 'opencode',
       schema: '{"type":"object"}',
       prompt: 'Summarize the repository.',
       contextDirectories: [contextDirectory],

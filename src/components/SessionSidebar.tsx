@@ -108,6 +108,10 @@ function formatMergeAgentLabel(agent: SkillAiMergeAgent): string {
     return 'Claude'
   }
 
+  if (agent === 'opencode') {
+    return 'opencode'
+  }
+
   return 'Copilot'
 }
 

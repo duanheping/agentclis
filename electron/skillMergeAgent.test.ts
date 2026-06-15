@@ -118,6 +118,41 @@ const mocks = vi.hoisted(() => {
         return
       }
 
+      if (commandLine.includes('opencode') && commandLine.includes('run')) {
+        if (commandLine.includes('./proposal')) {
+          process.stdout.emit(
+            'data',
+            Buffer.from(
+              JSON.stringify({
+                status: 'approved-with-warnings',
+                summary: 'opencode review found one follow-up.',
+                rationale: 'The merged skill is sound but one note should be checked.',
+                warnings: ['Review the merged helper note manually.'],
+              }),
+              'utf8',
+            ),
+          )
+          process.emit('exit', 0)
+          return
+        }
+
+        await mkdir(path.join(cwd, 'merged'), { recursive: true })
+        await writeFile(path.join(cwd, 'merged', 'SKILL.md'), '# merged by opencode\n', 'utf8')
+        process.stdout.emit(
+          'data',
+          Buffer.from(
+            JSON.stringify({
+              summary: 'opencode merged the skill.',
+              rationale: 'opencode combined the clearest instructions.',
+              warnings: ['Review the merged helper note manually.'],
+            }),
+            'utf8',
+          ),
+        )
+        process.emit('exit', 0)
+        return
+      }
+
       process.stderr.emit('data', Buffer.from('unexpected command', 'utf8'))
       process.emit('exit', 1)
     })
@@ -284,6 +319,60 @@ describe('skillMergeAgent', () => {
         reviewer: 'copilot',
         status: 'approved-with-warnings',
         summary: 'Copilot review found one follow-up.',
+      }),
+    )
+  })
+
+  it('generates and reviews an opencode merge proposal', async () => {
+    const proposal = await generateSkillMerge('opencode', 'document-topic-search', [
+      {
+        root: 'library',
+        files: new Map([
+          ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
+        ]),
+      },
+      {
+        root: 'discovered',
+        files: new Map([
+          ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
+        ]),
+      },
+    ])
+
+    const review = await reviewSkillMerge('opencode', proposal, [
+      {
+        root: 'library',
+        files: new Map([
+          ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
+        ]),
+      },
+      {
+        root: 'discovered',
+        files: new Map([
+          ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
+        ]),
+      },
+    ])
+
+    expect(proposal).toEqual(
+      expect.objectContaining({
+        skillName: 'document-topic-search',
+        mergeAgent: 'opencode',
+        summary: 'opencode merged the skill.',
+        warnings: ['Review the merged helper note manually.'],
+      }),
+    )
+    expect(proposal.files).toEqual([
+      {
+        path: 'SKILL.md',
+        content: '# merged by opencode\n',
+      },
+    ])
+    expect(review).toEqual(
+      expect.objectContaining({
+        reviewer: 'opencode',
+        status: 'approved-with-warnings',
+        summary: 'opencode review found one follow-up.',
       }),
     )
   })

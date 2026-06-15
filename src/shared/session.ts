@@ -12,7 +12,7 @@ export const SESSION_ATTENTION_KINDS = [
 ] as const
 
 export type SessionAttentionKind = (typeof SESSION_ATTENTION_KINDS)[number]
-export const MANAGED_CLI_PROVIDERS = ['codex', 'copilot'] as const
+export const MANAGED_CLI_PROVIDERS = ['codex', 'copilot', 'opencode'] as const
 
 export type ManagedCliProvider = (typeof MANAGED_CLI_PROVIDERS)[number]
 
@@ -24,6 +24,7 @@ export const PROJECT_MEMORY_MODES = [
   'disabled',
   'codex-developer-instructions',
   'copilot-instructions',
+  'opencode-instructions',
   'unsupported',
 ] as const
 
@@ -232,6 +233,10 @@ export function summarizeProjectMemoryStatus(
 
   if (mode === 'copilot-instructions') {
     return 'Project memory injected via custom instructions'
+  }
+
+  if (mode === 'opencode-instructions') {
+    return 'Project memory injected at session start'
   }
 
   if (mode === 'unsupported') {

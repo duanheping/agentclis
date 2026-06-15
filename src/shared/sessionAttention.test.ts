@@ -5,6 +5,7 @@ import {
   classifySessionAttentionFromText,
   extractCodexAttentionFromSessionLine,
   extractCopilotAttentionFromSessionLine,
+  extractOpencodeAttentionFromSessionLine,
   extractTerminalAttentionFromText,
   formatWorkspaceWindowTitle,
   getSessionAttentionBadgeLabel,
@@ -13,6 +14,8 @@ import {
   reduceCodexAttentionState,
   reduceCopilotAwaitingResponseState,
   reduceCopilotAttentionState,
+  reduceOpencodeAttentionState,
+  reduceOpencodeAwaitingResponseState,
   selectHighestPriorityAttentionSession,
 } from './sessionAttention'
 
@@ -250,6 +253,52 @@ describe('sessionAttention', () => {
     const awaitingResponse = reduceCopilotAwaitingResponseState(
       true,
       '{"type":"assistant.turn_end","data":{"turnId":"7"}}',
+    )
+
+    expect(awaitingResponse).toBe(false)
+  })
+
+  it('extracts opencode attention from assistant message parts', () => {
+    expect(
+      extractOpencodeAttentionFromSessionLine(
+        '{"type":"message.part.updated","properties":{"part":{"type":"text","text":"Should I proceed?"}}}',
+      ),
+    ).toBe('needs-user-decision')
+
+    expect(
+      extractOpencodeAttentionFromSessionLine(
+        '{"type":"session.idle","properties":{}}',
+      ),
+    ).toBe('task-complete')
+  })
+
+  it('reduces opencode attention state and clears it on user messages', () => {
+    let attention = reduceOpencodeAttentionState(
+      null,
+      '{"type":"message.part.updated","properties":{"part":{"type":"text","text":"All done."}}}',
+    )
+
+    expect(attention).toBe('task-complete')
+
+    attention = reduceOpencodeAttentionState(
+      attention,
+      '{"type":"message.updated","properties":{"info":{"role":"user","text":"next"}}}',
+    )
+
+    expect(attention).toBeNull()
+  })
+
+  it('tracks opencode awaiting-response state across a turn lifecycle', () => {
+    let awaitingResponse = reduceOpencodeAwaitingResponseState(
+      false,
+      '{"type":"message.updated","properties":{"info":{"role":"user","text":"go"}}}',
+    )
+
+    expect(awaitingResponse).toBe(true)
+
+    awaitingResponse = reduceOpencodeAwaitingResponseState(
+      awaitingResponse,
+      '{"type":"session.idle","properties":{}}',
     )
 
     expect(awaitingResponse).toBe(false)

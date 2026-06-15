@@ -195,6 +195,106 @@ function shouldResetCopilotAttention(
   return Boolean(parsed?.type?.startsWith('user.'))
 }
 
+interface ParsedOpencodeEvent {
+  type?: string
+  properties?: {
+    part?: {
+      type?: string
+      text?: string
+    }
+    info?: {
+      role?: string
+      text?: string
+    }
+    message?: {
+      role?: string
+    }
+    role?: string
+    text?: string
+  }
+}
+
+function parseOpencodeEvent(line: string): ParsedOpencodeEvent | null {
+  const parsed = parseJsonLine(line)
+  return parsed && typeof parsed === 'object'
+    ? (parsed as ParsedOpencodeEvent)
+    : null
+}
+
+function extractOpencodeMessageText(
+  parsed: ParsedOpencodeEvent | null,
+): string {
+  if (!parsed) {
+    return ''
+  }
+
+  const part = parsed.properties?.part
+  if (part?.type === 'text' && typeof part.text === 'string') {
+    return part.text.trim()
+  }
+
+  const info = parsed.properties?.info
+  if (info?.role === 'assistant' && typeof info.text === 'string') {
+    return info.text.trim()
+  }
+
+  if (
+    parsed.properties?.role === 'assistant' &&
+    typeof parsed.properties.text === 'string'
+  ) {
+    return parsed.properties.text.trim()
+  }
+
+  return ''
+}
+
+function isOpencodeAssistantTurnComplete(
+  parsed: ParsedOpencodeEvent | null,
+): boolean {
+  if (!parsed) {
+    return false
+  }
+
+  // opencode signals the end of an assistant turn with a session idle event.
+  return parsed.type === 'session.idle'
+}
+
+function extractOpencodeAttentionFromParsedEvent(
+  parsed: ParsedOpencodeEvent | null,
+): SessionAttentionKind | null {
+  if (!parsed) {
+    return null
+  }
+
+  if (parsed.type === 'session.idle') {
+    return 'task-complete'
+  }
+
+  if (
+    parsed.type === 'message.updated' ||
+    parsed.type === 'message.part.updated'
+  ) {
+    const content = extractOpencodeMessageText(parsed)
+    return content ? classifySessionAttentionFromText(content) : null
+  }
+
+  return null
+}
+
+function shouldResetOpencodeAttention(
+  parsed: ParsedOpencodeEvent | null,
+): boolean {
+  if (!parsed) {
+    return false
+  }
+
+  const role = parsed.properties?.info?.role ?? parsed.properties?.message?.role
+  return (
+    (parsed.type === 'message.updated' || parsed.type === 'message.part.updated') &&
+    role === 'user'
+  )
+}
+
 export function classifySessionAttentionFromText(
   content: string,
 ): SessionAttentionKind {
@@ -239,6 +339,12 @@ export function extractCopilotAttentionFromSessionLine(
   return extractCopilotAttentionFromParsedEvent(parseCopilotEvent(line))
 }
 
+export function extractOpencodeAttentionFromSessionLine(
+  line: string,
+): SessionAttentionKind | null {
+  return extractOpencodeAttentionFromParsedEvent(parseOpencodeEvent(line))
+}
+
 export function reduceCodexAttentionState(
   current: SessionAttentionKind | null,
   line: string,
@@ -270,6 +376,53 @@ export function reduceCopilotAttentionState(
   }
 
   return extractCopilotAttentionFromParsedEvent(parsed) ?? current
+}
+
+export function reduceOpencodeAttentionState(
+  current: SessionAttentionKind | null,
+  line: string,
+): SessionAttentionKind | null {
+  const parsed = parseOpencodeEvent(line)
+  if (shouldResetOpencodeAttention(parsed)) {
+    return null
+  }
+
+  const nextAttention = extractOpencodeAttentionFromParsedEvent(parsed)
+  if (!nextAttention) {
+    return current
+  }
+
+  if (current === 'needs-user-decision' && nextAttention === 'task-complete') {
+    return current
+  }
+
+  return nextAttention
+}
+
+export function reduceOpencodeAwaitingResponseState(
+  current: boolean,
+  line: string,
+): boolean {
+  const parsed = parseOpencodeEvent(line)
+  if (!parsed) {
+    return current
+  }
+
+  const role =
+    parsed.properties?.info?.role ?? parsed.properties?.message?.role
+  if (
+    (parsed.type === 'message.updated' ||
+      parsed.type === 'message.part.updated') &&
+    role === 'user'
+  ) {
+    return true
+  }
+
+  if (isOpencodeAssistantTurnComplete(parsed)) {
+    return false
+  }
+
+  return current
 }
 
 export function reduceCopilotAwaitingResponseState(

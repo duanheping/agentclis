@@ -161,6 +161,7 @@ describe('session helpers', () => {
     expect(PROJECT_MEMORY_MODES).toContain('disabled')
     expect(PROJECT_MEMORY_MODES).toContain('codex-developer-instructions')
     expect(PROJECT_MEMORY_MODES).toContain('copilot-instructions')
+    expect(PROJECT_MEMORY_MODES).toContain('opencode-instructions')
     expect(PROJECT_MEMORY_MODES).toContain('unsupported')
   })
 
@@ -177,6 +178,12 @@ describe('session helpers', () => {
   it('summarizeProjectMemoryStatus describes copilot-instructions mode', () => {
     expect(summarizeProjectMemoryStatus('copilot-instructions')).toBe(
       'Project memory injected via custom instructions',
+    )
+  })
+
+  it('summarizeProjectMemoryStatus describes opencode-instructions mode', () => {
+    expect(summarizeProjectMemoryStatus('opencode-instructions')).toBe(
+      'Project memory injected at session start',
     )
   })
 

@@ -113,6 +113,7 @@ const KNOWN_SKILL_ROOT_SEGMENTS = [
   ['.codex', 'skills'],
   ['.claude', 'skills'],
   ['.copilot', 'skills'],
+  ['.opencode', 'skills'],
 ] as const
 
 function buildDefaultSettings(): SkillLibrarySettings {
@@ -1711,7 +1712,7 @@ export class SkillLibraryManager {
       skipMessage:
         discovered.length > 0
           ? `Automatically scanned ${uniqueRootDirectories.size} known skill folders.`
-          : 'No skill folders were found in .codex/skills, .claude/skills, or .copilot/skills.',
+          : 'No skill folders were found in .codex/skills, .claude/skills, .copilot/skills, or .opencode/skills.',
       folderCount: uniqueRootDirectories.size,
       snapshots: new Map<string, SkillSnapshot>(),
     }
@@ -1746,7 +1747,7 @@ export class SkillLibraryManager {
         issues.push({
           severity: 'warning',
           code: 'duplicate-discovered-skill',
-          message: `Detected ${candidates.length} copies of "${skillName}" across .codex/skills, .claude/skills, or .copilot/skills. Using the newest copy from ${candidates[0]!.label}.`,
+          message: `Detected ${candidates.length} copies of "${skillName}" across .codex/skills, .claude/skills, .copilot/skills, or .opencode/skills. Using the newest copy from ${candidates[0]!.label}.`,
           skillName,
           root: 'discovered',
           rootLabel: rootLabel('discovered'),

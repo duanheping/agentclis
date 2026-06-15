@@ -143,12 +143,40 @@ const mocks = vi.hoisted(() => {
   }))
   const removeProjectSessionWorktree = vi.fn(async () => undefined)
 
+  // Canned stdout returned by the mocked `opencode session list --format json`
+  // invocation. opencode stores sessions in a DB rather than loose files, so the
+  // SessionManager shells out via execFile instead of reading the filesystem.
+  let opencodeSessionListStdout = '[]'
+  const execFile = vi.fn(
+    (
+      _command: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, result: { stdout: string; stderr: string }) => void,
+    ) => {
+      const isSessionList =
+        Array.isArray(args) &&
+        args[0] === 'session' &&
+        args[1] === 'list'
+      callback(null, {
+        stdout: isSessionList ? opencodeSessionListStdout : '',
+        stderr: '',
+      })
+      return {} as unknown
+    },
+  )
+
   return {
     createProjectSessionWorktree,
     removeProjectSessionWorktree,
     killTerminalProcessTree: vi.fn(),
     terminals,
     spawn,
+    execFile,
+    setOpencodeSessionListResponse: (sessions: unknown) => {
+      opencodeSessionListStdout =
+        typeof sessions === 'string' ? sessions : JSON.stringify(sessions)
+    },
     getFile: (filePath: string) => files.get(filePath)?.content,
     getFileMeta: (filePath: string) => files.get(filePath),
     listFiles: () => Array.from(files.entries()),
@@ -176,8 +204,10 @@ const mocks = vi.hoisted(() => {
       nextProvisionedCodexSessionNumber = 1
       nextProvisionedCopilotSessionNumber = 1
       autoProvisionManagedSessions = true
+      opencodeSessionListStdout = '[]'
       files.clear()
       terminals.length = 0
+      execFile.mockClear()
       mocks.killTerminalProcessTree.mockReset()
       spawn.mockReset()
       spawn.mockImplementation((_shell: unknown, args: unknown, options: unknown) => {
@@ -200,6 +230,14 @@ const mocks = vi.hoisted(() => {
 vi.mock('./ptyProcessTree', () => ({
   killTerminalProcessTree: mocks.killTerminalProcessTree,
 }))
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return {
+    ...actual,
+    execFile: mocks.execFile,
+  }
+})
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -1267,6 +1305,130 @@ describe('SessionManager restore policy', () => {
     })
 
     expectSpawnedPowerShellCommand(0, `copilot --resume ${externalSessionId}`)
+  })
+
+  it('restores a saved opencode session id using the DB session list query', async () => {
+    const externalSessionId = 'ses_opencode_abc123'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'review callout analysis',
+          startupCommand: 'opencode',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+          externalSession: {
+            provider: 'opencode',
+            sessionId: externalSessionId,
+          },
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    mocks.setOpencodeSessionListResponse([
+      {
+        id: externalSessionId,
+        title: 'Review Callout Analysis',
+        directory: 'C:\\repo',
+        time: { created: Date.parse('2026-03-20T08:00:31.000Z') },
+      },
+    ])
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.execFile).toHaveBeenCalled()
+    const execFileCall = mocks.execFile.mock.calls[0] as unknown as [string, string[]]
+    expect(execFileCall[0]).toBe('opencode')
+    expect(execFileCall[1].slice(0, 4)).toEqual([
+      'session',
+      'list',
+      '--format',
+      'json',
+    ])
+    expectSpawnedPowerShellCommand(0, `opencode --session ${externalSessionId}`)
+  })
+
+  it('fails restoring an opencode session when the stored session id is absent from the DB', async () => {
+    const externalSessionId = 'ses_opencode_missing'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'review callout analysis',
+          startupCommand: 'opencode',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+          externalSession: {
+            provider: 'opencode',
+            sessionId: externalSessionId,
+          },
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    // DB returns a different session; the stored id is not resumable.
+    mocks.setOpencodeSessionListResponse([
+      {
+        id: 'ses_opencode_other',
+        directory: 'C:\\repo',
+        time: { created: Date.parse('2026-03-20T08:00:31.000Z') },
+      },
+    ])
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.execFile).toHaveBeenCalled()
+    })
+
+    // No managed resume terminal should be spawned for a missing session id.
+    expect(mocks.spawn).not.toHaveBeenCalled()
   })
 
   it('fails restoring a Codex session when the stored session id no longer exists', async () => {
