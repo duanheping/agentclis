@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildOpencodeResumeCommand,
   extractOpencodeSessionMeta,
+  parseOpencodeJsonOutput,
   supportsOpencodeSessionResume,
   withOpencodeFullAccess,
 } from './opencodeCli'
@@ -111,5 +112,63 @@ describe('opencodeCli', () => {
     expect(
       extractOpencodeSessionMeta(JSON.stringify({ id: 'ses_x' })),
     ).toBeNull()
+  })
+
+  describe('parseOpencodeJsonOutput', () => {
+    it('parses clean JSON output', () => {
+      expect(parseOpencodeJsonOutput('[{"id":"ses_1"}]')).toEqual([
+        { id: 'ses_1' },
+      ])
+      expect(parseOpencodeJsonOutput('  {"id":"ses_1"}  ')).toEqual({
+        id: 'ses_1',
+      })
+    })
+
+    it('tolerates a non-JSON preamble banner before the JSON array', () => {
+      const stdout = [
+        'Checking for proxy env variables...',
+        'HTTP_PROXY=http://internet.ford.com:83/',
+        'Proxy env vars detected, Bun will use those env vars for its configuration.',
+        '[',
+        '  { "id": "ses_133", "title": "Opencode support", "directory": "C:\\\\repo" }',
+        ']',
+      ].join('\n')
+
+      expect(parseOpencodeJsonOutput(stdout)).toEqual([
+        { id: 'ses_133', title: 'Opencode support', directory: 'C:\\repo' },
+      ])
+    })
+
+    it('does not break on brackets inside string values', () => {
+      const stdout =
+        'banner line\n[{"id":"ses_1","title":"array [0] and obj {x}"}]'
+      expect(parseOpencodeJsonOutput(stdout)).toEqual([
+        { id: 'ses_1', title: 'array [0] and obj {x}' },
+      ])
+    })
+
+    it('returns null when no JSON value is present', () => {
+      expect(parseOpencodeJsonOutput('Checking for proxy env variables...')).toBeNull()
+      expect(parseOpencodeJsonOutput('')).toBeNull()
+    })
+
+    it('lets extractOpencodeSessionMeta recover from a preamble banner', () => {
+      const stdout = [
+        'Checking for proxy env variables...',
+        JSON.stringify({
+          id: 'ses_xyz',
+          title: 'Banner test',
+          directory: 'C:\\repo',
+          created: 1781539219552,
+        }),
+      ].join('\n')
+
+      expect(extractOpencodeSessionMeta(stdout)).toEqual({
+        sessionId: 'ses_xyz',
+        timestamp: new Date(1781539219552).toISOString(),
+        cwd: 'C:\\repo',
+        summary: 'Banner test',
+      })
+    })
   })
 })

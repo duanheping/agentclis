@@ -116,6 +116,94 @@ export function withOpencodeFullAccess(command: string): string | null {
 }
 
 /**
+ * Parse the JSON payload emitted by an opencode CLI command, tolerating any
+ * non-JSON preamble that some builds print to stdout before the JSON (for
+ * example proxy-detection banners like "Checking for proxy env variables...").
+ *
+ * Extracts the first balanced JSON array or object found in the output and
+ * parses it. Returns `null` when no valid JSON value can be recovered.
+ */
+export function parseOpencodeJsonOutput(stdout: string): unknown {
+  if (!stdout) {
+    return null
+  }
+
+  // Fast path: the output is already clean JSON.
+  const trimmed = stdout.trim()
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    // Fall through to preamble-tolerant extraction.
+  }
+
+  const slice = extractFirstJsonValue(trimmed)
+  if (slice === null) {
+    return null
+  }
+
+  try {
+    return JSON.parse(slice)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Find the first balanced top-level JSON array or object substring, ignoring
+ * brackets that appear inside string literals.
+ */
+function extractFirstJsonValue(text: string): string | null {
+  const startIndex = (() => {
+    const arrayStart = text.indexOf('[')
+    const objectStart = text.indexOf('{')
+    if (arrayStart === -1) return objectStart
+    if (objectStart === -1) return arrayStart
+    return Math.min(arrayStart, objectStart)
+  })()
+
+  if (startIndex === -1) {
+    return null
+  }
+
+  const open = text[startIndex]
+  const close = open === '[' ? ']' : '}'
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+
+    if (char === open) {
+      depth += 1
+    } else if (char === close) {
+      depth -= 1
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1)
+      }
+    }
+  }
+
+  return null
+}
+
+/**
  * Parse a session record emitted by `opencode session list --format json`
  * or `opencode export <id>`.
  *
@@ -128,10 +216,8 @@ export function withOpencodeFullAccess(command: string): string | null {
 export function extractOpencodeSessionMeta(
   content: string,
 ): OpencodeSessionMeta | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(content)
-  } catch {
+  const parsed = parseOpencodeJsonOutput(content)
+  if (parsed === null) {
     return null
   }
 

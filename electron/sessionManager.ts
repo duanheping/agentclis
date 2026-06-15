@@ -66,6 +66,7 @@ import {
 import {
   buildOpencodeResumeCommand,
   extractOpencodeSessionMeta,
+  parseOpencodeJsonOutput,
   supportsOpencodeSessionResume,
   withOpencodeFullAccess,
 } from './opencodeCli'
@@ -1940,7 +1941,7 @@ export class SessionManager {
         },
       )
 
-      const parsed = JSON.parse(stdout) as unknown
+      const parsed = parseOpencodeJsonOutput(stdout)
       if (Array.isArray(parsed)) {
         return parsed
       }
