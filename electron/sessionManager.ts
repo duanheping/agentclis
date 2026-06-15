@@ -2901,7 +2901,8 @@ export class SessionManager {
 
     return (
       supportsCodexSessionResume(startupCommand) ||
-      supportsCopilotSessionResume(startupCommand)
+      supportsCopilotSessionResume(startupCommand) ||
+      supportsOpencodeSessionResume(startupCommand)
     )
   }
 
