@@ -207,20 +207,26 @@ function stripConfigOverride(
 }
 
 export function extractCodexSessionMeta(content: string): CodexSessionMeta | null {
-  const match = content.match(
-    /"type":"session_meta"[\s\S]*?"payload":\{"id":"([^"]+)","timestamp":"([^"]+)","cwd":"((?:\\.|[^"])*)"/u,
-  )
-  if (!match) {
+  if (!/"type":"session_meta"/u.test(content)) {
     return null
   }
 
+  const sessionId =
+    extractSessionMetaField(content, 'id') ??
+    extractSessionMetaField(content, 'session_id')
+  const timestamp = extractSessionMetaField(content, 'timestamp')
+  const cwd = extractSessionMetaField(content, 'cwd')
   const originator = extractSessionMetaField(content, 'originator')
   const source = extractSessionMetaField(content, 'source')
 
+  if (!sessionId || !timestamp || !cwd) {
+    return null
+  }
+
   return {
-    sessionId: match[1],
-    timestamp: match[2],
-    cwd: parseJsonString(match[3]),
+    sessionId,
+    timestamp,
+    cwd: parseJsonString(cwd),
     originator,
     source,
   }

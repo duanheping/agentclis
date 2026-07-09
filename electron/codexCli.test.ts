@@ -47,6 +47,20 @@ describe('codexCli', () => {
     })
   })
 
+  it('extracts session metadata when Codex writes session_id before id', () => {
+    expect(
+      extractCodexSessionMeta(
+        '{"timestamp":"2026-07-09T14:34:51.426Z","type":"session_meta","payload":{"session_id":"019f474c-2618-7a10-8a08-c251c0761b3a","id":"019f474c-2618-7a10-8a08-c251c0761b3a","timestamp":"2026-07-09T14:33:21.174Z","cwd":"C:\\\\Users\\\\hduan10\\\\Documents\\\\repo\\\\agentclis_2","originator":"codex-tui","cli_version":"0.143.0","source":"cli"}}',
+      ),
+    ).toEqual({
+      sessionId: '019f474c-2618-7a10-8a08-c251c0761b3a',
+      timestamp: '2026-07-09T14:33:21.174Z',
+      cwd: 'C:\\Users\\hduan10\\Documents\\repo\\agentclis_2',
+      originator: 'codex-tui',
+      source: 'cli',
+    })
+  })
+
   it('tokenizes single-quoted arguments', () => {
     expect(tokenizeCommand("codex -C 'path with spaces' --model gpt"))
       .toEqual(['codex', '-C', 'path with spaces', '--model', 'gpt'])

@@ -841,7 +841,7 @@ describe('SessionManager restore policy', () => {
     mocks.setFile(
       sessionFilePath,
       [
-        '{"timestamp":"2026-03-15T18:10:31.000Z","type":"session_meta","payload":{"id":"019cf7a4-db19-78a0-a9b1-b9e3d2b0126a","timestamp":"2026-03-15T18:10:31.000Z","cwd":"C:\\\\repo","originator":"codex_cli_rs"}}',
+        '{"timestamp":"2026-03-15T18:10:31.000Z","type":"session_meta","payload":{"session_id":"019cf7a4-db19-78a0-a9b1-b9e3d2b0126a","id":"019cf7a4-db19-78a0-a9b1-b9e3d2b0126a","timestamp":"2026-03-15T18:10:31.000Z","cwd":"C:\\\\repo","originator":"codex-tui","source":"cli"}}',
         '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"triage ECG-205709"}]}}',
       ].join('\n'),
       '2026-03-15T18:10:35.000Z',
