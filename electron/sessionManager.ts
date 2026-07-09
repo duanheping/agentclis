@@ -57,6 +57,7 @@ import {
   supportsCopilotSessionResume,
   withCopilotFullAccess,
 } from './copilotCli'
+import { withoutClassicGitHubTokensForCopilot } from './copilotEnvironment'
 import {
   buildCodexResumeCommand,
   extractCodexSessionMeta,
@@ -194,6 +195,7 @@ const CODEX_SESSION_DISCOVERY_RETRY_DELAYS_MS = [
 ]
 const CODEX_SESSION_DISCOVERY_FILE_LIMIT = 32
 const EXTERNAL_SESSION_MATCH_START_TOLERANCE_MS = 1_000
+const LEGACY_EXTERNAL_SESSION_MATCH_TOLERANCE_MS = 10 * 60 * 1_000
 const HISTORICAL_EXTERNAL_SESSION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1_000
 const FIRST_PROMPT_TITLE_LIMIT = 80
 const RECENTLY_CLOSED_SESSION_TTL_MS = 5_000
@@ -215,6 +217,8 @@ const EXTERNAL_ATTENTION_RESOLUTION_RETRY_DELAYS_MS = [
 const LIVE_ATTENTION_BUFFER_LIMIT = 4_096
 const TOUCH_RUNTIME_DEBOUNCE_MS = 300
 const INPUT_TRANSCRIPT_FLUSH_MS = 250
+const SESSION_PERSIST_RETRY_DELAY_MS = 250
+const SESSION_PERSIST_MAX_RETRY_COUNT = 5
 const SESSION_TERMINAL_REPLAY_MAX_BYTES = 2 * 1024 * 1024
 const SESSION_TERMINAL_REPLAY_MAX_EVENTS = 5_000
 const SESSION_RESTORE_BACKFILL_MAX_BYTES = 128 * 1024
@@ -268,6 +272,20 @@ function isMeaningfulSessionTitleCandidate(title: string): boolean {
   }
 
   return /[\p{L}\p{N}]/u.test(normalized)
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) {
+    return undefined
+  }
+
+  const code = Reflect.get(error, 'code')
+  return typeof code === 'string' ? code : undefined
+}
+
+function isTransientSessionStoreError(error: unknown): boolean {
+  const code = getErrorCode(error)
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
 }
 
 function deriveLegacySessionDefaultTitle(startupCommand: string, cwd: string): string {
@@ -473,6 +491,8 @@ export class SessionManager {
   private restoreSnapshotBackfillStarted = false
   private identityRefreshTimer: NodeJS.Timeout | null = null
   private memoryBackfillTimer: NodeJS.Timeout | null = null
+  private pendingPersistRetryTimer: ReturnType<typeof setTimeout> | null = null
+  private persistRetryCount = 0
 
   constructor(events: SessionManagerEvents, services: SessionManagerServices = {}) {
     this.events = events
@@ -1028,6 +1048,8 @@ export class SessionManager {
     for (const sessionId of this.opencodeInstructionsState.keys()) {
       this.cleanupOpencodeInstructions(sessionId)
     }
+
+    this.clearScheduledPersistRetry()
   }
 
   private async startSession(
@@ -1085,6 +1107,10 @@ export class SessionManager {
 
       const launchCommand = await this.resolveStartupCommand(normalizedConfig)
       const launchesInline = supportsInlineShellCommand(shell)
+      const terminalEnv = {
+        ...process.env,
+        TERM: 'xterm-256color',
+      }
       const terminal = nodePty.spawn(
         shell,
         buildShellArgs(shell, launchesInline ? launchCommand : undefined),
@@ -1094,10 +1120,9 @@ export class SessionManager {
         rows: 36,
         cwd: normalizedConfig.cwd,
         useConpty: true,
-        env: {
-          ...process.env,
-          TERM: 'xterm-256color',
-        },
+        env: preparedLaunchConfig.provider === 'copilot'
+          ? withoutClassicGitHubTokensForCopilot(terminalEnv)
+          : terminalEnv,
         },
       )
 
@@ -1655,6 +1680,17 @@ export class SessionManager {
     }
 
     if (!config.externalSession) {
+      if (!options.allowManagedSessionBinding && provider === 'codex') {
+        const recoveredConfig = await this.recoverLegacyCodexSession(config)
+        if (recoveredConfig.externalSession) {
+          return {
+            config: recoveredConfig,
+            provider,
+            bindAfterLaunch: false,
+          }
+        }
+      }
+
       if (!options.allowManagedSessionBinding) {
         throw new Error(
           `Managed ${provider} session "${config.title}" is missing a stored session id. Create a new session to start over.`,
@@ -1680,6 +1716,56 @@ export class SessionManager {
       provider,
       bindAfterLaunch: false,
     }
+  }
+
+  private async recoverLegacyCodexSession(
+    config: SessionConfig,
+  ): Promise<SessionConfig> {
+    const createdAt = Date.parse(config.createdAt)
+    const updatedAt = Date.parse(config.updatedAt)
+    const referenceStartedAt = Number.isNaN(createdAt)
+      ? updatedAt
+      : createdAt
+    if (Number.isNaN(referenceStartedAt)) {
+      return config
+    }
+
+    const windowStart =
+      referenceStartedAt - LEGACY_EXTERNAL_SESSION_MATCH_TOLERANCE_MS
+    const windowEnd =
+      referenceStartedAt + LEGACY_EXTERNAL_SESSION_MATCH_TOLERANCE_MS
+    const candidates = await this.listCodexSessionsInStartedAtWindow(
+      windowStart,
+      windowEnd,
+    )
+    const normalizedCwd = this.normalizePath(config.cwd)
+    const match = candidates
+      .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
+      .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
+      .filter(
+        (candidate) =>
+          candidate.startedAt >= windowStart &&
+          candidate.startedAt <= windowEnd,
+      )
+      .filter((candidate) => {
+        const claimedBy = this.claimedExternalSessions.get(
+          this.getExternalSessionClaimKey(candidate.provider, candidate.sessionId),
+        )
+        return !claimedBy || claimedBy === config.id
+      })
+      .sort((left, right) => {
+        const leftDistance = Math.abs(left.startedAt - referenceStartedAt)
+        const rightDistance = Math.abs(right.startedAt - referenceStartedAt)
+
+        return leftDistance - rightDistance || right.startedAt - left.startedAt
+      })[0]
+
+    if (!match) {
+      return config
+    }
+
+    this.attachExternalSession(config, match)
+    return this.configs.get(config.id) ?? config
   }
 
   private async pollForExternalSessionRef(
@@ -1881,6 +1967,45 @@ export class SessionManager {
       const sessionMeta = await this.readCodexSessionMeta(filePath)
       if (sessionMeta) {
         sessions.push(sessionMeta)
+      }
+    }
+
+    return sessions
+  }
+
+  private async listCodexSessionsInStartedAtWindow(
+    startMs: number,
+    endMs: number,
+  ): Promise<DetectedExternalSession[]> {
+    const sessions: DetectedExternalSession[] = []
+    const dayDirectories = this.getCodexSessionDayDirectoriesBetween(
+      startMs,
+      endMs,
+    )
+
+    for (const dayDirectory of dayDirectories) {
+      let entries: Dirent[] = []
+      try {
+        entries = await readdir(dayDirectory, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+          continue
+        }
+
+        const sessionMeta = await this.readCodexSessionMeta(
+          path.join(dayDirectory, entry.name),
+        )
+        if (
+          sessionMeta &&
+          sessionMeta.startedAt >= startMs &&
+          sessionMeta.startedAt <= endMs
+        ) {
+          sessions.push(sessionMeta)
+        }
       }
     }
 
@@ -2093,11 +2218,18 @@ export class SessionManager {
   }
 
   private getCodexSessionDayDirectories(sinceMs: number): string[] {
+    return this.getCodexSessionDayDirectoriesBetween(sinceMs, Date.now())
+  }
+
+  private getCodexSessionDayDirectoriesBetween(
+    startMs: number,
+    endMs: number,
+  ): string[] {
     const directories: string[] = []
-    const currentDay = new Date(sinceMs)
+    const currentDay = new Date(startMs)
     currentDay.setHours(0, 0, 0, 0)
 
-    const endDay = new Date()
+    const endDay = new Date(endMs)
     endDay.setHours(0, 0, 0, 0)
 
     while (currentDay.getTime() <= endDay.getTime()) {
@@ -3950,8 +4082,8 @@ export class SessionManager {
     return location
   }
 
-  private persist(): void {
-    this.store.set({
+  private buildPersistedSessionState(): PersistedSessionState {
+    return {
       projects: Array.from(this.projects.values()),
       locations: Array.from(this.locations.values()),
       sessions: Array.from(this.configs.values()),
@@ -3971,7 +4103,59 @@ export class SessionManager {
         ),
       ),
       activeSessionId: this.activeSessionId,
-    })
+    }
+  }
+
+  private persist(): void {
+    try {
+      this.store.set(this.buildPersistedSessionState())
+      this.persistRetryCount = 0
+      this.clearScheduledPersistRetry()
+    } catch (error) {
+      this.handlePersistFailure(error)
+    }
+  }
+
+  private handlePersistFailure(error: unknown): void {
+    const message = this.getErrorMessage(error)
+    if (!isTransientSessionStoreError(error)) {
+      console.error(`[agenclis sessions] failed to persist session state: ${message}`)
+      return
+    }
+
+    this.persistRetryCount += 1
+    const code = getErrorCode(error) ?? 'transient'
+    if (this.persistRetryCount > SESSION_PERSIST_MAX_RETRY_COUNT) {
+      console.warn(
+        `[agenclis sessions] failed to persist session state after ${SESSION_PERSIST_MAX_RETRY_COUNT} retries (${code}): ${message}`,
+      )
+      return
+    }
+
+    console.warn(
+      `[agenclis sessions] failed to persist session state (${code}); retrying in ${SESSION_PERSIST_RETRY_DELAY_MS}ms: ${message}`,
+    )
+    this.schedulePersistRetry()
+  }
+
+  private schedulePersistRetry(): void {
+    if (this.pendingPersistRetryTimer) {
+      return
+    }
+
+    this.pendingPersistRetryTimer = setTimeout(() => {
+      this.pendingPersistRetryTimer = null
+      this.persist()
+    }, SESSION_PERSIST_RETRY_DELAY_MS)
+  }
+
+  private clearScheduledPersistRetry(): void {
+    if (!this.pendingPersistRetryTimer) {
+      return
+    }
+
+    clearTimeout(this.pendingPersistRetryTimer)
+    this.pendingPersistRetryTimer = null
   }
 
   private normalizePath(value: string): string {

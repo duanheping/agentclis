@@ -228,6 +228,48 @@ describe('structuredAgentRunner shutdown handling', () => {
     await expect(promise).rejects.toThrow(/copilot exited with code 1/i)
   })
 
+  it('removes classic GitHub PATs from Copilot structured job environments', async () => {
+    const originalGithubToken = process.env.GITHUB_TOKEN
+    const originalGhToken = process.env.GH_TOKEN
+    process.env.GITHUB_TOKEN = 'ghp_classic_token'
+    process.env.GH_TOKEN = 'github_pat_fine_grained_token'
+
+    try {
+      const promise = runStructuredAgent({
+        agent: 'copilot',
+        schema: '{"type":"object"}',
+        prompt: 'Return JSON.',
+        contextDirectories: [],
+      })
+
+      await vi.waitFor(() => {
+        expect(mocks.spawn).toHaveBeenCalledTimes(1)
+      })
+
+      const spawnCall = mocks.spawn.mock.calls[0] as unknown as [
+        string,
+        string[],
+        { env?: NodeJS.ProcessEnv },
+      ]
+      expect(spawnCall[2].env?.GITHUB_TOKEN).toBeUndefined()
+      expect(spawnCall[2].env?.GH_TOKEN).toBe('github_pat_fine_grained_token')
+
+      mocks.children[0]?.emit('close', 1)
+      await expect(promise).rejects.toThrow(/copilot exited with code 1/i)
+    } finally {
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken
+      }
+      if (originalGhToken === undefined) {
+        delete process.env.GH_TOKEN
+      } else {
+        process.env.GH_TOKEN = originalGhToken
+      }
+    }
+  })
+
   it('extracts the final assistant message from copilot json output', async () => {
     const contextDirectory = process.cwd()
     const promise = runStructuredAgent({
@@ -368,6 +410,25 @@ describe('structuredAgentRunner shutdown handling', () => {
     })
 
     expect(prepared.cwd).toBe(contextDirectory)
+
+    await cleanupStructuredAgentTemp(prepared.tempRoot)
+  })
+
+  it('unsets classic GitHub PATs in prepared Copilot analysis scripts', async () => {
+    const prepared = await prepareStructuredAgent({
+      agent: 'copilot',
+      schema: '{"type":"object"}',
+      prompt: 'Summarize the repository.',
+      contextDirectories: [],
+    })
+
+    const script = await readFile(path.join(prepared.tempRoot, 'run.ps1'), 'utf8')
+    expect(script).toContain(
+      "if ($env:GITHUB_TOKEN -like 'ghp_*') { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue }",
+    )
+    expect(script).toContain(
+      "if ($env:GH_TOKEN -like 'ghp_*') { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue }",
+    )
 
     await cleanupStructuredAgentTemp(prepared.tempRoot)
   })

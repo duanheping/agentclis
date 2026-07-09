@@ -9,6 +9,10 @@ import {
   buildQuotaFailureSummary,
   detectQuotaFailure,
 } from './agentFailureSummary'
+import {
+  buildUnsetClassicGitHubTokensPowerShellLines,
+  withoutClassicGitHubTokensForCopilot,
+} from './copilotEnvironment'
 
 const MAX_PROCESS_OUTPUT_BYTES = 4_000
 const activeStructuredAgentProcesses = new Set<ReturnType<typeof spawn>>()
@@ -42,6 +46,7 @@ async function runCommand(
   workingDirectory: string,
   args: string[],
   input: string | null,
+  env?: NodeJS.ProcessEnv,
 ): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     let child: ReturnType<typeof spawn>
@@ -77,6 +82,7 @@ async function runCommand(
         ['/Q', '/D', '/C', scriptPath],
         {
           cwd: workingDirectory,
+          env,
           stdio: 'pipe',
           windowsHide: true,
         },
@@ -84,6 +90,7 @@ async function runCommand(
     } else {
       child = spawn(command, args, {
         cwd: workingDirectory,
+        env,
         stdio: 'pipe',
       })
     }
@@ -442,6 +449,7 @@ async function runCopilotStructured(input: {
       `Read and follow all instructions in the file at ${promptPath}.`,
     ],
     null,
+    withoutClassicGitHubTokensForCopilot(),
   )
 
   const assistantMessage = extractCopilotAssistantMessage(stdout)
@@ -689,6 +697,7 @@ function buildAnalysisScript(input: {
     const dirArgs = input.contextDirectories
       .map((d) => `--add-dir ${q(d)}`)
       .join(' ')
+    lines.push(...buildUnsetClassicGitHubTokensPowerShellLines())
     lines.push(
       [
         '& copilot',

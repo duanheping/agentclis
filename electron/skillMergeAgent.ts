@@ -18,6 +18,7 @@ import type {
   SkillAiMergeReviewStatus,
   SkillSyncRoot,
 } from '../src/shared/skills'
+import { withoutClassicGitHubTokensForCopilot } from './copilotEnvironment'
 import { resolveCommandPromptCommand } from './windowsShell'
 
 export interface SkillMergeSource {
@@ -451,12 +452,18 @@ async function runCommand(
             ['/Q', '/D', '/C', joinCommandTokens([agent, ...args])],
             {
               cwd: workingDirectory,
+              env: agent === 'copilot'
+                ? withoutClassicGitHubTokensForCopilot()
+                : undefined,
               stdio: 'pipe',
               windowsHide: true,
             },
           )
         : spawn(agent, args, {
             cwd: workingDirectory,
+            env: agent === 'copilot'
+              ? withoutClassicGitHubTokensForCopilot()
+              : undefined,
             stdio: 'pipe',
           })
 

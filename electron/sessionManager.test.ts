@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
   let nextProvisionedCodexSessionNumber = 1
   let nextProvisionedCopilotSessionNumber = 1
   let autoProvisionManagedSessions = true
+  const storeSetErrors: unknown[] = []
   const files = new Map<string, { content: string; mtimeMs: number }>()
   const decodeSpawnedCommand = (args: unknown): string | null => {
     if (!Array.isArray(args)) {
@@ -195,6 +196,10 @@ const mocks = vi.hoisted(() => {
     setPersistedState: (value: unknown) => {
       persistedState = structuredClone(value)
     },
+    queueStoreSetError: (error: unknown) => {
+      storeSetErrors.push(error)
+    },
+    takeStoreSetError: () => storeSetErrors.shift(),
     setAutoProvisionManagedSessions: (enabled: boolean) => {
       autoProvisionManagedSessions = enabled
     },
@@ -205,6 +210,7 @@ const mocks = vi.hoisted(() => {
       nextProvisionedCopilotSessionNumber = 1
       autoProvisionManagedSessions = true
       opencodeSessionListStdout = '[]'
+      storeSetErrors.length = 0
       files.clear()
       terminals.length = 0
       execFile.mockClear()
@@ -355,6 +361,11 @@ vi.mock('electron-store', () => {
       }
 
       set(value: T): void {
+        const error = mocks.takeStoreSetError()
+        if (error) {
+          throw error
+        }
+
         this.store = structuredClone(value)
         mocks.setPersistedState(this.store)
       }
@@ -488,6 +499,69 @@ describe('SessionManager restore policy', () => {
   afterEach(() => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
+  })
+
+  it('retries transient session-store persist failures without throwing', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'other',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/duanheping/other',
+      })),
+    }
+    const persistError = Object.assign(
+      new Error(
+        "EPERM: operation not permitted, rename 'agenclis-sessions.json.tmp' -> 'agenclis-sessions.json'",
+      ),
+      { code: 'EPERM' },
+    )
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      { identityResolver },
+    )
+    mocks.queueStoreSetError(persistError)
+
+    await expect(
+      manager.createProject({
+        title: 'Other',
+        rootPath: 'C:\\other',
+      }),
+    ).resolves.toMatchObject({
+      config: expect.objectContaining({
+        rootPath: 'C:\\other',
+      }),
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '[agenclis sessions] failed to persist session state (EPERM); retrying in 250ms',
+      ),
+    )
+
+    vi.advanceTimersByTime(250)
+
+    const persistedState = mocks.getPersistedState() as {
+      projects: Array<{ rootPath: string }>
+    }
+    expect(persistedState.projects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rootPath: 'C:\\other',
+        }),
+      ]),
+    )
+
+    manager.dispose()
+    warnSpy.mockRestore()
   })
 
   it('restores only the active saved session at launch and lazily starts others on demand', async () => {
@@ -728,7 +802,7 @@ describe('SessionManager restore policy', () => {
     )
   })
 
-  it('fails restoring a managed Codex session when no stored session id exists', async () => {
+  it('recovers a legacy Codex session id before restoring', async () => {
     mocks.setPersistedState({
       projects: [
         {
@@ -781,12 +855,26 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
-    await vi.runOnlyPendingTimersAsync()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
 
+    expectSpawnedPowerShellCommand(
+      0,
+      'codex resume 019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
+    )
     expect(
-      manager.listSessions().projects[0]?.sessions[0]?.runtime.status,
-    ).toBe('error')
-    expect(mocks.spawn).not.toHaveBeenCalled()
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: { provider: string, sessionId: string }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toEqual({
+      provider: 'codex',
+      sessionId: '019cf7a4-db19-78a0-a9b1-b9e3d2b0126a',
+    })
   })
 
   it('restores a saved Codex session id even when newer transcripts exceed the recent scan window', async () => {
@@ -1588,7 +1676,7 @@ describe('SessionManager restore policy', () => {
     expectSpawnedPowerShellCommand(1, 'codex resume 019codex-session-b')
   })
 
-  it('fails restoring a Codex session without a stored id even when matching transcripts exist on disk', async () => {
+  it('recovers a legacy Codex session id even when newer transcripts exceed the recent scan window', async () => {
     const createdAt = '2026-03-30T15:10:31.377Z'
     const updatedAt = '2026-03-30T15:12:35.672Z'
     const startedAt = new Date('2026-03-30T15:10:33.570Z')
@@ -1666,12 +1754,23 @@ describe('SessionManager restore policy', () => {
     })
 
     await manager.restoreSessions()
-    await vi.runOnlyPendingTimersAsync()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
 
+    expectSpawnedPowerShellCommand(0, 'codex resume 019historical-codex-session')
     expect(
-      manager.listSessions().projects[0]?.sessions[0]?.runtime.status,
-    ).toBe('error')
-    expect(mocks.spawn).not.toHaveBeenCalled()
+      (
+        mocks.getPersistedState() as {
+          sessions: Array<{
+            externalSession?: { provider: string, sessionId: string }
+          }>
+        }
+      ).sessions[0]?.externalSession,
+    ).toEqual({
+      provider: 'codex',
+      sessionId: '019historical-codex-session',
+    })
   })
 })
 
@@ -1780,6 +1879,46 @@ describe('SessionManager project lifecycle', () => {
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
     expectSpawnedPowerShellCommand(0, 'copilot --allow-all --no-ask-user')
+  })
+
+  it('removes classic GitHub PATs from managed Copilot session environments', async () => {
+    const originalGithubToken = process.env.GITHUB_TOKEN
+    const originalGhToken = process.env.GH_TOKEN
+    process.env.GITHUB_TOKEN = 'ghp_classic_token'
+    process.env.GH_TOKEN = 'github_pat_fine_grained_token'
+
+    try {
+      const manager = new SessionManager({
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      })
+
+      await manager.createSession({
+        projectTitle: 'Workspace',
+        projectRootPath: 'C:\\repo',
+        startupCommand: 'copilot',
+      })
+
+      const spawnOptions = (mocks.spawn.mock.calls[0] as unknown[])[2] as {
+        env?: NodeJS.ProcessEnv
+      }
+      expect(spawnOptions.env?.GITHUB_TOKEN).toBeUndefined()
+      expect(spawnOptions.env?.GH_TOKEN).toBe('github_pat_fine_grained_token')
+      expect(spawnOptions.env?.TERM).toBe('xterm-256color')
+    } finally {
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken
+      }
+      if (originalGhToken === undefined) {
+        delete process.env.GH_TOKEN
+      } else {
+        process.env.GH_TOKEN = originalGhToken
+      }
+    }
   })
 
   it('adds Copilot full-access flags even when related allow flags are already present', async () => {
