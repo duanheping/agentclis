@@ -73,6 +73,14 @@ const TERMINAL_RESTORE_CHUNK_SIZE = 64 * 1024
 const TERMINAL_REPLAY_BLOCKING_BUDGET_MS = 120
 const TERMINAL_REPLAY_FETCH_TIMEOUT_MS = 1_500
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return String(error)
+}
+
 function buildEmptyTerminalReplay(): SessionTerminalReplay {
   return {
     chunks: [],
@@ -765,7 +773,11 @@ function TerminalSurface({
       )
       markdownFileLinks = terminal.registerLinkProvider(
         createMarkdownFileLinkProvider(terminal, (target) => {
-          void window.agentCli.openFileReference(target, cwd)
+          void window.agentCli.openFileReference(target, cwd).catch((error) => {
+            console.warn(
+              `[agenclis shell] failed to open file reference "${target}": ${getErrorMessage(error)}`,
+            )
+          })
         }, (target) => {
           void window.agentCli.openExternalLink(target)
         }, {

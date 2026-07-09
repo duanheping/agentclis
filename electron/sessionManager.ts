@@ -215,6 +215,8 @@ const EXTERNAL_ATTENTION_RESOLUTION_RETRY_DELAYS_MS = [
 const LIVE_ATTENTION_BUFFER_LIMIT = 4_096
 const TOUCH_RUNTIME_DEBOUNCE_MS = 300
 const INPUT_TRANSCRIPT_FLUSH_MS = 250
+const SESSION_PERSIST_RETRY_DELAY_MS = 250
+const SESSION_PERSIST_MAX_RETRY_COUNT = 5
 const SESSION_TERMINAL_REPLAY_MAX_BYTES = 2 * 1024 * 1024
 const SESSION_TERMINAL_REPLAY_MAX_EVENTS = 5_000
 const SESSION_RESTORE_BACKFILL_MAX_BYTES = 128 * 1024
@@ -268,6 +270,20 @@ function isMeaningfulSessionTitleCandidate(title: string): boolean {
   }
 
   return /[\p{L}\p{N}]/u.test(normalized)
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) {
+    return undefined
+  }
+
+  const code = Reflect.get(error, 'code')
+  return typeof code === 'string' ? code : undefined
+}
+
+function isTransientSessionStoreError(error: unknown): boolean {
+  const code = getErrorCode(error)
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
 }
 
 function deriveLegacySessionDefaultTitle(startupCommand: string, cwd: string): string {
@@ -473,6 +489,8 @@ export class SessionManager {
   private restoreSnapshotBackfillStarted = false
   private identityRefreshTimer: NodeJS.Timeout | null = null
   private memoryBackfillTimer: NodeJS.Timeout | null = null
+  private pendingPersistRetryTimer: ReturnType<typeof setTimeout> | null = null
+  private persistRetryCount = 0
 
   constructor(events: SessionManagerEvents, services: SessionManagerServices = {}) {
     this.events = events
@@ -1028,6 +1046,8 @@ export class SessionManager {
     for (const sessionId of this.opencodeInstructionsState.keys()) {
       this.cleanupOpencodeInstructions(sessionId)
     }
+
+    this.clearScheduledPersistRetry()
   }
 
   private async startSession(
@@ -3950,8 +3970,8 @@ export class SessionManager {
     return location
   }
 
-  private persist(): void {
-    this.store.set({
+  private buildPersistedSessionState(): PersistedSessionState {
+    return {
       projects: Array.from(this.projects.values()),
       locations: Array.from(this.locations.values()),
       sessions: Array.from(this.configs.values()),
@@ -3971,7 +3991,59 @@ export class SessionManager {
         ),
       ),
       activeSessionId: this.activeSessionId,
-    })
+    }
+  }
+
+  private persist(): void {
+    try {
+      this.store.set(this.buildPersistedSessionState())
+      this.persistRetryCount = 0
+      this.clearScheduledPersistRetry()
+    } catch (error) {
+      this.handlePersistFailure(error)
+    }
+  }
+
+  private handlePersistFailure(error: unknown): void {
+    const message = this.getErrorMessage(error)
+    if (!isTransientSessionStoreError(error)) {
+      console.error(`[agenclis sessions] failed to persist session state: ${message}`)
+      return
+    }
+
+    this.persistRetryCount += 1
+    const code = getErrorCode(error) ?? 'transient'
+    if (this.persistRetryCount > SESSION_PERSIST_MAX_RETRY_COUNT) {
+      console.warn(
+        `[agenclis sessions] failed to persist session state after ${SESSION_PERSIST_MAX_RETRY_COUNT} retries (${code}): ${message}`,
+      )
+      return
+    }
+
+    console.warn(
+      `[agenclis sessions] failed to persist session state (${code}); retrying in ${SESSION_PERSIST_RETRY_DELAY_MS}ms: ${message}`,
+    )
+    this.schedulePersistRetry()
+  }
+
+  private schedulePersistRetry(): void {
+    if (this.pendingPersistRetryTimer) {
+      return
+    }
+
+    this.pendingPersistRetryTimer = setTimeout(() => {
+      this.pendingPersistRetryTimer = null
+      this.persist()
+    }, SESSION_PERSIST_RETRY_DELAY_MS)
+  }
+
+  private clearScheduledPersistRetry(): void {
+    if (!this.pendingPersistRetryTimer) {
+      return
+    }
+
+    clearTimeout(this.pendingPersistRetryTimer)
+    this.pendingPersistRetryTimer = null
   }
 
   private normalizePath(value: string): string {

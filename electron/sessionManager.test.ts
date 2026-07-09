@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
   let nextProvisionedCodexSessionNumber = 1
   let nextProvisionedCopilotSessionNumber = 1
   let autoProvisionManagedSessions = true
+  const storeSetErrors: unknown[] = []
   const files = new Map<string, { content: string; mtimeMs: number }>()
   const decodeSpawnedCommand = (args: unknown): string | null => {
     if (!Array.isArray(args)) {
@@ -195,6 +196,10 @@ const mocks = vi.hoisted(() => {
     setPersistedState: (value: unknown) => {
       persistedState = structuredClone(value)
     },
+    queueStoreSetError: (error: unknown) => {
+      storeSetErrors.push(error)
+    },
+    takeStoreSetError: () => storeSetErrors.shift(),
     setAutoProvisionManagedSessions: (enabled: boolean) => {
       autoProvisionManagedSessions = enabled
     },
@@ -205,6 +210,7 @@ const mocks = vi.hoisted(() => {
       nextProvisionedCopilotSessionNumber = 1
       autoProvisionManagedSessions = true
       opencodeSessionListStdout = '[]'
+      storeSetErrors.length = 0
       files.clear()
       terminals.length = 0
       execFile.mockClear()
@@ -355,6 +361,11 @@ vi.mock('electron-store', () => {
       }
 
       set(value: T): void {
+        const error = mocks.takeStoreSetError()
+        if (error) {
+          throw error
+        }
+
         this.store = structuredClone(value)
         mocks.setPersistedState(this.store)
       }
@@ -488,6 +499,69 @@ describe('SessionManager restore policy', () => {
   afterEach(() => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
+  })
+
+  it('retries transient session-store persist failures without throwing', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const identityResolver = {
+      inspect: vi.fn(async (rootPath: string): Promise<ProjectLocationIdentity> => ({
+        rootPath,
+        label: 'other',
+        repoRoot: rootPath,
+        gitCommonDir: `${rootPath}\\.git`,
+        remoteFingerprint: 'github.com/duanheping/other',
+      })),
+    }
+    const persistError = Object.assign(
+      new Error(
+        "EPERM: operation not permitted, rename 'agenclis-sessions.json.tmp' -> 'agenclis-sessions.json'",
+      ),
+      { code: 'EPERM' },
+    )
+
+    const manager = new SessionManager(
+      {
+        onData: () => undefined,
+        onConfig: () => undefined,
+        onRuntime: () => undefined,
+        onExit: () => undefined,
+      },
+      { identityResolver },
+    )
+    mocks.queueStoreSetError(persistError)
+
+    await expect(
+      manager.createProject({
+        title: 'Other',
+        rootPath: 'C:\\other',
+      }),
+    ).resolves.toMatchObject({
+      config: expect.objectContaining({
+        rootPath: 'C:\\other',
+      }),
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '[agenclis sessions] failed to persist session state (EPERM); retrying in 250ms',
+      ),
+    )
+
+    vi.advanceTimersByTime(250)
+
+    const persistedState = mocks.getPersistedState() as {
+      projects: Array<{ rootPath: string }>
+    }
+    expect(persistedState.projects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rootPath: 'C:\\other',
+        }),
+      ]),
+    )
+
+    manager.dispose()
+    warnSpy.mockRestore()
   })
 
   it('restores only the active saved session at launch and lazily starts others on demand', async () => {
