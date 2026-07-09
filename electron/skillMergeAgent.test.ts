@@ -8,7 +8,11 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
-  const spawn = vi.fn((_command: string, args: string[], options?: { cwd?: string }) => {
+  const spawn = vi.fn((
+    _command: string,
+    args: string[],
+    options?: { cwd?: string, env?: NodeJS.ProcessEnv },
+  ) => {
     const process = new EventEmitter() as EventEmitter & {
       stdout: EventEmitter
       stderr: EventEmitter
@@ -270,57 +274,69 @@ describe('skillMergeAgent', () => {
   })
 
   it('generates and reviews a Copilot merge proposal', async () => {
-    const proposal = await generateSkillMerge('copilot', 'document-topic-search', [
-      {
-        root: 'library',
-        files: new Map([
-          ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
-        ]),
-      },
-      {
-        root: 'discovered',
-        files: new Map([
-          ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
-        ]),
-      },
-    ])
+    const originalGithubToken = process.env.GITHUB_TOKEN
+    process.env.GITHUB_TOKEN = 'ghp_classic_token'
 
-    const review = await reviewSkillMerge('copilot', proposal, [
-      {
-        root: 'library',
-        files: new Map([
-          ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
-        ]),
-      },
-      {
-        root: 'discovered',
-        files: new Map([
-          ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
-        ]),
-      },
-    ])
+    try {
+      const proposal = await generateSkillMerge('copilot', 'document-topic-search', [
+        {
+          root: 'library',
+          files: new Map([
+            ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
+          ]),
+        },
+        {
+          root: 'discovered',
+          files: new Map([
+            ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
+          ]),
+        },
+      ])
 
-    expect(proposal).toEqual(
-      expect.objectContaining({
-        skillName: 'document-topic-search',
-        mergeAgent: 'copilot',
-        summary: 'Copilot merged the skill.',
-        warnings: ['Review the merged helper note manually.'],
-      }),
-    )
-    expect(proposal.files).toEqual([
-      {
-        path: 'SKILL.md',
-        content: '# merged by copilot\n',
-      },
-    ])
-    expect(review).toEqual(
-      expect.objectContaining({
-        reviewer: 'copilot',
-        status: 'approved-with-warnings',
-        summary: 'Copilot review found one follow-up.',
-      }),
-    )
+      const review = await reviewSkillMerge('copilot', proposal, [
+        {
+          root: 'library',
+          files: new Map([
+            ['SKILL.md', Buffer.from('# codex\n', 'utf8')],
+          ]),
+        },
+        {
+          root: 'discovered',
+          files: new Map([
+            ['SKILL.md', Buffer.from('# claude\n', 'utf8')],
+          ]),
+        },
+      ])
+
+      expect(proposal).toEqual(
+        expect.objectContaining({
+          skillName: 'document-topic-search',
+          mergeAgent: 'copilot',
+          summary: 'Copilot merged the skill.',
+          warnings: ['Review the merged helper note manually.'],
+        }),
+      )
+      expect(proposal.files).toEqual([
+        {
+          path: 'SKILL.md',
+          content: '# merged by copilot\n',
+        },
+      ])
+      expect(review).toEqual(
+        expect.objectContaining({
+          reviewer: 'copilot',
+          status: 'approved-with-warnings',
+          summary: 'Copilot review found one follow-up.',
+        }),
+      )
+      expect(mocks.spawn.mock.calls[0]?.[2]?.env?.GITHUB_TOKEN).toBeUndefined()
+    } finally {
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken
+      }
+    }
   })
 
   it('generates and reviews an opencode merge proposal', async () => {
