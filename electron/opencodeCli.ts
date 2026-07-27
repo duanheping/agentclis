@@ -204,6 +204,36 @@ function extractFirstJsonValue(text: string): string | null {
 }
 
 /**
+ * Extract the session array from the result of running
+ * `opencode session list --format json`.
+ *
+ * Accepts either the resolved `{ stdout }` result or the rejected error thrown
+ * by `execFile`. The opencode binary is slow to start and can keep running
+ * after it has already printed the full JSON payload, which trips execFile's
+ * timeout and rejects with an error that still carries the complete `stdout`.
+ * Passing the error here salvages that payload instead of discarding a result
+ * we already received.
+ */
+export function extractOpencodeSessionList(
+  result: { stdout?: unknown } | null | undefined,
+): unknown[] {
+  const stdout = result?.stdout
+  if (typeof stdout !== 'string' || !stdout) {
+    return []
+  }
+
+  const parsed = parseOpencodeJsonOutput(stdout)
+  if (Array.isArray(parsed)) {
+    return parsed
+  }
+  if (parsed && typeof parsed === 'object') {
+    const sessions = (parsed as { sessions?: unknown }).sessions
+    return Array.isArray(sessions) ? sessions : [parsed]
+  }
+  return []
+}
+
+/**
  * Parse a session record emitted by `opencode session list --format json`
  * or `opencode export <id>`.
  *
