@@ -66,8 +66,8 @@ import {
 } from './codexCli'
 import {
   buildOpencodeResumeCommand,
+  extractOpencodeSessionList,
   extractOpencodeSessionMeta,
-  parseOpencodeJsonOutput,
   supportsOpencodeSessionResume,
   withOpencodeFullAccess,
 } from './opencodeCli'
@@ -145,7 +145,11 @@ type StoredSessionConfig = Omit<SessionConfig, 'projectId'> & {
 const CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions')
 const COPILOT_SESSIONS_ROOT = path.join(os.homedir(), '.copilot', 'session-state')
 const OPENCODE_SESSION_LIST_LIMIT = 64
-const OPENCODE_SESSION_QUERY_TIMEOUT_MS = 10_000
+const OPENCODE_SESSION_QUERY_TIMEOUT_MS = 15_000
+// Short-lived cache so the discovery retry loop and concurrent callers reuse a
+// single `opencode session list` result instead of spawning the (slow, DB
+// locking) opencode binary repeatedly.
+const OPENCODE_SESSION_LIST_CACHE_TTL_MS = 1_500
 const OPENCODE_SESSION_DISCOVERY_RETRY_DELAYS_MS = Array.from(
   { length: 23 },
   () => 750,
@@ -442,6 +446,16 @@ export class SessionManager {
   private readonly liveAttentionBuffers = new Map<string, string>()
   private readonly claimedExternalSessions = new Map<string, string>()
   private readonly pendingExternalSessionDetections = new Map<string, NodeJS.Timeout>()
+  // Coalesces concurrent/rapid `opencode session list` invocations so we never
+  // run more than one at a time (spawning several slow opencode processes at
+  // once contends with the running TUI's SQLite database).
+  private opencodeSessionListQuery: Promise<unknown[]> | null = null
+  private opencodeSessionListCache: { at: number; sessions: unknown[] } | null = null
+  // Coalesces concurrent scans of the (potentially very large) copilot
+  // session-state directory during discovery.
+  private copilotSessionScanQuery: Promise<
+    Array<{ workspaceFilePath: string; modifiedAt: number }>
+  > | null = null
   private readonly pendingManagedSessionBindings = new Map<
     string,
     {
@@ -2049,16 +2063,50 @@ export class SessionManager {
    * Query opencode's session database via the CLI. opencode stores sessions in
    * a database rather than loose transcript files, so we shell out to
    * `opencode session list --format json` and parse the JSON payload.
+   *
+   * The opencode binary is slow to start (~seconds) and opens the same SQLite
+   * database the interactive TUI holds, so uncoordinated invocations produce
+   * "database is locked" errors in the running session and time out. Concurrent
+   * and rapid callers are therefore coalesced onto a single in-flight query and
+   * a short-lived cache, and a killed-but-complete query is salvaged from its
+   * stdout instead of being discarded.
    */
   private async queryOpencodeSessions(
     limit: number,
   ): Promise<unknown[]> {
-    const executable = resolveOpencodeExecutable(this.resolveOpencodeStartupCommand())
+    const cached = this.opencodeSessionListCache
+    if (cached && Date.now() - cached.at < OPENCODE_SESSION_LIST_CACHE_TTL_MS) {
+      return cached.sessions.slice(0, limit)
+    }
+
+    if (!this.opencodeSessionListQuery) {
+      this.opencodeSessionListQuery = this.runOpencodeSessionListQuery().finally(
+        () => {
+          this.opencodeSessionListQuery = null
+        },
+      )
+    }
+
+    const sessions = await this.opencodeSessionListQuery
+    return sessions.slice(0, limit)
+  }
+
+  private async runOpencodeSessionListQuery(): Promise<unknown[]> {
+    const executable = resolveOpencodeExecutable(
+      this.resolveOpencodeStartupCommand(),
+    )
 
     try {
-      const { stdout } = await execFileAsync(
+      const result = await execFileAsync(
         executable,
-        ['session', 'list', '--format', 'json', '--max-count', String(limit)],
+        [
+          'session',
+          'list',
+          '--format',
+          'json',
+          '--max-count',
+          String(OPENCODE_SESSION_LIST_LIMIT),
+        ],
         {
           timeout: OPENCODE_SESSION_QUERY_TIMEOUT_MS,
           windowsHide: true,
@@ -2066,19 +2114,48 @@ export class SessionManager {
         },
       )
 
-      const parsed = parseOpencodeJsonOutput(stdout)
-      if (Array.isArray(parsed)) {
-        return parsed
+      const sessions = extractOpencodeSessionList(result)
+      if (sessions.length > 0) {
+        this.opencodeSessionListCache = { at: Date.now(), sessions }
       }
-      if (parsed && typeof parsed === 'object') {
-        const sessions = (parsed as { sessions?: unknown }).sessions
-        return Array.isArray(sessions) ? sessions : [parsed]
-      }
-      return []
+      return sessions
     } catch (error) {
-      console.warn('[opencode] Failed to query session list:', error)
+      // opencode can print the full JSON payload and then linger, tripping the
+      // timeout; the rejected error still carries stdout, so recover it rather
+      // than throwing away a result we already received.
+      const salvaged = extractOpencodeSessionList(error as { stdout?: unknown })
+      if (salvaged.length > 0) {
+        this.opencodeSessionListCache = { at: Date.now(), sessions: salvaged }
+        return salvaged
+      }
+
+      console.warn(
+        '[opencode] Failed to query session list:',
+        this.describeOpencodeQueryError(error),
+      )
       return []
     }
+  }
+
+  private describeOpencodeQueryError(error: unknown): string {
+    if (error && typeof error === 'object') {
+      const details = error as {
+        killed?: boolean
+        signal?: string
+        message?: string
+      }
+      if (details.killed) {
+        return (
+          `timed out after ${OPENCODE_SESSION_QUERY_TIMEOUT_MS}ms` +
+          `${details.signal ? ` (${details.signal})` : ''}; the opencode ` +
+          'session database may be locked by a running session.'
+        )
+      }
+      if (typeof details.message === 'string' && details.message) {
+        return details.message
+      }
+    }
+    return String(error)
   }
 
   /**
@@ -2103,6 +2180,49 @@ export class SessionManager {
     sinceMs: number,
     limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
   ): Promise<DetectedExternalSession[]> {
+    const candidates = (await this.scanCopilotSessionCandidates())
+      .filter((candidate) => candidate.modifiedAt >= sinceMs)
+      .sort((left, right) => right.modifiedAt - left.modifiedAt)
+      .slice(0, limit)
+
+    const sessions: DetectedExternalSession[] = []
+    for (const candidate of candidates) {
+      const sessionMeta = await this.readCopilotSessionMeta(
+        candidate.workspaceFilePath,
+      )
+      if (sessionMeta) {
+        sessions.push(sessionMeta)
+      }
+    }
+
+    return sessions
+  }
+
+  /**
+   * Enumerate every copilot session directory and its `workspace.yaml`
+   * modification time. The copilot session-state directory can hold thousands
+   * of sessions, so this scan is expensive; concurrent callers (each managed
+   * session runs its own discovery retry loop) are coalesced onto a single
+   * in-flight scan, and only `workspace.yaml` is stat-ed (the per-message
+   * `events.jsonl` stat is skipped) to halve the number of syscalls. The scan
+   * returns creation-time candidates; callers filter by `sinceMs` and match on
+   * the real session start time read from `workspace.yaml`.
+   */
+  private scanCopilotSessionCandidates(): Promise<
+    Array<{ workspaceFilePath: string; modifiedAt: number }>
+  > {
+    if (!this.copilotSessionScanQuery) {
+      this.copilotSessionScanQuery = this.runCopilotSessionScan().finally(() => {
+        this.copilotSessionScanQuery = null
+      })
+    }
+
+    return this.copilotSessionScanQuery
+  }
+
+  private async runCopilotSessionScan(): Promise<
+    Array<{ workspaceFilePath: string; modifiedAt: number }>
+  > {
     let entries
     try {
       entries = await readdir(COPILOT_SESSIONS_ROOT, { withFileTypes: true })
@@ -2125,11 +2245,6 @@ export class SessionManager {
         entry.name,
         'workspace.yaml',
       )
-      const eventsFilePath = path.join(
-        COPILOT_SESSIONS_ROOT,
-        entry.name,
-        'events.jsonl',
-      )
 
       let workspaceDetails
       try {
@@ -2138,35 +2253,13 @@ export class SessionManager {
         continue
       }
 
-      let modifiedAt = workspaceDetails.mtimeMs
-      try {
-        const eventsDetails = await stat(eventsFilePath)
-        modifiedAt = Math.max(modifiedAt, eventsDetails.mtimeMs)
-      } catch {
-        // Ignore missing Copilot event logs and fall back to the workspace file.
-      }
-
-      if (modifiedAt < sinceMs) {
-        continue
-      }
-
       candidates.push({
         workspaceFilePath,
-        modifiedAt,
+        modifiedAt: workspaceDetails.mtimeMs,
       })
     }
 
-    const sessions: DetectedExternalSession[] = []
-    for (const candidate of candidates
-      .sort((left, right) => right.modifiedAt - left.modifiedAt)
-      .slice(0, limit)) {
-      const sessionMeta = await this.readCopilotSessionMeta(candidate.workspaceFilePath)
-      if (sessionMeta) {
-        sessions.push(sessionMeta)
-      }
-    }
-
-    return sessions
+    return candidates
   }
 
   private async listRecentCodexSessionFiles(

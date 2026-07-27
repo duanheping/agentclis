@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildOpencodeResumeCommand,
+  extractOpencodeSessionList,
   extractOpencodeSessionMeta,
   parseOpencodeJsonOutput,
   supportsOpencodeSessionResume,
@@ -169,6 +170,50 @@ describe('opencodeCli', () => {
         cwd: 'C:\\repo',
         summary: 'Banner test',
       })
+    })
+  })
+
+  describe('extractOpencodeSessionList', () => {
+    it('extracts the array from a resolved result', () => {
+      expect(
+        extractOpencodeSessionList({ stdout: '[{"id":"ses_1"},{"id":"ses_2"}]' }),
+      ).toEqual([{ id: 'ses_1' }, { id: 'ses_2' }])
+    })
+
+    it('salvages stdout from a killed (timed out) query error', () => {
+      // The opencode binary can print the full payload and then linger, which
+      // trips execFile's timeout; the rejected error still carries stdout.
+      const timeoutError = Object.assign(new Error('Command failed'), {
+        killed: true,
+        signal: 'SIGTERM',
+        code: null,
+        stdout: '[\n  { "id": "ses_133", "directory": "C:\\\\repo" }\n]\n',
+        stderr: '',
+      })
+
+      expect(extractOpencodeSessionList(timeoutError)).toEqual([
+        { id: 'ses_133', directory: 'C:\\repo' },
+      ])
+    })
+
+    it('unwraps a { sessions: [...] } payload', () => {
+      expect(
+        extractOpencodeSessionList({ stdout: '{"sessions":[{"id":"ses_1"}]}' }),
+      ).toEqual([{ id: 'ses_1' }])
+    })
+
+    it('wraps a single session object into an array', () => {
+      expect(extractOpencodeSessionList({ stdout: '{"id":"ses_1"}' })).toEqual([
+        { id: 'ses_1' },
+      ])
+    })
+
+    it('returns an empty array when stdout is empty or missing', () => {
+      expect(extractOpencodeSessionList({ stdout: '' })).toEqual([])
+      expect(extractOpencodeSessionList({ stdout: 'no json here' })).toEqual([])
+      expect(extractOpencodeSessionList({})).toEqual([])
+      expect(extractOpencodeSessionList(null)).toEqual([])
+      expect(extractOpencodeSessionList(undefined)).toEqual([])
     })
   })
 })

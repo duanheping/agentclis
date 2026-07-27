@@ -148,6 +148,7 @@ const mocks = vi.hoisted(() => {
   // invocation. opencode stores sessions in a DB rather than loose files, so the
   // SessionManager shells out via execFile instead of reading the filesystem.
   let opencodeSessionListStdout = '[]'
+  let opencodeSessionListError: (Error & { stdout?: string }) | null = null
   const execFile = vi.fn(
     (
       _command: string,
@@ -159,6 +160,12 @@ const mocks = vi.hoisted(() => {
         Array.isArray(args) &&
         args[0] === 'session' &&
         args[1] === 'list'
+      if (isSessionList && opencodeSessionListError) {
+        // Simulate `execFile` rejecting (e.g. a SIGTERM timeout) while the
+        // binary still managed to print its JSON payload onto the error.
+        callback(opencodeSessionListError, { stdout: '', stderr: '' })
+        return {} as unknown
+      }
       callback(null, {
         stdout: isSessionList ? opencodeSessionListStdout : '',
         stderr: '',
@@ -177,6 +184,9 @@ const mocks = vi.hoisted(() => {
     setOpencodeSessionListResponse: (sessions: unknown) => {
       opencodeSessionListStdout =
         typeof sessions === 'string' ? sessions : JSON.stringify(sessions)
+    },
+    setOpencodeSessionListError: (error: Error & { stdout?: string }) => {
+      opencodeSessionListError = error
     },
     getFile: (filePath: string) => files.get(filePath)?.content,
     getFileMeta: (filePath: string) => files.get(filePath),
@@ -210,6 +220,7 @@ const mocks = vi.hoisted(() => {
       nextProvisionedCopilotSessionNumber = 1
       autoProvisionManagedSessions = true
       opencodeSessionListStdout = '[]'
+      opencodeSessionListError = null
       storeSetErrors.length = 0
       files.clear()
       terminals.length = 0
@@ -1458,6 +1469,74 @@ describe('SessionManager restore policy', () => {
       '--format',
       'json',
     ])
+    expectSpawnedPowerShellCommand(0, `opencode --session ${externalSessionId}`)
+  })
+
+  it('restores an opencode session by salvaging stdout from a killed query', async () => {
+    const externalSessionId = 'ses_opencode_salvaged'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'review callout analysis',
+          startupCommand: 'opencode',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+          externalSession: {
+            provider: 'opencode',
+            sessionId: externalSessionId,
+          },
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    // The query is killed (SIGTERM) but the binary already printed the full
+    // payload onto the rejected error's stdout — the session must still resolve.
+    mocks.setOpencodeSessionListError(
+      Object.assign(new Error('Command failed'), {
+        killed: true,
+        signal: 'SIGTERM',
+        code: null,
+        stdout: JSON.stringify([
+          {
+            id: externalSessionId,
+            title: 'Review Callout Analysis',
+            directory: 'C:\\repo',
+            time: { created: Date.parse('2026-03-20T08:00:31.000Z') },
+          },
+        ]),
+        stderr: '',
+      }),
+    )
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.execFile).toHaveBeenCalled()
     expectSpawnedPowerShellCommand(0, `opencode --session ${externalSessionId}`)
   })
 
