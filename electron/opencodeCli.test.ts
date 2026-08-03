@@ -48,11 +48,18 @@ describe('opencodeCli', () => {
     )
   })
 
-  it('leaves the TUI command unchanged for full-access (no CLI bypass flag)', () => {
-    // The opencode TUI launcher has no permission-bypass flag, so full-access
-    // is a no-op on the command line.
-    expect(withOpencodeFullAccess('opencode --model m')).toBe('opencode --model m')
-    expect(withOpencodeFullAccess('opencode')).toBe('opencode')
+  it('enables auto-approval for full-access without duplicating the flag', () => {
+    expect(withOpencodeFullAccess('opencode --model m')).toBe(
+      'opencode --model m --auto',
+    )
+    expect(withOpencodeFullAccess('opencode')).toBe('opencode --auto')
+    expect(withOpencodeFullAccess('opencode --auto')).toBe('opencode --auto')
+  })
+
+  it('preserves auto-approval when building a resume command', () => {
+    expect(buildOpencodeResumeCommand('opencode --auto', 'ses_abc123')).toBe(
+      'opencode --auto --session ses_abc123',
+    )
   })
 
   it('returns null from withOpencodeFullAccess for non-opencode commands', () => {

@@ -45,6 +45,7 @@ const RESUME_FLAGS = new Set(['-c', '--continue', '--session', '-s'])
 
 // Standalone boolean flags accepted by the TUI launcher.
 const FLAG_OPTIONS = new Set([
+  '--auto',
   '--fork',
   '--mdns',
   '--print-logs',
@@ -97,22 +98,18 @@ export function buildOpencodeResumeCommand(
   ])
 }
 
-/**
- * Full-access for the opencode TUI is a no-op on the command line.
- *
- * Unlike `opencode run`, the interactive TUI launcher exposes no permission
- * bypass flag (`--dangerously-skip-permissions` is rejected as unknown), and
- * permissions are governed by opencode's own config / OPENCODE_PERMISSION env.
- * We therefore validate the command but leave it unchanged so the session
- * still launches; opencode handles permission prompts itself.
- */
+/** Enable opencode auto-approval while preserving explicit deny rules. */
 export function withOpencodeFullAccess(command: string): string | null {
   const parsed = parseOpencodeCommand(command)
   if (!parsed) {
     return null
   }
 
-  return joinCommandTokens([parsed.executable, ...parsed.resumeOptions])
+  return joinCommandTokens([
+    parsed.executable,
+    ...parsed.resumeOptions,
+    ...(parsed.optionNames.has('--auto') ? [] : ['--auto']),
+  ])
 }
 
 /**

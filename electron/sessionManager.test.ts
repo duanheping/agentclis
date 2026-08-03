@@ -1469,7 +1469,128 @@ describe('SessionManager restore policy', () => {
       '--format',
       'json',
     ])
+    expect(mocks.execFile.mock.calls[0]?.[2]).toMatchObject({ cwd: 'C:\\repo' })
     expectSpawnedPowerShellCommand(0, `opencode --session ${externalSessionId}`)
+  })
+
+  it('recovers a missing opencode session id from the project-scoped session list', async () => {
+    const externalSessionId = 'ses_opencode_legacy'
+
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'Review Callout Analysis',
+          startupCommand: 'opencode',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    mocks.setOpencodeSessionListResponse([
+      {
+        id: externalSessionId,
+        title: 'Review Callout Analysis',
+        directory: 'C:\\repo',
+        time: { created: Date.parse('2026-03-20T08:00:31.000Z') },
+      },
+    ])
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mocks.execFile.mock.calls[0]?.[2]).toMatchObject({ cwd: 'C:\\repo' })
+    expectSpawnedPowerShellCommand(0, `opencode --session ${externalSessionId}`)
+    expect(mocks.getPersistedState()).toMatchObject({
+      sessions: [
+        {
+          id: 'session-a',
+          externalSession: {
+            provider: 'opencode',
+            sessionId: externalSessionId,
+          },
+        },
+      ],
+    })
+  })
+
+  it('does not guess a missing opencode session id when multiple sessions match', async () => {
+    mocks.setPersistedState({
+      projects: [
+        {
+          id: 'project-1',
+          title: 'Workspace',
+          rootPath: 'C:\\repo',
+          createdAt: '2026-03-20T08:00:00.000Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          id: 'session-a',
+          projectId: 'project-1',
+          title: 'Review Callout Analysis',
+          startupCommand: 'opencode',
+          pendingFirstPromptTitle: false,
+          cwd: 'C:\\repo',
+          shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          createdAt: '2026-03-20T08:00:24.756Z',
+          updatedAt: '2026-03-20T08:15:00.000Z',
+        },
+      ],
+      activeSessionId: 'session-a',
+    })
+
+    mocks.setOpencodeSessionListResponse([
+      {
+        id: 'ses_opencode_first',
+        directory: 'C:\\repo',
+        time: { created: Date.parse('2026-03-20T08:00:31.000Z') },
+      },
+      {
+        id: 'ses_opencode_second',
+        directory: 'C:\\repo',
+        time: { created: Date.parse('2026-03-20T08:00:35.000Z') },
+      },
+    ])
+
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.execFile).toHaveBeenCalled()
+    })
+
+    expect(mocks.spawn).not.toHaveBeenCalled()
   })
 
   it('restores an opencode session by salvaging stdout from a killed query', async () => {
@@ -1958,6 +2079,25 @@ describe('SessionManager project lifecycle', () => {
 
     expect(mocks.spawn).toHaveBeenCalledTimes(1)
     expectSpawnedPowerShellCommand(0, 'copilot --allow-all --no-ask-user')
+  })
+
+  it('launches opencode with auto-approval when full-access is selected', async () => {
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.createSession({
+      projectTitle: 'Workspace',
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'opencode',
+      permissionLevel: 'full-access',
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    expectSpawnedPowerShellCommand(0, 'opencode --auto')
   })
 
   it('removes classic GitHub PATs from managed Copilot session environments', async () => {
