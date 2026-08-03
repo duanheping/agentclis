@@ -449,8 +449,14 @@ export class SessionManager {
   // Coalesces concurrent/rapid `opencode session list` invocations so we never
   // run more than one at a time (spawning several slow opencode processes at
   // once contends with the running TUI's SQLite database).
-  private opencodeSessionListQuery: Promise<unknown[]> | null = null
-  private opencodeSessionListCache: { at: number; sessions: unknown[] } | null = null
+  private opencodeSessionListQuery: {
+    cwd: string
+    promise: Promise<unknown[]>
+  } | null = null
+  private readonly opencodeSessionListCache = new Map<
+    string,
+    { at: number; sessions: unknown[] }
+  >()
   // Coalesces concurrent scans of the (potentially very large) copilot
   // session-state directory during discovery.
   private copilotSessionScanQuery: Promise<
@@ -1694,8 +1700,14 @@ export class SessionManager {
     }
 
     if (!config.externalSession) {
-      if (!options.allowManagedSessionBinding && provider === 'codex') {
-        const recoveredConfig = await this.recoverLegacyCodexSession(config)
+      if (
+        !options.allowManagedSessionBinding &&
+        (provider === 'codex' || provider === 'opencode')
+      ) {
+        const recoveredConfig =
+          provider === 'codex'
+            ? await this.recoverLegacyCodexSession(config)
+            : await this.recoverLegacyOpencodeSession(config)
         if (recoveredConfig.externalSession) {
           return {
             config: recoveredConfig,
@@ -1782,6 +1794,44 @@ export class SessionManager {
     return this.configs.get(config.id) ?? config
   }
 
+  private async recoverLegacyOpencodeSession(
+    config: SessionConfig,
+  ): Promise<SessionConfig> {
+    const referenceStartedAt = Date.parse(config.createdAt)
+    if (Number.isNaN(referenceStartedAt)) {
+      return config
+    }
+
+    const windowStart =
+      referenceStartedAt - LEGACY_EXTERNAL_SESSION_MATCH_TOLERANCE_MS
+    const windowEnd =
+      referenceStartedAt + LEGACY_EXTERNAL_SESSION_MATCH_TOLERANCE_MS
+    const normalizedCwd = this.normalizePath(config.cwd)
+    const matches = (
+      await this.listRecentOpencodeSessions(
+        windowStart,
+        undefined,
+        config.cwd,
+      )
+    )
+      .filter((candidate) => this.isEligibleExternalSessionCandidate(candidate))
+      .filter((candidate) => this.normalizePath(candidate.cwd) === normalizedCwd)
+      .filter((candidate) => candidate.startedAt <= windowEnd)
+      .filter((candidate) => {
+        const claimedBy = this.claimedExternalSessions.get(
+          this.getExternalSessionClaimKey(candidate.provider, candidate.sessionId),
+        )
+        return !claimedBy || claimedBy === config.id
+      })
+
+    if (matches.length !== 1) {
+      return config
+    }
+
+    this.attachExternalSession(config, matches[0])
+    return this.configs.get(config.id) ?? config
+  }
+
   private async pollForExternalSessionRef(
     sessionId: string,
     provider: 'codex' | 'copilot' | 'opencode',
@@ -1858,6 +1908,8 @@ export class SessionManager {
     const candidates = await this.listRecentExternalSessions(
       provider,
       startedAt - EXTERNAL_SESSION_DISCOVERY_LOOKBACK_MS,
+      undefined,
+      config.cwd,
     )
     const normalizedCwd = this.normalizePath(config.cwd)
     const earliestAllowedStart =
@@ -1896,6 +1948,7 @@ export class SessionManager {
       [config.updatedAt, config.createdAt]
         .map((value) => Date.parse(value))
         .filter((value) => !Number.isNaN(value)),
+      config.cwd,
     )
 
     if (!candidate) {
@@ -1911,13 +1964,14 @@ export class SessionManager {
     provider: 'codex' | 'copilot' | 'opencode',
     sessionId: string,
     referenceTimestamps: number[],
+    cwd?: string,
   ): Promise<DetectedExternalSession | null> {
     if (referenceTimestamps.length === 0) {
       return null
     }
 
     if (provider === 'opencode') {
-      const candidates = await this.listRecentOpencodeSessions(0)
+      const candidates = await this.listRecentOpencodeSessions(0, undefined, cwd)
       return (
         candidates.find((candidate) => candidate.sessionId === sessionId) ?? null
       )
@@ -1965,9 +2019,10 @@ export class SessionManager {
     provider: 'codex' | 'copilot' | 'opencode',
     sinceMs: number,
     limit = CODEX_SESSION_DISCOVERY_FILE_LIMIT,
+    cwd?: string,
   ): Promise<DetectedExternalSession[]> {
     if (provider === 'opencode') {
-      return this.listRecentOpencodeSessions(sinceMs, limit)
+      return this.listRecentOpencodeSessions(sinceMs, limit, cwd)
     }
 
     if (provider === 'copilot') {
@@ -2029,8 +2084,9 @@ export class SessionManager {
   private async listRecentOpencodeSessions(
     sinceMs: number,
     limit = OPENCODE_SESSION_LIST_LIMIT,
+    cwd?: string,
   ): Promise<DetectedExternalSession[]> {
-    const records = await this.queryOpencodeSessions(limit)
+    const records = await this.queryOpencodeSessions(limit, cwd)
     const sessions: DetectedExternalSession[] = []
 
     for (const record of records) {
@@ -2073,25 +2129,33 @@ export class SessionManager {
    */
   private async queryOpencodeSessions(
     limit: number,
+    cwd = process.cwd(),
   ): Promise<unknown[]> {
-    const cached = this.opencodeSessionListCache
+    const normalizedCwd = this.normalizePath(cwd)
+    const cached = this.opencodeSessionListCache.get(normalizedCwd)
     if (cached && Date.now() - cached.at < OPENCODE_SESSION_LIST_CACHE_TTL_MS) {
       return cached.sessions.slice(0, limit)
     }
 
-    if (!this.opencodeSessionListQuery) {
-      this.opencodeSessionListQuery = this.runOpencodeSessionListQuery().finally(
-        () => {
-          this.opencodeSessionListQuery = null
-        },
-      )
+    if (this.opencodeSessionListQuery) {
+      if (this.opencodeSessionListQuery.cwd === normalizedCwd) {
+        return (await this.opencodeSessionListQuery.promise).slice(0, limit)
+      }
+      await this.opencodeSessionListQuery.promise
+      return this.queryOpencodeSessions(limit, cwd)
     }
 
-    const sessions = await this.opencodeSessionListQuery
+    const promise = this.runOpencodeSessionListQuery(cwd).finally(() => {
+      if (this.opencodeSessionListQuery?.promise === promise) {
+        this.opencodeSessionListQuery = null
+      }
+    })
+    this.opencodeSessionListQuery = { cwd: normalizedCwd, promise }
+    const sessions = await promise
     return sessions.slice(0, limit)
   }
 
-  private async runOpencodeSessionListQuery(): Promise<unknown[]> {
+  private async runOpencodeSessionListQuery(cwd: string): Promise<unknown[]> {
     const executable = resolveOpencodeExecutable(
       this.resolveOpencodeStartupCommand(),
     )
@@ -2108,6 +2172,7 @@ export class SessionManager {
           String(OPENCODE_SESSION_LIST_LIMIT),
         ],
         {
+          cwd,
           timeout: OPENCODE_SESSION_QUERY_TIMEOUT_MS,
           windowsHide: true,
           maxBuffer: 16 * 1024 * 1024,
@@ -2116,7 +2181,10 @@ export class SessionManager {
 
       const sessions = extractOpencodeSessionList(result)
       if (sessions.length > 0) {
-        this.opencodeSessionListCache = { at: Date.now(), sessions }
+        this.opencodeSessionListCache.set(this.normalizePath(cwd), {
+          at: Date.now(),
+          sessions,
+        })
       }
       return sessions
     } catch (error) {
@@ -2125,7 +2193,10 @@ export class SessionManager {
       // than throwing away a result we already received.
       const salvaged = extractOpencodeSessionList(error as { stdout?: unknown })
       if (salvaged.length > 0) {
-        this.opencodeSessionListCache = { at: Date.now(), sessions: salvaged }
+        this.opencodeSessionListCache.set(this.normalizePath(cwd), {
+          at: Date.now(),
+          sessions: salvaged,
+        })
         return salvaged
       }
 
