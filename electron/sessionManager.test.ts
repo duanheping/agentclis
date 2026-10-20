@@ -2,6 +2,8 @@
 
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
+import { zstdCompressSync } from 'node:zlib'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,7 +22,7 @@ const mocks = vi.hoisted(() => {
   let nextProvisionedCopilotSessionNumber = 1
   let autoProvisionManagedSessions = true
   const storeSetErrors: unknown[] = []
-  const files = new Map<string, { content: string; mtimeMs: number }>()
+  const files = new Map<string, { content: string | Buffer; mtimeMs: number }>()
   const decodeSpawnedCommand = (args: unknown): string | null => {
     if (!Array.isArray(args)) {
       return null
@@ -188,11 +190,11 @@ const mocks = vi.hoisted(() => {
     setOpencodeSessionListError: (error: Error & { stdout?: string }) => {
       opencodeSessionListError = error
     },
-    getFile: (filePath: string) => files.get(filePath)?.content,
+    getFile: (filePath: string) => files.get(filePath)?.content.toString(),
     getFileMeta: (filePath: string) => files.get(filePath),
     listFiles: () => Array.from(files.entries()),
     getPersistedState: () => persistedState,
-    setFile: (filePath: string, content: string, modifiedAt?: string | number) => {
+    setFile: (filePath: string, content: string | Buffer, modifiedAt?: string | number) => {
       files.set(normalizeMockPath(filePath), {
         content,
         mtimeMs:
@@ -260,6 +262,14 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
     ...actual,
+    createReadStream: (filePath: string) => {
+      const meta = mocks.getFileMeta(normalizeMockPath(String(filePath)))
+      if (!meta) {
+        throw new Error(`ENOENT: ${filePath}`)
+      }
+
+      return Readable.from([Buffer.from(meta.content)])
+    },
     readFileSync: (filePath: string) => {
       const content = mocks.getFile(normalizeMockPath(String(filePath)))
       if (content === undefined) {
@@ -972,6 +982,54 @@ describe('SessionManager restore policy', () => {
     })
 
     expectSpawnedPowerShellCommand(0, `codex resume ${externalSessionId}`)
+  })
+
+  it.each([
+    { source: 'cli', valid: true, corrupt: false },
+    { source: 'vscode', valid: false, corrupt: false },
+    { source: 'cli', valid: false, corrupt: true },
+  ])('restores compressed Codex sessions only when valid: %j', async ({ source, valid, corrupt }) => {
+    const state = mocks.getPersistedState() as {
+      sessions: Array<Record<string, unknown>>
+      activeSessionId: string
+    }
+    const externalSessionId = '01a08158-dd2f-74b2-9c64-8f0f15f58040'
+    state.sessions = [{
+      ...state.sessions[0],
+      startupCommand: 'codex',
+      permissionLevel: 'full-access',
+      externalSession: { provider: 'codex', sessionId: externalSessionId },
+    }]
+    state.activeSessionId = 'session-a'
+    mocks.setPersistedState(state)
+    const filePath = path.join(
+      os.homedir(), '.codex', 'sessions', '2026', '03', '11',
+      `rollout-2026-03-11T10-00-00-${externalSessionId}.jsonl.zst`,
+    )
+    mocks.setFile(filePath, corrupt ? Buffer.from('invalid zstd') : zstdCompressSync(Buffer.from(
+      `{"type":"session_meta","payload":{"session_id":"${externalSessionId}","id":"${externalSessionId}","timestamp":"2026-03-11T10:00:00.000Z","cwd":"C:\\\\repo","originator":"codex-tui","source":"${source}"}}\n`,
+    )))
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(manager.listSessions().projects[0]?.sessions[0]?.runtime.status)
+        .toBe(valid ? 'running' : 'error')
+    })
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(valid ? 1 : 0)
+    expect(manager.listSessions().projects[0]?.sessions[0]?.config.externalSession)
+      .toEqual({ provider: 'codex', sessionId: externalSessionId })
+    if (valid) {
+      expectSpawnedPowerShellCommand(0,
+        `codex --dangerously-bypass-approvals-and-sandbox resume ${externalSessionId}`)
+    }
+    manager.dispose()
   })
 
   it('backfills Codex attention from a recovered transcript before polling new lines', async () => {

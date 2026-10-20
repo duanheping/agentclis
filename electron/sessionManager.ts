@@ -75,6 +75,7 @@ import {
   injectCodexInstructions,
   removeCodexInstructions,
 } from './codexInstructions'
+import { readCodexSessionPrefix } from './codexSessionFiles'
 import {
   injectOpencodeInstructions,
   removeOpencodeInstructions,
@@ -173,7 +174,6 @@ function resolveOpencodeExecutable(command: string): string {
 
   return firstToken || 'opencode'
 }
-const CODEX_SESSION_FILE_PREFIX_BYTES = 4096
 const EXTERNAL_SESSION_DISCOVERY_LOOKBACK_MS = 5_000
 const COPILOT_SESSION_DISCOVERY_RETRY_DELAYS_MS = Array.from(
   { length: 23 },
@@ -1999,17 +1999,22 @@ export class SessionManager {
         continue
       }
 
-      const matchingEntry = entries.find(
+      // A resumed rollout may have both forms while Codex materializes it.
+      const matchingEntries = entries.filter(
         (entry) =>
-          entry.isFile() && entry.name.endsWith(`${sessionId}.jsonl`),
-      )
-      if (!matchingEntry) {
-        continue
+          entry.isFile() && (
+            entry.name.endsWith(`${sessionId}.jsonl`) ||
+            entry.name.endsWith(`${sessionId}.jsonl.zst`)
+          ),
+      ).sort((left, right) => left.name.length - right.name.length)
+      for (const entry of matchingEntries) {
+        const candidate = await this.readCodexSessionMeta(
+          path.join(dayDirectory, entry.name),
+        )
+        if (candidate?.sessionId === sessionId) {
+          return candidate
+        }
       }
-
-      return await this.readCodexSessionMeta(
-        path.join(dayDirectory, matchingEntry.name),
-      )
     }
 
     return null
@@ -2352,7 +2357,7 @@ export class SessionManager {
       }
 
       for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+        if (!entry.isFile() || !/\.jsonl(?:\.zst)?$/u.test(entry.name)) {
           continue
         }
 
@@ -2414,13 +2419,8 @@ export class SessionManager {
   private async readCodexSessionMeta(
     filePath: string,
   ): Promise<DetectedExternalSession | null> {
-    let handle
-
     try {
-      handle = await open(filePath, 'r')
-      const buffer = Buffer.alloc(CODEX_SESSION_FILE_PREFIX_BYTES)
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-      const prefix = buffer.toString('utf8', 0, bytesRead)
+      const prefix = await readCodexSessionPrefix(filePath)
       const meta = extractCodexSessionMeta(prefix)
       if (!meta) {
         return null
@@ -2443,8 +2443,6 @@ export class SessionManager {
       }
     } catch {
       return null
-    } finally {
-      await handle?.close().catch(() => undefined)
     }
   }
 
@@ -2576,7 +2574,10 @@ export class SessionManager {
     this.resolvePendingManagedSessionBinding(nextConfig.id)
     void this.ensureExternalSessionAttentionTracking(
       nextConfig,
-      detectedSession.provider === 'codex' ? detectedSession.sourcePath : undefined,
+      detectedSession.provider === 'codex' &&
+        detectedSession.sourcePath?.endsWith('.jsonl')
+        ? detectedSession.sourcePath
+        : undefined,
     )
   }
 
