@@ -66,6 +66,36 @@ describe('codexCli', () => {
       .toEqual(['codex', '-C', 'path with spaces', '--model', 'gpt'])
   })
 
+  it('reads migrated metadata with session_id before id and a truncated instructions field', () => {
+    expect(extractCodexSessionMeta(
+      '{"timestamp":"2026-09-08T14:08:20Z","ordinal":0,"type":"session_meta","payload":{"session_id":"saved-session","id":"saved-session","timestamp":"2026-09-08T14:08:00Z","cwd":"C:\\\\repo","originator":"codex-tui","source":"cli","base_instructions":{"text":"truncated',
+    )).toEqual({
+      sessionId: 'saved-session',
+      timestamp: '2026-09-08T14:08:00Z',
+      cwd: 'C:\\repo',
+      originator: 'codex-tui',
+      source: 'cli',
+    })
+  })
+
+  it('reads metadata header fields regardless of whitespace and order', () => {
+    expect(extractCodexSessionMeta(JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        cwd: 'C:\\repo "quoted"',
+        source: 'cli',
+        timestamp: '2026-09-08T14:08:00Z',
+        session_id: 'saved-session',
+      },
+    }, null, 2))).toEqual({
+      sessionId: 'saved-session',
+      timestamp: '2026-09-08T14:08:00Z',
+      cwd: 'C:\\repo "quoted"',
+      source: 'cli',
+      originator: undefined,
+    })
+  })
+
   it('tokenizes escaped double quotes inside double quotes', () => {
     expect(tokenizeCommand('codex "say \\"hello\\"" done'))
       .toEqual(['codex', 'say "hello"', 'done'])

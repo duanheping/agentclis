@@ -207,18 +207,20 @@ function stripConfigOverride(
 }
 
 export function extractCodexSessionMeta(content: string): CodexSessionMeta | null {
-  if (!/"type":"session_meta"/u.test(content)) {
+  const match = content.match(
+    /"type"\s*:\s*"session_meta"\s*,\s*"payload"\s*:\s*\{([\s\S]*)/u,
+  )
+  if (!match) {
     return null
   }
 
-  const sessionId =
-    extractSessionMetaField(content, 'id') ??
-    extractSessionMetaField(content, 'session_id')
-  const timestamp = extractSessionMetaField(content, 'timestamp')
-  const cwd = extractSessionMetaField(content, 'cwd')
-  const originator = extractSessionMetaField(content, 'originator')
-  const source = extractSessionMetaField(content, 'source')
-
+  // Metadata is read from a bounded prefix, so the large instructions field
+  // may be truncated. Read header fields without assuming their order.
+  const payload = match[1]
+  const sessionId = extractSessionMetaField(payload, 'id') ??
+    extractSessionMetaField(payload, 'session_id')
+  const timestamp = extractSessionMetaField(payload, 'timestamp')
+  const cwd = extractSessionMetaField(payload, 'cwd')
   if (!sessionId || !timestamp || !cwd) {
     return null
   }
@@ -226,9 +228,9 @@ export function extractCodexSessionMeta(content: string): CodexSessionMeta | nul
   return {
     sessionId,
     timestamp,
-    cwd: parseJsonString(cwd),
-    originator,
-    source,
+    cwd,
+    originator: extractSessionMetaField(payload, 'originator'),
+    source: extractSessionMetaField(payload, 'source'),
   }
 }
 
@@ -317,12 +319,12 @@ function extractSessionMetaField(
   const escapedFieldName = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = content.match(
     new RegExp(
-      `"type":"session_meta"[\\s\\S]*?"payload":\\{[\\s\\S]*?"${escapedFieldName}":"([^"]+)"`,
+      `"${escapedFieldName}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`,
       'u',
     ),
   )
 
-  return match?.[1]
+  return match ? parseJsonString(match[1]) : undefined
 }
 
 function quoteWindowsArg(value: string): string {
