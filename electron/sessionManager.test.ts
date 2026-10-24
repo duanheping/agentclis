@@ -986,7 +986,8 @@ describe('SessionManager restore policy', () => {
 
   it.each([
     { source: 'cli', valid: true, corrupt: false },
-    { source: 'vscode', valid: false, corrupt: false },
+    { source: 'vscode', valid: true, corrupt: false },
+    { source: 'unknown', valid: false, corrupt: false },
     { source: 'cli', valid: false, corrupt: true },
   ])('restores compressed Codex sessions only when valid: %j', async ({ source, valid, corrupt }) => {
     const state = mocks.getPersistedState() as {
@@ -1029,6 +1030,108 @@ describe('SessionManager restore policy', () => {
       expectSpawnedPowerShellCommand(0,
         `codex --dangerously-bypass-approvals-and-sandbox resume ${externalSessionId}`)
     }
+    manager.dispose()
+  })
+
+  it.each([
+    { compressed: false, storedId: false },
+    { compressed: true, storedId: false },
+    { compressed: false, storedId: true },
+  ])('restores a codex-tui vscode rollout: %j', async ({ compressed, storedId }) => {
+    const externalSessionId = '01a15a3d-2732-7c60-910c-7467bec9bacb'
+    const state = mocks.getPersistedState() as {
+      sessions: Array<Record<string, unknown>>
+      activeSessionId: string
+    }
+    state.sessions = [{
+      ...state.sessions[0],
+      title: 'triage ECG-243667',
+      startupCommand: 'codex',
+      permissionLevel: 'full-access',
+      createdAt: '2026-10-20T16:55:07.058Z',
+      updatedAt: '2026-10-20T16:55:32.856Z',
+      ...(storedId ? {
+        externalSession: { provider: 'codex', sessionId: externalSessionId },
+      } : {}),
+    }]
+    state.activeSessionId = 'session-a'
+    mocks.setPersistedState(state)
+    const metadata = JSON.stringify({
+      timestamp: '2026-10-20T16:55:33.461Z',
+      ordinal: 0,
+      type: 'session_meta',
+      payload: {
+        session_id: externalSessionId,
+        id: externalSessionId,
+        timestamp: '2026-10-20T16:55:20.002Z',
+        cwd: 'C:\\repo',
+        originator: 'codex-tui',
+        cli_version: '0.163.0',
+        source: 'vscode',
+        thread_source: 'user',
+        base_instructions: { text: 'instructions'.repeat(1_000) },
+      },
+    }) + '\n'
+    const filePath = path.join(
+      os.homedir(), '.codex', 'sessions', '2026', '10', '20',
+      `rollout-2026-10-20T12-55-20-${externalSessionId}.jsonl${compressed ? '.zst' : ''}`,
+    )
+    mocks.setFile(filePath, compressed ? zstdCompressSync(Buffer.from(metadata)) : metadata)
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+
+    await manager.restoreSessions()
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    })
+
+    expectSpawnedPowerShellCommand(0,
+      `codex --dangerously-bypass-approvals-and-sandbox resume ${externalSessionId}`)
+    expect((mocks.getPersistedState() as typeof state).sessions[0]?.externalSession)
+      .toEqual({ provider: 'codex', sessionId: externalSessionId })
+    manager.dispose()
+  })
+
+  it('captures and persists the id of a newly launched codex-tui vscode session', async () => {
+    mocks.setAutoProvisionManagedSessions(false)
+    vi.setSystemTime(new Date('2026-10-23T20:00:00.000Z'))
+    const manager = new SessionManager({
+      onData: () => undefined,
+      onConfig: () => undefined,
+      onRuntime: () => undefined,
+      onExit: () => undefined,
+    })
+    const session = await manager.createSession({
+      projectRootPath: 'C:\\repo',
+      startupCommand: 'codex',
+    })
+    const externalSessionId = 'new-codex-tui-session'
+    mocks.setFile(path.join(
+      os.homedir(), '.codex', 'sessions', '2026', '10', '23',
+      `rollout-2026-10-23T16-00-00-${externalSessionId}.jsonl`,
+    ), JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        session_id: externalSessionId,
+        timestamp: '2026-10-23T20:00:00.000Z',
+        cwd: 'C:\\repo',
+        originator: 'codex-tui',
+        source: 'vscode',
+      },
+    }))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    const state = mocks.getPersistedState() as {
+      sessions: Array<{ id: string, externalSession?: unknown }>
+    }
+    expect(state.sessions.find((entry) => entry.id === session.config.id)?.externalSession)
+      .toEqual({ provider: 'codex', sessionId: externalSessionId })
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
     manager.dispose()
   })
 
