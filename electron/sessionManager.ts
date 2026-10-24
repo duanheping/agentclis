@@ -2066,7 +2066,7 @@ export class SessionManager {
       }
 
       for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+        if (!entry.isFile() || !/\.jsonl(?:\.zst)?$/u.test(entry.name)) {
           continue
         }
 
@@ -3026,7 +3026,12 @@ export class SessionManager {
       return true
     }
 
-    return candidate.source === 'cli' || candidate.originator === 'codex_cli_rs'
+    return (
+      candidate.source === 'cli' ||
+      candidate.originator === 'codex_cli_rs' ||
+      // Newer Codex TUI rollouts can report vscode as their source.
+      (candidate.originator === 'codex-tui' && candidate.source === 'vscode')
+    )
   }
 
   private hydrateProjectConfig(project: ProjectConfig): ProjectConfig {
