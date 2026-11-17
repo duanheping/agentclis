@@ -15,6 +15,7 @@ import {
 } from './copilotEnvironment'
 
 const MAX_PROCESS_OUTPUT_BYTES = 4_000
+const COPILOT_STRUCTURED_MODEL = 'claude-opus-5.5'
 const activeStructuredAgentProcesses = new Set<ReturnType<typeof spawn>>()
 
 function formatProcessOutput(label: string, output: string): string | null {
@@ -439,6 +440,8 @@ async function runCopilotStructured(input: {
       '--allow-all',
       '--no-ask-user',
       '--no-custom-instructions',
+      '--model',
+      COPILOT_STRUCTURED_MODEL,
       '--output-format',
       'json',
       '--stream',
@@ -702,6 +705,7 @@ function buildAnalysisScript(input: {
       [
         '& copilot',
         '--allow-all --no-ask-user --no-custom-instructions',
+        `--model ${q(COPILOT_STRUCTURED_MODEL)}`,
         dirArgs,
         `--prompt ${q(`Read and follow all instructions in the file at ${input.promptPath}.`)}`,
       ].filter(Boolean).join(' '),
