@@ -205,11 +205,15 @@ describe('structuredAgentRunner shutdown handling', () => {
       const scriptPath = spawnCall[1][3]
       const script = await readFile(scriptPath, 'utf8')
       expect(script).toContain('copilot --allow-all --no-ask-user --no-custom-instructions')
+      expect(script).toContain('--model claude-opus-5.5')
       expect(script).toContain('--output-format json')
       expect(script).toContain('--stream off')
       expect(script).toContain('--silent')
       expect(script).toContain('Read and follow all instructions in the file at')
     } else {
+      const modelIndex = spawnCall[1].indexOf('--model')
+      expect(modelIndex).toBeGreaterThanOrEqual(0)
+      expect(spawnCall[1][modelIndex + 1]).toBe('claude-opus-5.5')
       expect(spawnCall[1]).toEqual(
         expect.arrayContaining([
           '--allow-all',
@@ -410,6 +414,9 @@ describe('structuredAgentRunner shutdown handling', () => {
     })
 
     expect(prepared.cwd).toBe(contextDirectory)
+
+    const script = await readFile(path.join(prepared.tempRoot, 'run.ps1'), 'utf8')
+    expect(script).toContain("--model 'claude-opus-5.5'")
 
     await cleanupStructuredAgentTemp(prepared.tempRoot)
   })
